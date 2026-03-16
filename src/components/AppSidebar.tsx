@@ -34,9 +34,7 @@ export function AppSidebar() {
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground font-display font-bold text-sm">
-            V
-          </div>
+          <img src={vyvaLogo} alt="VYVA" className="h-9 w-9 shrink-0 rounded-lg object-cover" />
           {!collapsed && (
             <div>
               <h2 className="font-display font-bold text-base text-sidebar-primary-foreground tracking-tight">

@@ -48,10 +48,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground font-display font-bold text-2xl shadow-lg">
-            V
-          </div>
-          <h1 className="font-display text-3xl font-bold text-foreground">VYVA</h1>
+          <img src={vyvaLogo} alt="VYVA" className="mx-auto mb-4 h-20 w-auto rounded-2xl shadow-lg" />
           <p className="text-muted-foreground mt-1">Super Admin Dashboard</p>
         </div>
 
