@@ -46,14 +46,14 @@
     --sidebar-ring: 252 85% 60%;
 
     /* Custom VYVA tokens */
-    --vyva-purple: 252 85% 60%;
+    --vyva-purple: 270 60% 38%;
+    --vyva-gold: 45 100% 50%;
     --vyva-teal: 190 80% 50%;
-    --vyva-orange: 30 95% 60%;
     --vyva-pink: 340 82% 62%;
     --vyva-green: 155 70% 45%;
 
-    --gradient-primary: linear-gradient(135deg, hsl(252 85% 60%), hsl(190 80% 50%));
-    --gradient-warm: linear-gradient(135deg, hsl(30 95% 60%), hsl(340 82% 62%));
+    --gradient-primary: linear-gradient(135deg, hsl(270 60% 38%), hsl(252 85% 60%));
+    --gradient-warm: linear-gradient(135deg, hsl(45 100% 50%), hsl(30 95% 60%));
     --gradient-cool: linear-gradient(135deg, hsl(190 80% 50%), hsl(155 70% 45%));
   }
 
