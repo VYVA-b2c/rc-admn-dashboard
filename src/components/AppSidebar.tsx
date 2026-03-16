@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, UserPlus, LogOut } from "lucide-react";
+import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall } from "lucide-react";
 import vyvaLogo from "@/assets/logo-with-bg.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Users", url: "/users", icon: Users },
+  { title: "Emergency Contacts", url: "/emergency-contacts", icon: Phone },
+  { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
   { title: "Invite Admin", url: "/invite", icon: UserPlus },
 ];
 
