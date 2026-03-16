@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 export function useDashboardStats() {
   return useQuery({
     queryKey: ["dashboard-stats"],
+    refetchInterval: 30000,
     queryFn: async () => {
       const [usersRes, checkinsRes, brainCoachRes, medsRes, caregiversRes, citiesRes] = await Promise.all([
         supabase.from("vyva_users").select("id", { count: "exact", head: true }),
