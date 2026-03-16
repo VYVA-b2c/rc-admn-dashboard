@@ -1,4 +1,5 @@
 import { LayoutDashboard, Users, UserPlus, LogOut } from "lucide-react";
+import vyvaLogo from "@/assets/logo-with-bg.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
