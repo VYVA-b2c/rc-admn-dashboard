@@ -12,6 +12,8 @@ import Dashboard from "@/pages/Dashboard";
 import UsersList from "@/pages/UsersList";
 import UserProfile from "@/pages/UserProfile";
 import InviteAdmin from "@/pages/InviteAdmin";
+import EmergencyContacts from "@/pages/EmergencyContacts";
+import CheckInMonitoring from "@/pages/CheckInMonitoring";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
