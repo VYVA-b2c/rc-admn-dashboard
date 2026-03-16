@@ -44,7 +44,7 @@ export default function Dashboard() {
           title="Brain Coach"
           value={stats?.brainCoachEnabled ?? 0}
           icon={<Brain className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-orange to-accent"
+          gradient="bg-gradient-to-br from-vyva-gold to-accent"
           subtitle="Active brain coaching"
         />
         <StatCard
