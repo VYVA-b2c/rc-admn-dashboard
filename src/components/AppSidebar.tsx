@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
   { title: "Users", url: "/users", icon: Users },
+  { title: "Emergency Contacts", url: "/emergency-contacts", icon: Phone },
+  { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
   { title: "Invite Admin", url: "/invite", icon: UserPlus },
 ];
 

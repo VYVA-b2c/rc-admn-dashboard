@@ -59,6 +59,26 @@ const App = () => (
               }
             />
             <Route
+              path="/emergency-contacts"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <EmergencyContacts />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/checkin-monitoring"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <CheckInMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/invite"
               element={
                 <ProtectedRoute>
