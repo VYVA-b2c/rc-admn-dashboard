@@ -33,15 +33,16 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader className="p-4">
-        <div className="flex items-center gap-3">
-          <img src={vyvaLogo} alt="VYVA" className="h-9 w-9 shrink-0 rounded-lg object-cover" />
+        <div className="flex flex-col items-center gap-2">
+          <img
+            src={vyvaLogo}
+            alt="VYVA"
+            className={collapsed ? "h-8 w-8 rounded-md object-cover" : "h-12 w-auto object-contain"}
+          />
           {!collapsed && (
-            <div>
-              <h2 className="font-display font-bold text-base text-sidebar-primary-foreground tracking-tight">
-                VYVA
-              </h2>
-              <p className="text-xs text-sidebar-foreground/60">Super Admin</p>
-            </div>
+            <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/50 font-medium">
+              Super Admin
+            </span>
           )}
         </div>
       </SidebarHeader>
