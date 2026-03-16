@@ -63,8 +63,8 @@ export default {
         },
         vyva: {
           purple: "hsl(var(--vyva-purple))",
+          gold: "hsl(var(--vyva-gold))",
           teal: "hsl(var(--vyva-teal))",
-          orange: "hsl(var(--vyva-orange))",
           pink: "hsl(var(--vyva-pink))",
           green: "hsl(var(--vyva-green))",
         },
