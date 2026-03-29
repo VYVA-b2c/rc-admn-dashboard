@@ -164,6 +164,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <UserDetailModal user={selectedUser} open={modalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 }
