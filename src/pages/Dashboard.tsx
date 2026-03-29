@@ -30,11 +30,47 @@ export default function Dashboard() {
   const { data, isLoading } = useGISData();
   const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
+  const [cityFilter, setCityFilter] = useState<string>("all");
 
   const handleUserClick = useCallback((user: GISUser) => {
     setSelectedUser(user);
     setModalOpen(true);
   }, []);
+
+  const cities = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of data?.gisUsers ?? []) {
+      if (u.city) set.add(u.city);
+    }
+    return Array.from(set).sort();
+  }, [data?.gisUsers]);
+
+  const filteredUsers = useMemo(() => {
+    let users = data?.gisUsers ?? [];
+    const q = searchQuery.toLowerCase().trim();
+    if (q) {
+      users = users.filter(
+        (u) =>
+          `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+          (u.city?.toLowerCase().includes(q) ?? false),
+      );
+    }
+    if (statusFilter === "critical") users = users.filter((u) => u.criticalAlerts > 0);
+    else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
+    else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
+    if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
+    return users;
+  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter]);
+
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all";
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setCityFilter("all");
+  };
 
   if (isLoading) {
     return (
