@@ -112,3 +112,15 @@
     font-family: 'Space Grotesk', sans-serif;
   }
 }
+
+/* Leaflet tooltip override */
+.gis-tooltip {
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  border-radius: 0.5rem;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--card));
+  color: hsl(var(--foreground));
+  padding: 6px 10px;
+  box-shadow: 0 4px 12px hsl(var(--foreground) / 0.08);
+}

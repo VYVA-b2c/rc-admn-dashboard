@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { GISMap } from "@/components/dashboard/GISMap";
+import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { formatDistanceToNow } from "date-fns";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
@@ -23,6 +25,13 @@ function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label:
 
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
+  const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const handleUserClick = useCallback((user: GISUser) => {
+    setSelectedUser(user);
+    setModalOpen(true);
+  }, []);
 
   if (isLoading) {
     return (
@@ -59,7 +68,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={data?.gisUsers ?? []} />
+          <GISMap users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
         </CardContent>
       </Card>
 
@@ -155,6 +164,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <UserDetailModal user={selectedUser} open={modalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 }
