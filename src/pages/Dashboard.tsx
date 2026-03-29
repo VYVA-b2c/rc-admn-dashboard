@@ -104,10 +104,53 @@ export default function Dashboard() {
         <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
+      {/* Search & Filter Bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by name or city…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="critical">Critical</SelectItem>
+            <SelectItem value="warning">Warning</SelectItem>
+            <SelectItem value="stable">Stable</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={cityFilter} onValueChange={setCityFilter}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="City" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All cities</SelectItem>
+            {cities.map((c) => (
+              <SelectItem key={c} value={c}>{c}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
+            <X className="mr-1 h-3.5 w-3.5" /> Clear
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {filteredUsers.length} of {data?.totalUsers ?? 0} users
+        </span>
+      </div>
+
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
+          <GISMap users={filteredUsers} onUserClick={handleUserClick} />
         </CardContent>
       </Card>
 
