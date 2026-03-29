@@ -1,94 +1,235 @@
-import { Users, PhoneCall, Brain, Pill, Heart } from "lucide-react";
-import { StatCard } from "@/components/StatCard";
-import { useDashboardStats } from "@/hooks/useDashboardStats";
+import { useMemo } from "react";
+import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
+import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useGISData, type GISUser } from "@/hooks/useGISData";
+import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
+import { formatDistanceToNow } from "date-fns";
+
+function getMarkerColor(user: GISUser): string {
+  if (user.criticalAlerts > 0) return "#dc2626";
+  if (user.activeAlerts > 0) return "#f59e0b";
+  return "#22c55e";
+}
+
+function getMarkerRadius(user: GISUser): number {
+  if (user.criticalAlerts > 0) return 10;
+  if (user.activeAlerts > 0) return 8;
+  return 6;
+}
+
+function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border bg-card p-3">
+      <div className={`rounded-md p-1.5 ${color}`}>{icon}</div>
+      <div>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="font-display text-lg font-bold text-foreground">{value}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
-  const { data: stats, isLoading } = useDashboardStats();
+  const { data, isLoading } = useGISData();
+
+  const mappableUsers = useMemo(
+    () => (data?.gisUsers || []).filter((u) => u.coords !== null),
+    [data?.gisUsers]
+  );
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <h1 className="font-display text-2xl font-bold">Dashboard</h1>
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+      <div className="space-y-4">
+        <h1 className="font-display text-2xl font-bold text-foreground">GIS Command Center</h1>
+        <div className="grid gap-3 grid-cols-2 lg:grid-cols-5">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-32 rounded-xl" />
+            <Skeleton key={i} className="h-16 rounded-lg" />
           ))}
         </div>
+        <Skeleton className="h-[400px] rounded-xl" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Dashboard</h1>
-
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-        <StatCard
-          title="Total Users"
-          value={stats?.totalUsers ?? 0}
-          icon={<Users className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-purple to-primary"
-          subtitle="Onboarded via agent"
-        />
-        <StatCard
-          title="Check-ins Active"
-          value={stats?.checkinsEnabled ?? 0}
-          icon={<PhoneCall className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-teal to-secondary"
-          subtitle="Users with check-ins on"
-        />
-        <StatCard
-          title="Brain Coach"
-          value={stats?.brainCoachEnabled ?? 0}
-          icon={<Brain className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-gold to-accent"
-          subtitle="Active brain coaching"
-        />
-        <StatCard
-          title="On Medication"
-          value={stats?.medicationsConfigured ?? 0}
-          icon={<Pill className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-pink to-destructive"
-          subtitle="With medication schedules"
-        />
-        <StatCard
-          title="Caregivers"
-          value={stats?.caregiversLinked ?? 0}
-          icon={<Heart className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-green to-secondary"
-          subtitle="Linked caregiver contacts"
-        />
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <MapPin className="h-6 w-6 text-destructive" />
+        <h1 className="font-display text-2xl font-bold text-foreground">
+          DRK Saxony — GIS Command Center
+        </h1>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="font-display">Users by City</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {stats?.cityDistribution && stats.cityDistribution.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={stats.cityDistribution}>
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="city" className="text-xs" />
-                <YAxis allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    borderRadius: "0.5rem",
-                    border: "1px solid hsl(var(--border))",
-                    background: "hsl(var(--card))",
-                  }}
-                />
-                <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <p className="py-12 text-center text-muted-foreground">No user data yet. Data will appear here once the onboarding agent sends user records.</p>
-          )}
+      {/* Stat row */}
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+        <MiniStat icon={<Users className="h-4 w-4 text-primary-foreground" />} label="Users" value={data?.totalUsers ?? 0} color="bg-primary" />
+        <MiniStat icon={<PhoneCall className="h-4 w-4 text-primary-foreground" />} label="Check-ins Active" value={data?.checkinsEnabled ?? 0} color="bg-secondary" />
+        <MiniStat icon={<AlertTriangle className="h-4 w-4 text-primary-foreground" />} label="Active Alerts" value={data?.activeAlertCount ?? 0} color="bg-destructive" />
+        <MiniStat icon={<Radio className="h-4 w-4 text-primary-foreground" />} label="Sensors" value={data?.totalSensors ?? 0} color="bg-accent" />
+        <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
+      </div>
+
+      {/* Map */}
+      <Card className="overflow-hidden">
+        <CardContent className="p-0">
+          <MapContainer
+            center={SAXONY_CENTER}
+            zoom={SAXONY_ZOOM}
+            scrollWheelZoom
+            style={{ height: 420, width: "100%" }}
+            className="z-0"
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            />
+            {mappableUsers.map((user) => (
+              <CircleMarker
+                key={user.id}
+                center={user.coords!}
+                radius={getMarkerRadius(user)}
+                pathOptions={{
+                  color: getMarkerColor(user),
+                  fillColor: getMarkerColor(user),
+                  fillOpacity: 0.8,
+                  weight: 2,
+                }}
+              >
+                <Popup>
+                  <div className="min-w-[180px] space-y-1 text-sm">
+                    <p className="font-semibold">
+                      {user.first_name} {user.last_name}
+                    </p>
+                    <p className="text-muted-foreground">{user.city}</p>
+                    {user.phone && <p className="text-xs">{user.phone}</p>}
+                    <div className="flex gap-1 pt-1">
+                      {user.criticalAlerts > 0 && (
+                        <Badge variant="destructive" className="text-xs">
+                          {user.criticalAlerts} critical
+                        </Badge>
+                      )}
+                      {user.activeAlerts > 0 && (
+                        <Badge variant="secondary" className="text-xs">
+                          {user.activeAlerts} alert{user.activeAlerts > 1 ? "s" : ""}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex gap-2 text-xs text-muted-foreground pt-1">
+                      <span>{user.sensorCount} sensor{user.sensorCount !== 1 ? "s" : ""}</span>
+                      <span>Check-in: {user.checkinEnabled ? "✓" : "✗"}</span>
+                    </div>
+                    <Link
+                      to={`/users/${user.id}`}
+                      className="inline-block pt-1 text-xs font-medium text-primary hover:underline"
+                    >
+                      View Profile →
+                    </Link>
+                  </div>
+                </Popup>
+              </CircleMarker>
+            ))}
+          </MapContainer>
         </CardContent>
       </Card>
+
+      {/* Legend */}
+      <div className="flex gap-4 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-full bg-[#dc2626]" /> Critical
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-full bg-[#f59e0b]" /> Warning
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block h-3 w-3 rounded-full bg-[#22c55e]" /> Stable
+        </span>
+      </div>
+
+      {/* Bottom panels */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Active Alerts Feed */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="font-display text-base flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-destructive" />
+              Active Alerts
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-[240px]">
+              {data?.activeAlerts && data.activeAlerts.length > 0 ? (
+                <div className="space-y-2 pr-3">
+                  {data.activeAlerts.map((alert) => (
+                    <div
+                      key={alert.id}
+                      className="flex items-start gap-3 rounded-lg border border-border p-3"
+                    >
+                      <span
+                        className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                          alert.severity === "critical" ? "bg-destructive" : "bg-accent"
+                        }`}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium truncate">{alert.user_name}</p>
+                          <Badge
+                            variant={alert.severity === "critical" ? "destructive" : "secondary"}
+                            className="text-[10px] shrink-0"
+                          >
+                            {alert.severity}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {alert.alert_type}: {alert.message || "No details"}
+                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-1">
+                          {alert.city} · {formatDistanceToNow(new Date(alert.created_at), { addSuffix: true })}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="py-8 text-center text-sm text-muted-foreground">No active alerts</p>
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+
+        {/* City Distribution */}
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="font-display text-base">Users by City</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {data?.cityDistribution && data.cityDistribution.length > 0 ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={data.cityDistribution}>
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <XAxis dataKey="city" className="text-xs" />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      borderRadius: "0.5rem",
+                      border: "1px solid hsl(var(--border))",
+                      background: "hsl(var(--card))",
+                    }}
+                  />
+                  <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <p className="py-8 text-center text-sm text-muted-foreground">No data yet</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
