@@ -1,6 +1,4 @@
-import { useMemo } from "react";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
-import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,20 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
-import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
+import { GISMap } from "@/components/dashboard/GISMap";
 import { formatDistanceToNow } from "date-fns";
-
-function getMarkerColor(user: GISUser): string {
-  if (user.criticalAlerts > 0) return "#dc2626";
-  if (user.activeAlerts > 0) return "#f59e0b";
-  return "#22c55e";
-}
-
-function getMarkerRadius(user: GISUser): number {
-  if (user.criticalAlerts > 0) return 10;
-  if (user.activeAlerts > 0) return 8;
-  return 6;
-}
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
