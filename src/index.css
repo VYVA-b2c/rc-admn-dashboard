@@ -113,6 +113,14 @@
   }
 }
 
+/* Force Leaflet map below dropdowns */
+.leaflet-container {
+  z-index: 0 !important;
+}
+.leaflet-pane {
+  z-index: 0 !important;
+}
+
 /* Leaflet tooltip override */
 .gis-tooltip {
   font-family: 'Inter', sans-serif;

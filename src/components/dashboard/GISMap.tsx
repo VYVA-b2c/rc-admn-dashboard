@@ -113,5 +113,5 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
     }
   }, [mappableUsers, onUserClick]);
 
-  return <div ref={containerRef} className="h-[420px] w-full bg-muted/30" aria-label="GIS map of users in Saxony" />;
+  return <div ref={containerRef} className="relative z-0 h-[420px] w-full bg-muted/30" aria-label="GIS map of users in Saxony" />;
 }
