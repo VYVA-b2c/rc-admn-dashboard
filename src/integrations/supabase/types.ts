@@ -59,6 +59,92 @@ export type Database = {
         }
         Relationships: []
       }
+      vyva_sensor_alerts: {
+        Row: {
+          alert_type: string
+          created_at: string
+          id: string
+          message: string | null
+          resolved_at: string | null
+          sensor_id: string
+          severity: string
+          vyva_user_id: string
+        }
+        Insert: {
+          alert_type: string
+          created_at?: string
+          id?: string
+          message?: string | null
+          resolved_at?: string | null
+          sensor_id: string
+          severity?: string
+          vyva_user_id: string
+        }
+        Update: {
+          alert_type?: string
+          created_at?: string
+          id?: string
+          message?: string | null
+          resolved_at?: string | null
+          sensor_id?: string
+          severity?: string
+          vyva_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vyva_sensor_alerts_sensor_id_fkey"
+            columns: ["sensor_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_user_sensors"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vyva_sensor_alerts_vyva_user_id_fkey"
+            columns: ["vyva_user_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vyva_sensor_readings: {
+        Row: {
+          created_at: string
+          id: string
+          is_anomaly: boolean
+          recorded_at: string
+          sensor_id: string
+          unit: string
+          value: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_anomaly?: boolean
+          recorded_at?: string
+          sensor_id: string
+          unit: string
+          value: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_anomaly?: boolean
+          recorded_at?: string
+          sensor_id?: string
+          unit?: string
+          value?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vyva_sensor_readings_sensor_id_fkey"
+            columns: ["sensor_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_user_sensors"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vyva_user_brain_coach: {
         Row: {
           created_at: string
@@ -281,15 +367,67 @@ export type Database = {
           },
         ]
       }
+      vyva_user_sensors: {
+        Row: {
+          battery_level: number | null
+          created_at: string
+          device_id: string
+          device_name: string | null
+          id: string
+          last_reading_at: string | null
+          sensor_type: string
+          status: string
+          updated_at: string
+          vyva_user_id: string
+        }
+        Insert: {
+          battery_level?: number | null
+          created_at?: string
+          device_id: string
+          device_name?: string | null
+          id?: string
+          last_reading_at?: string | null
+          sensor_type: string
+          status?: string
+          updated_at?: string
+          vyva_user_id: string
+        }
+        Update: {
+          battery_level?: number | null
+          created_at?: string
+          device_id?: string
+          device_name?: string | null
+          id?: string
+          last_reading_at?: string | null
+          sensor_type?: string
+          status?: string
+          updated_at?: string
+          vyva_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vyva_user_sensors_vyva_user_id_fkey"
+            columns: ["vyva_user_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vyva_users: {
         Row: {
           city: string | null
           created_at: string
+          date_of_birth: string | null
+          emergency_notes: string | null
           first_name: string
+          gender: string | null
           house_number: string | null
           id: string
+          language: string | null
           last_name: string
           phone: string | null
+          photo_url: string | null
           post_code: string | null
           street: string | null
           timezone: string | null
@@ -298,11 +436,16 @@ export type Database = {
         Insert: {
           city?: string | null
           created_at?: string
+          date_of_birth?: string | null
+          emergency_notes?: string | null
           first_name: string
+          gender?: string | null
           house_number?: string | null
           id?: string
+          language?: string | null
           last_name: string
           phone?: string | null
+          photo_url?: string | null
           post_code?: string | null
           street?: string | null
           timezone?: string | null
@@ -311,11 +454,16 @@ export type Database = {
         Update: {
           city?: string | null
           created_at?: string
+          date_of_birth?: string | null
+          emergency_notes?: string | null
           first_name?: string
+          gender?: string | null
           house_number?: string | null
           id?: string
+          language?: string | null
           last_name?: string
           phone?: string | null
+          photo_url?: string | null
           post_code?: string | null
           street?: string | null
           timezone?: string | null
