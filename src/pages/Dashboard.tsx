@@ -1,10 +1,13 @@
-import { useCallback, useState } from "react";
-import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { GISMap } from "@/components/dashboard/GISMap";
@@ -27,11 +30,47 @@ export default function Dashboard() {
   const { data, isLoading } = useGISData();
   const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
+  const [cityFilter, setCityFilter] = useState<string>("all");
 
   const handleUserClick = useCallback((user: GISUser) => {
     setSelectedUser(user);
     setModalOpen(true);
   }, []);
+
+  const cities = useMemo(() => {
+    const set = new Set<string>();
+    for (const u of data?.gisUsers ?? []) {
+      if (u.city) set.add(u.city);
+    }
+    return Array.from(set).sort();
+  }, [data?.gisUsers]);
+
+  const filteredUsers = useMemo(() => {
+    let users = data?.gisUsers ?? [];
+    const q = searchQuery.toLowerCase().trim();
+    if (q) {
+      users = users.filter(
+        (u) =>
+          `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+          (u.city?.toLowerCase().includes(q) ?? false),
+      );
+    }
+    if (statusFilter === "critical") users = users.filter((u) => u.criticalAlerts > 0);
+    else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
+    else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
+    if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
+    return users;
+  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter]);
+
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all";
+
+  const clearFilters = () => {
+    setSearchQuery("");
+    setStatusFilter("all");
+    setCityFilter("all");
+  };
 
   if (isLoading) {
     return (
@@ -65,10 +104,53 @@ export default function Dashboard() {
         <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
+      {/* Search & Filter Bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px] max-w-sm">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search by name or city…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as any)}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Status" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All statuses</SelectItem>
+            <SelectItem value="critical">Critical</SelectItem>
+            <SelectItem value="warning">Warning</SelectItem>
+            <SelectItem value="stable">Stable</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={cityFilter} onValueChange={setCityFilter}>
+          <SelectTrigger className="w-[160px]">
+            <SelectValue placeholder="City" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All cities</SelectItem>
+            {cities.map((c) => (
+              <SelectItem key={c} value={c}>{c}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {hasActiveFilters && (
+          <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
+            <X className="mr-1 h-3.5 w-3.5" /> Clear
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">
+          {filteredUsers.length} of {data?.totalUsers ?? 0} users
+        </span>
+      </div>
+
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
+          <GISMap users={filteredUsers} onUserClick={handleUserClick} />
         </CardContent>
       </Card>
 
