@@ -1,6 +1,4 @@
-import { useMemo } from "react";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
-import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,20 +6,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
-import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
+import { GISMap } from "@/components/dashboard/GISMap";
 import { formatDistanceToNow } from "date-fns";
-
-function getMarkerColor(user: GISUser): string {
-  if (user.criticalAlerts > 0) return "#dc2626";
-  if (user.activeAlerts > 0) return "#f59e0b";
-  return "#22c55e";
-}
-
-function getMarkerRadius(user: GISUser): number {
-  if (user.criticalAlerts > 0) return 10;
-  if (user.activeAlerts > 0) return 8;
-  return 6;
-}
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
@@ -37,11 +23,6 @@ function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label:
 
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
-
-  const mappableUsers = useMemo(
-    () => (data?.gisUsers || []).filter((u) => u.coords !== null),
-    [data?.gisUsers]
-  );
 
   if (isLoading) {
     return (
@@ -78,63 +59,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <MapContainer
-            center={SAXONY_CENTER}
-            zoom={SAXONY_ZOOM}
-            scrollWheelZoom
-            style={{ height: 420, width: "100%" }}
-            className="z-0"
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {mappableUsers.map((user) => (
-              <CircleMarker
-                key={user.id}
-                center={user.coords!}
-                radius={getMarkerRadius(user)}
-                pathOptions={{
-                  color: getMarkerColor(user),
-                  fillColor: getMarkerColor(user),
-                  fillOpacity: 0.8,
-                  weight: 2,
-                }}
-              >
-                <Popup>
-                  <div className="min-w-[180px] space-y-1 text-sm">
-                    <p className="font-semibold">
-                      {user.first_name} {user.last_name}
-                    </p>
-                    <p className="text-muted-foreground">{user.city}</p>
-                    {user.phone && <p className="text-xs">{user.phone}</p>}
-                    <div className="flex gap-1 pt-1">
-                      {user.criticalAlerts > 0 && (
-                        <Badge variant="destructive" className="text-xs">
-                          {user.criticalAlerts} critical
-                        </Badge>
-                      )}
-                      {user.activeAlerts > 0 && (
-                        <Badge variant="secondary" className="text-xs">
-                          {user.activeAlerts} alert{user.activeAlerts > 1 ? "s" : ""}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex gap-2 text-xs text-muted-foreground pt-1">
-                      <span>{user.sensorCount} sensor{user.sensorCount !== 1 ? "s" : ""}</span>
-                      <span>Check-in: {user.checkinEnabled ? "✓" : "✗"}</span>
-                    </div>
-                    <Link
-                      to={`/users/${user.id}`}
-                      className="inline-block pt-1 text-xs font-medium text-primary hover:underline"
-                    >
-                      View Profile →
-                    </Link>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
-          </MapContainer>
+          <GISMap users={data?.gisUsers ?? []} />
         </CardContent>
       </Card>
 
