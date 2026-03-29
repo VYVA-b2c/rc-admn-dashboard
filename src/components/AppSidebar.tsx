@@ -23,6 +23,7 @@ const navItems = [
   { title: "Users", url: "/users", icon: Users },
   { title: "Emergency Contacts", url: "/emergency-contacts", icon: Phone },
   { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
+  { title: "Sensors", url: "/sensors", icon: Activity },
   { title: "Invite Admin", url: "/invite", icon: UserPlus },
 ];
 

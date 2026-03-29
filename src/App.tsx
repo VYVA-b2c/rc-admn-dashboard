@@ -80,6 +80,16 @@ const App = () => (
               }
             />
             <Route
+              path="/sensors"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <Sensors />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/invite"
               element={
                 <ProtectedRoute>
