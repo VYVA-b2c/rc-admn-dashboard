@@ -59,63 +59,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <MapContainer
-            center={SAXONY_CENTER}
-            zoom={SAXONY_ZOOM}
-            scrollWheelZoom
-            style={{ height: 420, width: "100%" }}
-            className="z-0"
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {mappableUsers.map((user) => (
-              <CircleMarker
-                key={user.id}
-                center={user.coords!}
-                radius={getMarkerRadius(user)}
-                pathOptions={{
-                  color: getMarkerColor(user),
-                  fillColor: getMarkerColor(user),
-                  fillOpacity: 0.8,
-                  weight: 2,
-                }}
-              >
-                <Popup>
-                  <div className="min-w-[180px] space-y-1 text-sm">
-                    <p className="font-semibold">
-                      {user.first_name} {user.last_name}
-                    </p>
-                    <p className="text-muted-foreground">{user.city}</p>
-                    {user.phone && <p className="text-xs">{user.phone}</p>}
-                    <div className="flex gap-1 pt-1">
-                      {user.criticalAlerts > 0 && (
-                        <Badge variant="destructive" className="text-xs">
-                          {user.criticalAlerts} critical
-                        </Badge>
-                      )}
-                      {user.activeAlerts > 0 && (
-                        <Badge variant="secondary" className="text-xs">
-                          {user.activeAlerts} alert{user.activeAlerts > 1 ? "s" : ""}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex gap-2 text-xs text-muted-foreground pt-1">
-                      <span>{user.sensorCount} sensor{user.sensorCount !== 1 ? "s" : ""}</span>
-                      <span>Check-in: {user.checkinEnabled ? "✓" : "✗"}</span>
-                    </div>
-                    <Link
-                      to={`/users/${user.id}`}
-                      className="inline-block pt-1 text-xs font-medium text-primary hover:underline"
-                    >
-                      View Profile →
-                    </Link>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            ))}
-          </MapContainer>
+          <GISMap users={data?.gisUsers ?? []} />
         </CardContent>
       </Card>
 
