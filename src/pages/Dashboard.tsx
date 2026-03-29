@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { GISMap } from "@/components/dashboard/GISMap";
+import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { formatDistanceToNow } from "date-fns";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
