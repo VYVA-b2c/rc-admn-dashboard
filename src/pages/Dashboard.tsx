@@ -24,11 +24,6 @@ function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label:
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
 
-  const mappableUsers = useMemo(
-    () => (data?.gisUsers || []).filter((u) => u.coords !== null),
-    [data?.gisUsers]
-  );
-
   if (isLoading) {
     return (
       <div className="space-y-4">
