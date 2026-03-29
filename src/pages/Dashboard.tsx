@@ -68,7 +68,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={data?.gisUsers ?? []} />
+          <GISMap users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
         </CardContent>
       </Card>
 
