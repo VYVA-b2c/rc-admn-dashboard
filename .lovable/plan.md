@@ -1,31 +1,22 @@
 
 
-## Plan: Create First Admin Account
+## Plan: Reset Admin Password
 
-### What
-Create the first admin user account with email `karim.assad@mokadigital.net` so you can log into the dashboard.
+The auth logs show your account (`karim.assad@mokadigital.net`, user ID `efaebaf8-f964-40e6-b0e5-04634a04c7c5`) was logging in successfully earlier but is now returning "invalid credentials." The auth service restarted (visible in logs at 06:20:19Z), which may have invalidated the session state.
+
+### Fix
+
+Create a temporary edge function `reset-admin-password` that:
+1. Uses `supabase.auth.admin.updateUserById()` with the existing user ID to set a new password
+2. Returns the new password
+3. Gets deleted after use
 
 ### Steps
-
-1. **Create an edge function `create-first-admin`** that:
-   - Checks if any admin users exist yet (if admins already exist, reject the request)
-   - Creates a new auth user with the provided email and a temporary password
-   - Inserts an `admin` role into `user_roles` for that user
-   - Returns the temporary password so you can log in
-
-2. **Invoke the function** to create the account with email `karim.assad@mokadigital.net`
-
-3. **Enable auto-confirm** for email signups temporarily so you can log in without email verification
-
-4. **You log in** with the temporary password, then change it from within the app
-
-### Technical Details
-- The edge function uses the service role key to call `supabase.auth.admin.createUser()` with `email_confirm: true`
-- A temporary password will be generated and returned
-- After account creation, the edge function can be deleted (it's a one-time bootstrap)
-- The `user_roles` insert assigns `role: 'admin'`
+1. Create `supabase/functions/reset-admin-password/index.ts` — calls `admin.updateUserById("efaebaf8-f964-40e6-b0e5-04634a04c7c5", { password: "VyvaAdmin2026!" })`
+2. Deploy and invoke the function
+3. Delete the function after confirming it works
+4. You log in with: `karim.assad@mokadigital.net` / `VyvaAdmin2026!`
 
 ### Files
-- **New**: `supabase/functions/create-first-admin/index.ts` (temporary, deleted after use)
-- **Config**: Enable auto-confirm via `cloud--configure_auth`
+- **New (temporary)**: `supabase/functions/reset-admin-password/index.ts`
 
