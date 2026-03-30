@@ -1,41 +1,47 @@
 
-Problem
-- Your account is authenticating successfully; the backend is returning 200 for password login.
-- The failure happens immediately after login: the auth logs show a burst of refresh-token requests, token revocations, and then `429 over_request_rate_limit`.
-- That is why it feels like “I log in, then get kicked out.”
 
-Most likely cause
-- There are competing/stale sessions hitting auth at the same time. The logs show requests coming from more than one preview origin, which strongly suggests multiple open previews/tabs or old persisted sessions are fighting over the same refresh token.
-- The current auth layer does not recover cleanly when a stored session is stale or rate-limited, so the app falls back to `/login` and the next attempt makes the rate limit worse.
+## Plan: Close DB + Webhook Gaps
 
-Plan to fix
-1. Harden auth startup in `src/contexts/AuthContext.tsx`
-   - Add a single helper to apply/clear session state.
-   - Wrap initial session restore in error handling.
-   - If session restore hits refresh-token/rate-limit errors, clear the local session safely and stop the logout loop.
+### Database Migration
 
-2. Make sign-in recovery-safe in `src/pages/Login.tsx`
-   - Clear stale local auth state before a fresh sign-in attempt.
-   - Detect `429` errors and show a specific message: wait briefly and close other open previews/tabs.
-   - Prevent rapid repeat submits while rate-limited.
+Add `country` column to `vyva_users` and change defaults:
 
-3. Stabilize redirects in `src/components/ProtectedRoute.tsx`
-   - Only redirect to `/login` after auth initialization/recovery is fully finished.
-   - Avoid bouncing the user out during a transient refresh failure.
+```sql
+ALTER TABLE vyva_users ADD COLUMN country text DEFAULT 'Germany';
+ALTER TABLE vyva_users ALTER COLUMN language SET DEFAULT 'de';
+ALTER TABLE vyva_users ALTER COLUMN timezone SET DEFAULT 'Europe/Berlin';
+```
 
-4. Make manual sign-out local-only
-   - Update the auth sign-out flow so signing out in one preview does not revoke every session everywhere.
+### Webhook Updates (`supabase/functions/onboarding-webhook/index.ts`)
 
-5. Verify the fix
-   - Test with only one preview open: login, reload, navigate, and confirm the session persists.
-   - Confirm the refresh-token flood and `rate limit reached` errors stop.
+Accept both the agent's field names and the current names, mapping as needed:
 
-Files to update
-- `src/contexts/AuthContext.tsx`
-- `src/pages/Login.tsx`
-- `src/components/ProtectedRoute.tsx`
+| Agent sends | Maps to DB column |
+|---|---|
+| `phone_number` or `phone` | `phone` |
+| `postal_code` or `post_code` | `post_code` |
+| `country` | `country` (new) |
+| `language` | `language` |
+| `emergency_contact_name` or `caretaker_name` | `caretaker_name` |
+| `emergency_contact_phone` or `caretaker_phone` | `caretaker_phone` |
+| `data_consent_given` or `consent_given` | `consent_given` |
+| `check_in_frequency` | checkins.frequency |
+| `check_in_time` | checkins.preferred_time |
+| `health_concerns` or `health_conditions` | health_conditions |
+| `mobility_restrictions` or `mobility_needs` | mobility_needs |
+| `takes_medications` + `medication_schedule` | medications array |
+| `brain_coach_interest` or `brain_coach` | brain_coach |
 
-Technical notes
-- No database changes are needed.
-- I will not modify `src/integrations/supabase/client.ts`.
-- The console warnings about refs and `<Navigate>` are separate from the auth rate-limit/logout issue and can be cleaned up afterward.
+Key changes in webhook logic:
+1. **vyva_users insert** — add `country`, `language`, accept `phone_number`/`postal_code` aliases
+2. **Consent** — also accept `data_consent_given`
+3. **Health** — also accept `health_concerns` / `mobility_restrictions`
+4. **Medications** — handle flat format (`takes_medications: true, medication_schedule: "every morning"`) by converting to array
+5. **Check-ins** — accept flat `check_in_frequency` / `check_in_time` as alternative to nested `checkins` object
+6. **Brain coach** — accept `brain_coach_interest` boolean
+7. **Caregivers** — accept `emergency_contact_name` / `emergency_contact_phone` aliases
+
+### Files
+- **Migration**: Add `country` column, change `language` default to `de`, change `timezone` default to `Europe/Berlin`
+- **Modified**: `supabase/functions/onboarding-webhook/index.ts` — field aliasing and flat-format handling
+
