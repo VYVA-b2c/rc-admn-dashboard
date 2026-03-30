@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import vyvaLogo from "@/assets/logo-with-bg.png";
 import { useAuth } from "@/contexts/AuthContext";
@@ -14,15 +14,26 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
+  const rateLimitUntil = useRef(0);
 
   if (user) return <Navigate to="/" replace />;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (Date.now() < rateLimitUntil.current) {
+      toast.error("Rate limited", { description: "Please wait 30 seconds and close any other open tabs/previews." });
+      return;
+    }
     setLoading(true);
     const { error } = await signIn(email, password);
     if (error) {
-      toast.error("Login failed", { description: error.message });
+      const msg = error.message?.toLowerCase() ?? "";
+      if (msg.includes("rate") || msg.includes("429")) {
+        rateLimitUntil.current = Date.now() + 30_000;
+        toast.error("Too many attempts", { description: "Close other tabs and wait 30 seconds before trying again." });
+      } else {
+        toast.error("Login failed", { description: error.message });
+      }
     }
     setLoading(false);
   };
