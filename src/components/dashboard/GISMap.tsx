@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
+import "leaflet.markercluster";
 import type { GISUser } from "@/hooks/useGISData";
 import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
 
@@ -25,18 +26,44 @@ function createUserIcon(user: GISUser): L.DivIcon {
 
   return L.divIcon({
     className: "",
-    iconSize: [36, 44],
-    iconAnchor: [18, 44],
-    popupAnchor: [0, -44],
+    iconSize: [26, 32],
+    iconAnchor: [13, 32],
+    popupAnchor: [0, -32],
     html: `
-      <div style="position:relative; width:36px; height:44px; cursor:pointer;">
-        <svg width="36" height="44" viewBox="0 0 36 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M18 44C18 44 36 28 36 18C36 8.059 27.941 0 18 0C8.059 0 0 8.059 0 18C0 28 18 44 18 44Z" fill="${color}"/>
-          <circle cx="18" cy="18" r="12" fill="white" fill-opacity="0.95"/>
+      <div style="position:relative; width:26px; height:32px; cursor:pointer;">
+        <svg width="26" height="32" viewBox="0 0 26 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13 32C13 32 26 20.4 26 13.1C26 5.86 20.18 0 13 0C5.82 0 0 5.86 0 13.1C0 20.4 13 32 13 32Z" fill="${color}"/>
+          <circle cx="13" cy="13" r="8.5" fill="white" fill-opacity="0.95"/>
         </svg>
-        <span style="position:absolute; top:8px; left:0; width:36px; text-align:center; font-size:11px; font-weight:700; font-family:Inter,sans-serif; color:${color}; line-height:20px; pointer-events:none;">
+        <span style="position:absolute; top:5px; left:0; width:26px; text-align:center; font-size:9px; font-weight:700; font-family:Inter,sans-serif; color:${color}; line-height:16px; pointer-events:none;">
           ${initials}
         </span>
+      </div>
+    `,
+  });
+}
+
+function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
+  const markers = cluster.getAllChildMarkers();
+  const count = markers.length;
+
+  // Determine worst status color
+  let hasCritical = false;
+  let hasWarning = false;
+  for (const m of markers) {
+    const user = (m as any)._gisUser as GISUser | undefined;
+    if (user?.criticalAlerts && user.criticalAlerts > 0) { hasCritical = true; break; }
+    if (user?.activeAlerts && user.activeAlerts > 0) hasWarning = true;
+  }
+
+  const bg = hasCritical ? "#dc2626" : hasWarning ? "#f59e0b" : "#22c55e";
+
+  return L.divIcon({
+    className: "",
+    iconSize: [36, 36],
+    html: `
+      <div style="width:36px;height:36px;border-radius:50%;background:${bg};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;font-family:Inter,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,0.25);border:2px solid white;cursor:pointer;">
+        ${count}
       </div>
     `,
   });
@@ -45,7 +72,7 @@ function createUserIcon(user: GISUser): L.DivIcon {
 export function GISMap({ users, onUserClick }: GISMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const markersLayerRef = useRef<L.LayerGroup | null>(null);
+  const clusterRef = useRef<L.MarkerClusterGroup | null>(null);
 
   const mappableUsers = useMemo(
     () => users.filter((u): u is GISMappableUser => u.coords !== null),
@@ -63,7 +90,15 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
 
     L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
-    markersLayerRef.current = L.layerGroup().addTo(map);
+    const clusterGroup = L.markerClusterGroup({
+      maxClusterRadius: 45,
+      spiderfyOnMaxZoom: true,
+      showCoverageOnHover: false,
+      iconCreateFunction: createClusterIcon,
+    });
+    map.addLayer(clusterGroup);
+
+    clusterRef.current = clusterGroup;
     mapRef.current = map;
 
     requestAnimationFrame(() => map.invalidateSize());
@@ -75,32 +110,31 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
       ro.disconnect();
       map.remove();
       mapRef.current = null;
-      markersLayerRef.current = null;
+      clusterRef.current = null;
     };
   }, []);
 
   // Sync markers
   useEffect(() => {
     const map = mapRef.current;
-    const layer = markersLayerRef.current;
-    if (!map || !layer) return;
+    const cluster = clusterRef.current;
+    if (!map || !cluster) return;
 
-    layer.clearLayers();
+    cluster.clearLayers();
     const bounds = L.latLngBounds([]);
 
     for (const user of mappableUsers) {
       const marker = L.marker(user.coords, { icon: createUserIcon(user) });
+      (marker as any)._gisUser = user;
 
-      // Tooltip on hover
       marker.bindTooltip(
         `<strong>${user.first_name} ${user.last_name}</strong><br/>${user.city ?? "Unknown"}`,
-        { direction: "top", offset: [0, -44], className: "gis-tooltip" },
+        { direction: "top", offset: [0, -32], className: "gis-tooltip" },
       );
 
-      // Click → open modal
       marker.on("click", () => onUserClick?.(user));
 
-      marker.addTo(layer);
+      cluster.addLayer(marker);
       bounds.extend(user.coords);
     }
 
