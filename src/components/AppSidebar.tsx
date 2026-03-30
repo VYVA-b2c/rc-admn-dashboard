@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall, Activity } from "lucide-react";
+import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall, Activity, Settings } from "lucide-react";
 import vyvaLogo from "@/assets/logo-with-bg.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
