@@ -822,6 +822,9 @@ export default function UserProfile() {
       {editBrainOpen && brainCoach && (
         <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" table="vyva_user_brain_coach" />
       )}
+      {editSensorOpen && (
+        <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />
+      )}
     </div>
   );
 }
