@@ -77,12 +77,13 @@ export default function Dashboard() {
     return users;
   }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all";
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all" || riskFilter !== "all";
 
   const clearFilters = () => {
     setSearchQuery("");
     setStatusFilter("all");
     setCityFilter("all");
+    setRiskFilter("all");
   };
 
   if (isLoading) {
