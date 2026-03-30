@@ -70,6 +70,7 @@ const App = () => (
                   </DashboardLayout>
                 </ProtectedRoute>
               }
+            />
             <Route
               path="/emergency-contacts"
               element={

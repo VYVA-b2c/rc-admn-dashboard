@@ -494,7 +494,6 @@ export default function UserProfile() {
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                </Button>
               </CardHeader>
               <CardContent>
                 {medications.length === 0 ? (
