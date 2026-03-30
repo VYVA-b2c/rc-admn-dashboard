@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
@@ -8,10 +8,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { StatCard } from "@/components/StatCard";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Search, Users, HeartPulse, Pill, PhoneCall, Brain, MapPin, Activity,
   ShieldCheck, User, ChevronRight, AlertTriangle, Heart,
 } from "lucide-react";
+import { computeRiskScore, getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
 
 export default function UsersList() {
   const [search, setSearch] = useState("");
@@ -115,7 +117,7 @@ export default function UsersList() {
 
   // Filter + search
   const filtered = useMemo(() => {
-    return (users || []).filter((u: any) => {
+    let result = (users || []).filter((u: any) => {
       if (cityFilter !== "all" && u.city !== cityFilter) return false;
       if (statusFilter === "alerts" && u.alerts.critical === 0 && u.alerts.warning === 0) return false;
       if (statusFilter === "sensors" && u.sensors.total === 0) return false;
@@ -129,14 +131,22 @@ export default function UsersList() {
         u.caregiverNames.join(" ").toLowerCase().includes(s)
       );
     });
+    if (statusFilter === "highest-risk") {
+      result = [...result].sort((a, b) => getUserRiskScore(b) - getUserRiskScore(a));
+    }
+    return result;
   }, [users, search, cityFilter, statusFilter]);
 
-  // Health risk level
-  const getRiskLevel = (user: any) => {
-    if (user.alerts.critical > 0) return { label: "Critical", color: "bg-destructive text-destructive-foreground" };
-    if (user.alerts.warning > 0) return { label: "Warning", color: "bg-accent text-accent-foreground" };
-    if (user.health.conditions.length > 2 || user.medsCount > 3) return { label: "Monitor", color: "bg-vyva-teal/20 text-vyva-teal" };
-    return { label: "Stable", color: "bg-vyva-green/20 text-vyva-green" };
+  // Risk score computation
+  const getUserRiskScore = (user: any) => {
+    return computeRiskScore({
+      criticalAlerts: user.alerts.critical,
+      activeAlerts: user.alerts.critical + user.alerts.warning,
+      missedMeds7d: 0, // Would need separate query; using 0 for list view
+      checkinEnabled: user.checkinsEnabled,
+      offlineSensors: Math.max(user.sensors.total - user.sensors.online, 0),
+      healthConditions: user.health.conditions.length,
+    });
   };
 
   if (isLoading) {
@@ -218,6 +228,7 @@ export default function UsersList() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Users</SelectItem>
+            <SelectItem value="highest-risk">Sort by Highest Risk</SelectItem>
             <SelectItem value="alerts">With Active Alerts</SelectItem>
             <SelectItem value="sensors">With Sensors</SelectItem>
             <SelectItem value="no-caregiver">No Caregiver</SelectItem>
@@ -244,7 +255,7 @@ export default function UsersList() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((user: any) => {
-            const risk = getRiskLevel(user);
+            const riskScore = getUserRiskScore(user);
             return (
               <Card
                 key={user.id}
@@ -276,7 +287,16 @@ export default function UsersList() {
                         </div>
                       </div>
                     </div>
-                    <Badge className={`text-xs shrink-0 ${risk.color}`}>{risk.label}</Badge>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge className={`text-xs shrink-0 border-0 ${getRiskBadgeClasses(riskScore)}`}>
+                            {riskScore} · {getRiskLabel(riskScore)}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>Based on activity, check-ins, medication adherence, and alerts</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
 
                   {/* Health Indicators */}

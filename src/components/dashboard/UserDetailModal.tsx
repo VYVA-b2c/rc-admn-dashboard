@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   User,
   Phone,
@@ -24,6 +25,7 @@ import {
   Calendar,
   ExternalLink,
 } from "lucide-react";
+import { getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
 
 interface UserDetailModalProps {
   user: GISUser | null;
@@ -84,13 +86,36 @@ export function UserDetailModal({ user, open, onOpenChange }: UserDetailModalPro
         <DialogHeader className="px-6 pt-6 pb-4">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-                <User className="h-6 w-6 text-primary" />
-              </div>
+              {/* Risk Score Circle */}
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="relative h-12 w-12 shrink-0 cursor-help">
+                      <svg width="48" height="48" viewBox="0 0 48 48">
+                        <circle cx="24" cy="24" r="19" fill="none" stroke="hsl(var(--muted))" strokeWidth="3" />
+                        <circle
+                          cx="24" cy="24" r="19" fill="none"
+                          stroke={getRiskColor(user.riskScore)}
+                          strokeWidth="3" strokeLinecap="round"
+                          strokeDasharray={2 * Math.PI * 19}
+                          strokeDashoffset={2 * Math.PI * 19 - (user.riskScore / 100) * 2 * Math.PI * 19}
+                          transform="rotate(-90 24 24)"
+                        />
+                      </svg>
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <span className="text-xs font-bold text-foreground">{user.riskScore}</span>
+                      </div>
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>Based on activity, check-ins, medication adherence, and alerts</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
               <div>
                 <DialogTitle className="font-display text-lg">{fullName}</DialogTitle>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant={statusColor as any} className="text-[10px]">{statusLabel}</Badge>
+                  <Badge className={`text-[10px] border-0 ${getRiskBadgeClasses(user.riskScore)}`}>
+                    {getRiskLabel(user.riskScore)}
+                  </Badge>
                   {user.city && (
                     <span className="flex items-center gap-1 text-xs text-muted-foreground">
                       <MapPin className="h-3 w-3" /> {user.city}

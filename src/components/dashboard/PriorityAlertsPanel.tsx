@@ -52,9 +52,10 @@ function SeveritySummary({ alerts }: { alerts: ActiveAlert[] }) {
 
 interface Props {
   alerts: ActiveAlert[];
+  onAlertClick?: (alert: ActiveAlert) => void;
 }
 
-export function PriorityAlertsPanel({ alerts }: Props) {
+export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
   const queryClient = useQueryClient();
 
   const handleResolve = useCallback(
@@ -94,7 +95,8 @@ export function PriorityAlertsPanel({ alerts }: Props) {
                 return (
                   <div
                     key={alert.id}
-                    className="flex items-start gap-3 rounded-lg border border-border p-3 hover:bg-muted/40 transition-colors"
+                    className="flex items-start gap-3 rounded-lg border border-border p-3 hover:bg-muted/40 transition-colors cursor-pointer"
+                    onClick={() => onAlertClick?.(alert)}
                   >
                     <span className={`mt-1 h-3 w-3 shrink-0 rounded-full ${cfg.color}`} />
                     <div className="flex-1 min-w-0">

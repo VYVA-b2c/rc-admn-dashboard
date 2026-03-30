@@ -6,10 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { useGISData, type GISUser } from "@/hooks/useGISData";
+import { useGISData, type GISUser, type ActiveAlert } from "@/hooks/useGISData";
 import { GISMap } from "@/components/dashboard/GISMap";
 import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel";
+import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
@@ -27,14 +28,24 @@ export default function Dashboard() {
   const { data, isLoading } = useGISData();
   const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [interventionUser, setInterventionUser] = useState<GISUser | null>(null);
+  const [interventionOpen, setInterventionOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
   const [cityFilter, setCityFilter] = useState<string>("all");
 
   const handleUserClick = useCallback((user: GISUser) => {
-    setSelectedUser(user);
-    setModalOpen(true);
+    setInterventionUser(user);
+    setInterventionOpen(true);
   }, []);
+
+  const handleAlertClick = useCallback((alert: ActiveAlert) => {
+    const user = data?.gisUsers.find((u) => u.id === alert.vyva_user_id);
+    if (user) {
+      setInterventionUser(user);
+      setInterventionOpen(true);
+    }
+  }, [data?.gisUsers]);
 
   const cities = useMemo(() => {
     const set = new Set<string>();
@@ -102,7 +113,7 @@ export default function Dashboard() {
       </div>
 
       {/* Priority Alerts Panel */}
-      <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} />
+      <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} onAlertClick={handleAlertClick} />
 
       {/* Search & Filter Bar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -157,13 +168,13 @@ export default function Dashboard() {
       {/* Legend */}
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[#dc2626]" /> Critical
+          <span className="inline-block h-3 w-3 rounded-full bg-destructive" /> Critical
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[#f59e0b]" /> Warning
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(24,94%,53%)]" /> Warning
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[#22c55e]" /> Stable
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(142,71%,45%)]" /> Stable
         </span>
       </div>
 
@@ -196,6 +207,12 @@ export default function Dashboard() {
       </Card>
 
       <UserDetailModal user={selectedUser} open={modalOpen} onOpenChange={setModalOpen} />
+      <InterventionPanel
+        user={interventionUser}
+        alerts={data?.activeAlerts ?? []}
+        open={interventionOpen}
+        onOpenChange={setInterventionOpen}
+      />
     </div>
   );
 }
