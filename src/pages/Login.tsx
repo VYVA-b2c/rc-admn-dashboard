@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Navigate } from "react-router-dom";
-import vyvaLogo from "@/assets/logo-with-bg.png";
+import drkLogo from "@/assets/drk-logo.svg";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,8 +59,8 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <img src={vyvaLogo} alt="VYVA" className="mx-auto mb-4 h-20 w-auto rounded-2xl shadow-lg" />
-          <p className="text-muted-foreground mt-1">Super Admin Dashboard</p>
+          <img src={drkLogo} alt="DRK Sachsen" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
+          <p className="text-muted-foreground mt-1">DRK Sachsen — Admin Dashboard</p>
         </div>
 
         <Card className="border-border/50 shadow-xl">
@@ -111,6 +111,9 @@ export default function Login() {
             </button>
             <p className="mt-3 text-xs text-center text-muted-foreground/60">
               If login fails in preview, try the published URL.
+            </p>
+            <p className="mt-4 text-[10px] text-center text-muted-foreground/40">
+              Powered by VYVA
             </p>
           </CardContent>
         </Card>
