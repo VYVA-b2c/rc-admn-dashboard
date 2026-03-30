@@ -23,7 +23,17 @@ export interface ActiveAlert {
   created_at: string;
   user_name: string;
   city: string | null;
+  vyva_user_id: string;
+  phone: string | null;
 }
+
+const SEVERITY_WEIGHT: Record<string, number> = {
+  critical: 4,
+  high: 3,
+  warning: 3,
+  medium: 2,
+  low: 1,
+};
 
 export function useGISData() {
   return useQuery({
