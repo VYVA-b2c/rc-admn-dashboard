@@ -39,14 +39,19 @@ export function AppSidebar() {
       <SidebarHeader className="p-4">
         <div className="flex flex-col items-center gap-2">
           <img
-            src={vyvaLogo}
-            alt="VYVA"
-            className={collapsed ? "h-8 w-8 rounded-md object-cover" : "h-12 w-auto object-contain"}
+            src={drkLogo}
+            alt="DRK Sachsen"
+            className={collapsed ? "h-8 w-8 rounded-full object-cover" : "h-14 w-14 rounded-full object-contain"}
           />
           {!collapsed && (
-            <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/50 font-medium">
-              Super Admin
-            </span>
+            <>
+              <span className="text-[10px] uppercase tracking-widest text-sidebar-foreground/50 font-medium">
+                DRK Sachsen
+              </span>
+              <span className="text-[8px] text-sidebar-foreground/30 font-normal">
+                Powered by VYVA
+              </span>
+            </>
           )}
         </div>
       </SidebarHeader>
