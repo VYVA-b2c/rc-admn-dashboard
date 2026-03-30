@@ -35,6 +35,7 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
   const [cityFilter, setCityFilter] = useState<string>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [heatmapMode, setHeatmapMode] = useState(false);
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
