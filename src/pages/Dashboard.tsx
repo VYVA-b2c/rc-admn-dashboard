@@ -167,6 +167,15 @@ export default function Dashboard() {
             <SelectItem value="stable">🟢 Stable</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          variant={heatmapMode ? "default" : "outline"}
+          size="sm"
+          onClick={() => setHeatmapMode((v) => !v)}
+          className="gap-1.5"
+        >
+          <Flame className="h-3.5 w-3.5" />
+          Heatmap
+        </Button>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
             <X className="mr-1 h-3.5 w-3.5" /> Clear
