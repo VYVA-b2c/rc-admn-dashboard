@@ -69,6 +69,8 @@ export default function UserProfile() {
   const [editCaregiverTarget, setEditCaregiverTarget] = useState<any>(null);
   const [editCheckinOpen, setEditCheckinOpen] = useState(false);
   const [editBrainOpen, setEditBrainOpen] = useState(false);
+  const [editSensorOpen, setEditSensorOpen] = useState(false);
+  const [editSensorTarget, setEditSensorTarget] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
