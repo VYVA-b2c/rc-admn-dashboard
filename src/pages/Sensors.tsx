@@ -484,7 +484,7 @@ export default function Sensors() {
                           <p className="font-medium text-sm text-foreground">
                             {alert.alert_type.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </p>
-                          <p className="text-xs text-muted-foreground">
+                         <p className="text-xs text-muted-foreground">
                             {alert.vyva_users?.first_name} {alert.vyva_users?.last_name}
                             {alert.vyva_user_sensors?.device_name && ` — ${alert.vyva_user_sensors.device_name}`}
                           </p>
@@ -497,6 +497,14 @@ export default function Sensors() {
                         <p className="text-xs text-muted-foreground">
                           {new Date(alert.created_at).toLocaleString()}
                         </p>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs mt-1 h-6 px-2"
+                          onClick={(e) => { e.stopPropagation(); navigate(`/users/${alert.vyva_user_id}`); }}
+                        >
+                          <Settings className="h-3 w-3 mr-1" /> Configure
+                        </Button>
                       </div>
                     </div>
                   ))}
