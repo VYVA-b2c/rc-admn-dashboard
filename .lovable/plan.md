@@ -1,48 +1,31 @@
 
 
-## Plan: Add Inline Editing to User Profile Page
+## Plan: Create First Admin Account
 
-### Overview
-Add edit capabilities to the UserProfile page so admins can modify user data (profile, medications, caregivers, check-in settings, brain coach, health conditions) directly from the existing profile view using edit dialogs/sheets.
+### What
+Create the first admin user account with email `karim.assad@mokadigital.net` so you can log into the dashboard.
 
-### Database Changes (Migration)
-Add UPDATE and INSERT/DELETE RLS policies for admin users on these tables:
-- `vyva_users` — UPDATE for admins
-- `vyva_user_medications` — INSERT, UPDATE, DELETE for admins
-- `vyva_user_caregivers` — INSERT, UPDATE, DELETE for admins
-- `vyva_user_checkins` — UPDATE for admins
-- `vyva_user_brain_coach` — UPDATE for admins
-- `vyva_user_health` — UPDATE for admins
+### Steps
 
-All policies use `is_admin_user(auth.uid())`.
+1. **Create an edge function `create-first-admin`** that:
+   - Checks if any admin users exist yet (if admins already exist, reject the request)
+   - Creates a new auth user with the provided email and a temporary password
+   - Inserts an `admin` role into `user_roles` for that user
+   - Returns the temporary password so you can log in
 
-### New Components
+2. **Invoke the function** to create the account with email `karim.assad@mokadigital.net`
 
-**1. `EditUserDialog.tsx`** — Edit personal info + address fields (first_name, last_name, phone, date_of_birth, gender, language, city, street, house_number, post_code, emergency_notes). Uses react-hook-form + zod validation.
+3. **Enable auto-confirm** for email signups temporarily so you can log in without email verification
 
-**2. `EditMedicationDialog.tsx`** — Add/edit a single medication (medication_name, dosage, purpose, schedule_times). Supports both create and update modes.
-
-**3. `EditCaregiverDialog.tsx`** — Add/edit a caregiver (caretaker_name, caretaker_phone).
-
-**4. `EditServiceDialog.tsx`** — Edit check-in or brain coach settings (enabled toggle, frequency, preferred_time). Reusable for both services.
-
-**5. `EditHealthDialog.tsx`** — Edit health conditions and mobility needs (tag-style input allowing add/remove of items from the arrays).
-
-### UserProfile.tsx Changes
-- Add "Edit" buttons (pencil icons) to each card header
-- Wire up dialog open/close state for each editor
-- On successful save, invalidate the `vyva-user-profile` query to refresh data
-- Add delete confirmation for medications and caregivers (with trash icon buttons)
+4. **You log in** with the temporary password, then change it from within the app
 
 ### Technical Details
-- All mutations use `supabase.from("table").update/insert/delete`
-- Form validation with zod schemas
-- `useQueryClient().invalidateQueries(["vyva-user-profile", id])` after each mutation
-- Toast notifications on success/error
-- Schedule times editor: simple comma-separated input converted to string array
+- The edge function uses the service role key to call `supabase.auth.admin.createUser()` with `email_confirm: true`
+- A temporary password will be generated and returned
+- After account creation, the edge function can be deleted (it's a one-time bootstrap)
+- The `user_roles` insert assigns `role: 'admin'`
 
 ### Files
-- **Migration**: New RLS policies for UPDATE/INSERT/DELETE on 6 tables
-- **New**: `src/components/user/EditUserDialog.tsx`, `EditMedicationDialog.tsx`, `EditCaregiverDialog.tsx`, `EditServiceDialog.tsx`, `EditHealthDialog.tsx`
-- **Modified**: `src/pages/UserProfile.tsx` — add edit buttons and dialog wiring
+- **New**: `supabase/functions/create-first-admin/index.ts` (temporary, deleted after use)
+- **Config**: Enable auto-confirm via `cloud--configure_auth`
 
