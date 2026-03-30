@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { getRiskBand } from "@/lib/riskScore";
-import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X } from "lucide-react";
+import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X, Flame } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
@@ -35,6 +35,7 @@ export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
   const [cityFilter, setCityFilter] = useState<string>("all");
   const [riskFilter, setRiskFilter] = useState<string>("all");
+  const [heatmapMode, setHeatmapMode] = useState(false);
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
@@ -166,6 +167,15 @@ export default function Dashboard() {
             <SelectItem value="stable">🟢 Stable</SelectItem>
           </SelectContent>
         </Select>
+        <Button
+          variant={heatmapMode ? "default" : "outline"}
+          size="sm"
+          onClick={() => setHeatmapMode((v) => !v)}
+          className="gap-1.5"
+        >
+          <Flame className="h-3.5 w-3.5" />
+          Heatmap
+        </Button>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
             <X className="mr-1 h-3.5 w-3.5" /> Clear
@@ -179,7 +189,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={filteredUsers} onUserClick={handleUserClick} />
+          <GISMap users={filteredUsers} onUserClick={handleUserClick} heatmapMode={heatmapMode} />
         </CardContent>
       </Card>
 

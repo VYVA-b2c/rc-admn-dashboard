@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
 import "leaflet.markercluster";
+import "leaflet.heat";
 import type { GISUser } from "@/hooks/useGISData";
 import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
 import { getRiskColor, getRiskBand, getRiskLabel } from "@/lib/riskScore";
@@ -10,6 +11,7 @@ type GISMappableUser = GISUser & { coords: [number, number] };
 interface GISMapProps {
   users: GISUser[];
   onUserClick?: (user: GISUser) => void;
+  heatmapMode?: boolean;
 }
 
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
@@ -91,10 +93,11 @@ function buildPopupHtml(user: GISUser): string {
   `;
 }
 
-export function GISMap({ users, onUserClick }: GISMapProps) {
+export function GISMap({ users, onUserClick, heatmapMode = false }: GISMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const clusterRef = useRef<L.MarkerClusterGroup | null>(null);
+  const heatRef = useRef<L.Layer | null>(null);
 
   const mappableUsers = useMemo(
     () => users.filter((u): u is GISMappableUser => u.coords !== null),
@@ -144,32 +147,75 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
       map.remove();
       mapRef.current = null;
       clusterRef.current = null;
+      heatRef.current = null;
     };
   }, []);
 
-  // Sync markers
+  // Sync markers & heatmap
   useEffect(() => {
     const map = mapRef.current;
     const cluster = clusterRef.current;
     if (!map || !cluster) return;
 
+    // Remove old heat layer if exists
+    if (heatRef.current) {
+      map.removeLayer(heatRef.current);
+      heatRef.current = null;
+    }
+
     cluster.clearLayers();
+
     const bounds = L.latLngBounds([]);
 
-    for (const user of mappableUsers) {
-      const marker = L.marker(user.coords, { icon: createUserIcon(user) });
-      (marker as any)._gisUser = user;
+    if (heatmapMode) {
+      // Hide clusters, show heatmap
+      if (map.hasLayer(cluster)) map.removeLayer(cluster);
 
-      marker.bindPopup(buildPopupHtml(user), {
-        className: "gis-popup",
-        closeButton: true,
-        maxWidth: 260,
-      });
+      const heatPoints: [number, number, number][] = mappableUsers.map((u) => [
+        u.coords[0],
+        u.coords[1],
+        (u.activeAlerts ?? 0) + (u.criticalAlerts ?? 0) + 1,
+      ]);
 
-      marker.on("click", () => onUserClick?.(user));
+      if (heatPoints.length > 0) {
+        const heat = (L as any).heatLayer(heatPoints, {
+          radius: 30,
+          blur: 20,
+          maxZoom: 12,
+          max: 10,
+          gradient: {
+            0.2: "#22c55e",
+            0.4: "#eab308",
+            0.7: "#f97316",
+            1.0: "#ef4444",
+          },
+        });
+        heat.addTo(map);
+        heatRef.current = heat;
+      }
 
-      cluster.addLayer(marker);
-      bounds.extend(user.coords);
+      for (const user of mappableUsers) {
+        bounds.extend(user.coords);
+      }
+    } else {
+      // Show clusters
+      if (!map.hasLayer(cluster)) map.addLayer(cluster);
+
+      for (const user of mappableUsers) {
+        const marker = L.marker(user.coords, { icon: createUserIcon(user) });
+        (marker as any)._gisUser = user;
+
+        marker.bindPopup(buildPopupHtml(user), {
+          className: "gis-popup",
+          closeButton: true,
+          maxWidth: 260,
+        });
+
+        marker.on("click", () => onUserClick?.(user));
+
+        cluster.addLayer(marker);
+        bounds.extend(user.coords);
+      }
     }
 
     if (mappableUsers.length > 1 && bounds.isValid()) {
@@ -179,7 +225,7 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
     } else {
       map.setView(SAXONY_CENTER, SAXONY_ZOOM);
     }
-  }, [mappableUsers, onUserClick]);
+  }, [mappableUsers, onUserClick, heatmapMode]);
 
   return <div ref={containerRef} className="relative z-0 h-[420px] w-full bg-muted/30" aria-label="GIS map of users in Saxony" />;
 }
