@@ -71,8 +71,11 @@ export default function Dashboard() {
     else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
     else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
     if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
+    if (riskFilter !== "all") {
+      users = users.filter((u) => getRiskBand(u.riskScore ?? 0) === riskFilter);
+    }
     return users;
-  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter]);
+  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
   const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all";
 
