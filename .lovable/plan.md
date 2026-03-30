@@ -1,47 +1,60 @@
 
 
-## Plan: Close DB + Webhook Gaps
+## Plan: Medication Adherence Tracking Page
 
-### Database Migration
+### Overview
+Add a weekly medication adherence view per user (inspired by the uploaded screenshot) where admins can see each medication's scheduled doses across a 7-day week, with status indicators (taken, missed, unconfirmed, upcoming). Data comes from a new `vyva_medication_logs` table populated by the check-in agent calls.
 
-Add `country` column to `vyva_users` and change defaults:
+### Database Changes
 
+**New table: `vyva_medication_logs`**
 ```sql
-ALTER TABLE vyva_users ADD COLUMN country text DEFAULT 'Germany';
-ALTER TABLE vyva_users ALTER COLUMN language SET DEFAULT 'de';
-ALTER TABLE vyva_users ALTER COLUMN timezone SET DEFAULT 'Europe/Berlin';
+CREATE TABLE vyva_medication_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  vyva_user_id uuid NOT NULL REFERENCES vyva_users(id) ON DELETE CASCADE,
+  medication_id uuid NOT NULL REFERENCES vyva_user_medications(id) ON DELETE CASCADE,
+  scheduled_date date NOT NULL,
+  scheduled_time text,
+  status text NOT NULL DEFAULT 'pending',  -- 'taken', 'missed', 'pending'
+  reported_at timestamptz,
+  call_id text,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 ```
+- RLS: SELECT, INSERT, UPDATE for admin users
+- Unique constraint on `(medication_id, scheduled_date, scheduled_time)` to prevent duplicates
 
-### Webhook Updates (`supabase/functions/onboarding-webhook/index.ts`)
+**Update webhook** to accept medication adherence reports from agent calls, inserting/updating logs.
 
-Accept both the agent's field names and the current names, mapping as needed:
+### New Page: `src/pages/MedicationAdherence.tsx`
 
-| Agent sends | Maps to DB column |
-|---|---|
-| `phone_number` or `phone` | `phone` |
-| `postal_code` or `post_code` | `post_code` |
-| `country` | `country` (new) |
-| `language` | `language` |
-| `emergency_contact_name` or `caretaker_name` | `caretaker_name` |
-| `emergency_contact_phone` or `caretaker_phone` | `caretaker_phone` |
-| `data_consent_given` or `consent_given` | `consent_given` |
-| `check_in_frequency` | checkins.frequency |
-| `check_in_time` | checkins.preferred_time |
-| `health_concerns` or `health_conditions` | health_conditions |
-| `mobility_restrictions` or `mobility_needs` | mobility_needs |
-| `takes_medications` + `medication_schedule` | medications array |
-| `brain_coach_interest` or `brain_coach` | brain_coach |
+Weekly calendar view per user showing:
+- Week navigation (previous/next week) with current week header
+- One row per user's medication
+- 7 columns (Mon-Sun), each cell showing:
+  - Medication name + dose count badge (e.g., "0/1")
+  - Scheduled time
+  - Color-coded status: green (taken), red (missed), amber (unconfirmed), grey (upcoming/future)
+- Legend at top: Taken, Missed, Unconfirmed, Upcoming
+- Summary row per day showing overall adherence count
 
-Key changes in webhook logic:
-1. **vyva_users insert** — add `country`, `language`, accept `phone_number`/`postal_code` aliases
-2. **Consent** — also accept `data_consent_given`
-3. **Health** — also accept `health_concerns` / `mobility_restrictions`
-4. **Medications** — handle flat format (`takes_medications: true, medication_schedule: "every morning"`) by converting to array
-5. **Check-ins** — accept flat `check_in_frequency` / `check_in_time` as alternative to nested `checkins` object
-6. **Brain coach** — accept `brain_coach_interest` boolean
-7. **Caregivers** — accept `emergency_contact_name` / `emergency_contact_phone` aliases
+### Route & Navigation
+- Route: `/users/:id/medications` 
+- Access from UserProfile page via a "View Adherence" button on the Medications tab
+- Back button to return to user profile
+
+### Webhook Update (`onboarding-webhook/index.ts`)
+- Accept a `medication_adherence` array in the payload:
+  ```json
+  { "medication_adherence": [
+    { "medication_name": "ibuprofeno", "date": "2026-03-30", "time": "14:00", "status": "taken" }
+  ]}
+  ```
+- Match by medication name + vyva_user_id, upsert into `vyva_medication_logs`
 
 ### Files
-- **Migration**: Add `country` column, change `language` default to `de`, change `timezone` default to `Europe/Berlin`
-- **Modified**: `supabase/functions/onboarding-webhook/index.ts` — field aliasing and flat-format handling
+- **Migration**: Create `vyva_medication_logs` table + RLS policies
+- **New**: `src/pages/MedicationAdherence.tsx`
+- **Modified**: `src/App.tsx` (add route), `src/pages/UserProfile.tsx` (add "View Adherence" link), `supabase/functions/onboarding-webhook/index.ts` (handle adherence data)
 
