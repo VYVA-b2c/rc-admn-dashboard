@@ -1,90 +1,41 @@
 
+Problem
+- Your account is authenticating successfully; the backend is returning 200 for password login.
+- The failure happens immediately after login: the auth logs show a burst of refresh-token requests, token revocations, and then `429 over_request_rate_limit`.
+- That is why it feels like “I log in, then get kicked out.”
 
-## Plan: User-Level Sensor Configuration
+Most likely cause
+- There are competing/stale sessions hitting auth at the same time. The logs show requests coming from more than one preview origin, which strongly suggests multiple open previews/tabs or old persisted sessions are fighting over the same refresh token.
+- The current auth layer does not recover cleanly when a stored session is stale or rate-limited, so the app falls back to `/login` and the next attempt makes the rate limit worse.
 
-### Overview
-Add the ability for admins to add, edit, and remove sensors per user, supporting both predefined sensor types and custom ones with configurable integration methods. This includes changes to the database schema, a new sensor edit dialog, updates to the User Profile sensors tab, and enhancements to the global Sensors page.
+Plan to fix
+1. Harden auth startup in `src/contexts/AuthContext.tsx`
+   - Add a single helper to apply/clear session state.
+   - Wrap initial session restore in error handling.
+   - If session restore hits refresh-token/rate-limit errors, clear the local session safely and stop the logout loop.
 
-### Database Changes (Migration)
+2. Make sign-in recovery-safe in `src/pages/Login.tsx`
+   - Clear stale local auth state before a fresh sign-in attempt.
+   - Detect `429` errors and show a specific message: wait briefly and close other open previews/tabs.
+   - Prevent rapid repeat submits while rate-limited.
 
-**1. Extend `vyva_user_sensors` table** with integration configuration columns:
+3. Stabilize redirects in `src/components/ProtectedRoute.tsx`
+   - Only redirect to `/login` after auth initialization/recovery is fully finished.
+   - Avoid bouncing the user out during a transient refresh failure.
 
-```sql
-ALTER TABLE vyva_user_sensors
-  ADD COLUMN integration_method text DEFAULT 'api',
-  ADD COLUMN integration_config jsonb DEFAULT '{}',
-  ADD COLUMN notes text;
-```
+4. Make manual sign-out local-only
+   - Update the auth sign-out flow so signing out in one preview does not revoke every session everywhere.
 
-- `integration_method`: one of `api`, `webhook`, `mqtt`, `ble`, `manual`
-- `integration_config`: flexible JSON for method-specific settings (e.g. `{"endpoint_url": "...", "api_key_ref": "..."}` for API, `{"topic": "..."}` for MQTT, `{"ble_device_id": "..."}` for BLE)
-- `notes`: free-text admin notes
+5. Verify the fix
+   - Test with only one preview open: login, reload, navigate, and confirm the session persists.
+   - Confirm the refresh-token flood and `rate limit reached` errors stop.
 
-**2. Create `sensor_type_catalog` table** for the predefined + custom catalog:
+Files to update
+- `src/contexts/AuthContext.tsx`
+- `src/pages/Login.tsx`
+- `src/components/ProtectedRoute.tsx`
 
-```sql
-CREATE TABLE public.sensor_type_catalog (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  type_key text UNIQUE NOT NULL,
-  label text NOT NULL,
-  is_custom boolean DEFAULT false,
-  created_at timestamptz DEFAULT now()
-);
-
--- Seed predefined types
-INSERT INTO sensor_type_catalog (type_key, label) VALUES
-  ('heart_rate', 'Heart Rate'),
-  ('blood_pressure', 'Blood Pressure'),
-  ('fall_detector', 'Fall Detector'),
-  ('activity_monitor', 'Activity Monitor'),
-  ('temperature', 'Temperature'),
-  ('spo2', 'SpO2 / Oxygen'),
-  ('glucose', 'Glucose Monitor'),
-  ('sleep_tracker', 'Sleep Tracker');
-```
-
-RLS: admin SELECT, INSERT for custom types.
-
-**3. Add RLS policies** for INSERT, UPDATE, DELETE on `vyva_user_sensors` for admins (currently only SELECT exists).
-
-### New Components
-
-**`src/components/user/EditSensorDialog.tsx`**
-A dialog for adding/editing a sensor on a user, with fields:
-- **Sensor type**: Select from catalog (with "Add custom type" option)
-- **Device ID**: text input
-- **Device name**: text input
-- **Integration method**: radio/select (API, Webhook, MQTT, BLE, Manual)
-- **Integration config**: dynamic fields based on method:
-  - API: endpoint URL, auth header/key reference
-  - Webhook: callback URL (auto-generated or manual)
-  - MQTT: broker URL, topic
-  - BLE: BLE device ID, service UUID
-  - Manual: notes only
-- **Status**: online/offline toggle
-- **Notes**: textarea
-
-### Modified Files
-
-**`src/pages/UserProfile.tsx`** (Sensors tab)
-- Add "Add Sensor" button
-- Add edit/delete buttons on each sensor card
-- Wire up `EditSensorDialog` for add and edit
-- Add delete handler with confirmation
-
-**`src/pages/Sensors.tsx`** (Global overview)
-- Add a "Configure Sensors" section or button that links to user profiles
-- Show integration method badge on each sensor card
-- Add quick-add sensor action with user selector
-
-### Build Order
-1. Database migration (new columns + catalog table + RLS)
-2. Create `EditSensorDialog` component
-3. Update UserProfile sensors tab with add/edit/delete
-4. Update global Sensors page with integration info
-
-### Files
-- **Migration**: ALTER `vyva_user_sensors`, CREATE `sensor_type_catalog`, new RLS policies
-- **New**: `src/components/user/EditSensorDialog.tsx`
-- **Modified**: `src/pages/UserProfile.tsx`, `src/pages/Sensors.tsx`
-
+Technical notes
+- No database changes are needed.
+- I will not modify `src/integrations/supabase/client.ts`.
+- The console warnings about refs and `<Navigate>` are separate from the auth rate-limit/logout issue and can be cleaned up afterward.
