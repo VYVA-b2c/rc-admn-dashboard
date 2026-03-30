@@ -49,8 +49,13 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Invite user via Supabase Auth admin API
-    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email);
+    // Invite user via Supabase Auth admin API with branded email
+    const siteUrl = Deno.env.get("SITE_URL") || "https://heartbeat-guardian-console.lovable.app";
+
+    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
+      redirectTo: `${siteUrl}/reset-password`,
+      data: { invited_role: "admin" },
+    });
     if (error) throw error;
 
     // Assign admin role to invited user
