@@ -36,7 +36,7 @@ function createUserIcon(user: GISUser): L.DivIcon {
           <circle cx="13" cy="13" r="8.5" fill="white" fill-opacity="0.95"/>
         </svg>
         <span style="position:absolute; top:5px; left:0; width:26px; text-align:center; font-size:9px; font-weight:700; font-family:Inter,sans-serif; color:${color}; line-height:16px; pointer-events:none;">
-          ${initials}
+          ${score}
         </span>
       </div>
     `,
