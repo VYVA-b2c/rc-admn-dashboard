@@ -109,9 +109,16 @@ export function useGISData() {
             created_at: a.created_at,
             user_name: u ? `${u.first_name} ${u.last_name}` : "Unknown",
             city: u?.city || null,
+            vyva_user_id: a.vyva_user_id,
+            phone: u?.phone || null,
           };
         })
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+        .sort((a, b) => {
+          const wa = SEVERITY_WEIGHT[a.severity] || 1;
+          const wb = SEVERITY_WEIGHT[b.severity] || 1;
+          if (wb !== wa) return wb - wa;
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        });
 
       return {
         totalUsers: users.length,
