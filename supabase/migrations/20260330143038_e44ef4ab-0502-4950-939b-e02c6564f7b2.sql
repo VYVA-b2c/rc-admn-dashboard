@@ -1,0 +1,1 @@
+CREATE POLICY "Admins can update alerts" ON public.vyva_sensor_alerts FOR UPDATE TO authenticated USING (is_admin_user(auth.uid())) WITH CHECK (is_admin_user(auth.uid()));
