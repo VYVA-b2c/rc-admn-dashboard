@@ -1,31 +1,37 @@
 
 
-## Plan: Replace VYVA Logo with DRK + "Powered by VYVA"
+## Plan: Heatmap Toggle for Intervention Frequency
+
+### Overview
+Add a toggle button above the map that switches between the current marker/cluster view and a heatmap layer visualizing intervention density by geographic area. The heatmap uses `leaflet.heat` to render intensity based on how many alerts/interventions each location has.
 
 ### Changes
 
-**1. Add DRK Logo SVG (`src/assets/drk-logo.svg`)**
-Create an inline SVG of the standard DRK (Deutsches Rotes Kreuz) red cross emblem — a white cross on a red circular background, clean and scalable.
+**1. Install `leaflet.heat`**
+Add `leaflet-heat` package (provides `L.heatLayer`). Add type declaration since it has no @types package.
 
-**2. Update `src/components/AppSidebar.tsx`**
-- Import DRK logo instead of VYVA logo as the main sidebar logo
-- Change alt text to "DRK Sachsen"
-- Add a small "Powered by VYVA" text below the logo (visible when sidebar is expanded), styled in muted foreground at ~8px, with subtle opacity
+**2. Add type declaration (`src/types/leaflet-heat.d.ts`)**
+Declare the `L.heatLayer` extension on the Leaflet namespace.
 
-**3. Update `src/pages/Login.tsx`**
-- Replace VYVA logo with DRK logo as the main visual
-- Change subtitle from "Super Admin Dashboard" to "DRK Sachsen — Admin Dashboard"
-- Add a "Powered by VYVA" footer line below the card, small and subtle
+**3. Update `src/components/dashboard/GISMap.tsx`**
+- Accept new prop `heatmapMode: boolean`
+- When `heatmapMode` is true:
+  - Hide the marker cluster layer
+  - Show a heat layer where each user's coordinates are weighted by their `activeAlerts + criticalAlerts` count (minimum weight 1 so all users appear)
+  - Gradient: green → yellow → orange → red
+- When toggled off, remove heat layer and restore clusters
+- The heat layer data points are: `[lat, lng, intensity]` where intensity = `user.activeAlerts + user.criticalAlerts + 1`
 
-**4. Update `src/components/DashboardLayout.tsx`**
-- Change header title from "VYVA Admin" to "DRK Sachsen"
+**4. Update `src/pages/Dashboard.tsx`**
+- Add a `heatmapMode` state boolean (default false)
+- Add a toggle button in the filter bar (next to existing filters) using the `Flame` lucide icon
+- Label: "Heatmap" — styled as a toggle button (outlined when off, filled when on)
+- Pass `heatmapMode` prop to `<GISMap>`
 
-### Design
-- DRK logo is prominent (main brand)
-- "Powered by VYVA" appears as a small, muted footnote — not competing with DRK branding
-- Keep existing VYVA color palette and design system intact
+### No database changes needed.
 
 ### Files
-- **New**: `src/assets/drk-logo.svg`
-- **Modified**: `src/components/AppSidebar.tsx`, `src/pages/Login.tsx`, `src/components/DashboardLayout.tsx`
+- **New**: `src/types/leaflet-heat.d.ts`
+- **Modified**: `src/components/dashboard/GISMap.tsx`, `src/pages/Dashboard.tsx`
+- **Package**: `leaflet-heat`
 
