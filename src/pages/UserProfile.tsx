@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,12 +10,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
 import {
   ArrowLeft, User, MapPin, ShieldCheck, HeartPulse, Pill, PhoneCall, Brain, Users, Activity, Clock,
-  Calendar, Globe, Phone, AlertTriangle, Battery, Wifi, WifiOff, Zap,
+  Calendar, Globe, Phone, AlertTriangle, Battery, Wifi, WifiOff, Zap, Pencil, Plus, Trash2,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell, Legend,
 } from "recharts";
+import { toast } from "@/hooks/use-toast";
+import { EditUserDialog } from "@/components/user/EditUserDialog";
+import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
+import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
+import { EditServiceDialog } from "@/components/user/EditServiceDialog";
+import { EditHealthDialog } from "@/components/user/EditHealthDialog";
 
 function InfoRow({ label, value, icon }: { label: string; value: string | null | undefined; icon?: React.ReactNode }) {
   return (
@@ -50,6 +57,17 @@ const CHART_COLORS = [
 export default function UserProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // Dialog states
+  const [editUserOpen, setEditUserOpen] = useState(false);
+  const [editHealthOpen, setEditHealthOpen] = useState(false);
+  const [editMedOpen, setEditMedOpen] = useState(false);
+  const [editMedTarget, setEditMedTarget] = useState<any>(null);
+  const [editCaregiverOpen, setEditCaregiverOpen] = useState(false);
+  const [editCaregiverTarget, setEditCaregiverTarget] = useState<any>(null);
+  const [editCheckinOpen, setEditCheckinOpen] = useState(false);
+  const [editBrainOpen, setEditBrainOpen] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
@@ -82,6 +100,26 @@ export default function UserProfile() {
     },
     enabled: !!id,
   });
+
+  const handleDeleteMedication = async (medId: string) => {
+    const { error } = await supabase.from("vyva_user_medications").delete().eq("id", medId);
+    if (error) {
+      toast({ title: "Error deleting", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Medication deleted" });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    }
+  };
+
+  const handleDeleteCaregiver = async (caregiverId: string) => {
+    const { error } = await supabase.from("vyva_user_caregivers").delete().eq("id", caregiverId);
+    if (error) {
+      toast({ title: "Error deleting", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Caregiver removed" });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    }
+  };
 
   if (isLoading) {
     return (
@@ -165,6 +203,12 @@ export default function UserProfile() {
   const servicesActive = services.filter(s => s.active).length;
   const servicesPercent = Math.round((servicesActive / services.length) * 100);
 
+  const EditBtn = ({ onClick }: { onClick: () => void }) => (
+    <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={onClick}>
+      <Pencil className="h-3.5 w-3.5" />
+    </Button>
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -204,7 +248,6 @@ export default function UserProfile() {
 
       {/* Quick Stats Banner */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Health Score */}
         <Card>
           <CardContent className="pt-5 pb-4 text-center">
             <p className={`text-4xl font-display font-bold ${healthScoreColor}`}>{healthScore}</p>
@@ -215,7 +258,6 @@ export default function UserProfile() {
           </CardContent>
         </Card>
 
-        {/* Services Completion */}
         <Card>
           <CardContent className="pt-5 pb-4">
             <div className="flex items-center justify-between mb-2">
@@ -234,7 +276,6 @@ export default function UserProfile() {
           </CardContent>
         </Card>
 
-        {/* Sensors Summary */}
         <Card>
           <CardContent className="pt-5 pb-4 text-center">
             <div className="flex justify-center gap-4">
@@ -255,7 +296,6 @@ export default function UserProfile() {
           </CardContent>
         </Card>
 
-        {/* Onboarded */}
         <Card>
           <CardContent className="pt-5 pb-4 text-center">
             <p className="text-2xl font-display font-bold text-foreground">{daysOnboarded}</p>
@@ -281,6 +321,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <User className="h-5 w-5 text-vyva-purple" />
                 <CardTitle className="font-display text-base">Personal Info</CardTitle>
+                <EditBtn onClick={() => setEditUserOpen(true)} />
               </CardHeader>
               <CardContent>
                 <InfoRow label="First Name" value={user.first_name} />
@@ -297,6 +338,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <MapPin className="h-5 w-5 text-vyva-teal" />
                 <CardTitle className="font-display text-base">Address</CardTitle>
+                <EditBtn onClick={() => setEditUserOpen(true)} />
               </CardHeader>
               <CardContent>
                 <InfoRow label="Street" value={user.street} />
@@ -331,6 +373,9 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <Users className="h-5 w-5 text-vyva-green" />
                 <CardTitle className="font-display text-base">Caregivers ({caregivers.length})</CardTitle>
+                <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={() => { setEditCaregiverTarget(null); setEditCaregiverOpen(true); }}>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
               </CardHeader>
               <CardContent>
                 {caregivers.length === 0 ? (
@@ -340,11 +385,21 @@ export default function UserProfile() {
                   </div>
                 ) : (
                   caregivers.map((c: any) => (
-                    <div key={c.id} className="rounded-lg bg-muted/50 p-3 mb-2 last:mb-0">
-                      <p className="text-sm font-medium text-foreground">{c.caretaker_name || "Unknown"}</p>
-                      <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                        <Phone className="h-3 w-3" /> {c.caretaker_phone || "No phone"}
-                      </p>
+                    <div key={c.id} className="rounded-lg bg-muted/50 p-3 mb-2 last:mb-0 flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium text-foreground">{c.caretaker_name || "Unknown"}</p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                          <Phone className="h-3 w-3" /> {c.caretaker_phone || "No phone"}
+                        </p>
+                      </div>
+                      <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditCaregiverTarget(c); setEditCaregiverOpen(true); }}>
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDeleteCaregiver(c.id)}>
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </div>
                   ))
                 )}
@@ -356,6 +411,7 @@ export default function UserProfile() {
                 <CardHeader className="flex flex-row items-center gap-2 pb-3">
                   <AlertTriangle className="h-5 w-5 text-destructive" />
                   <CardTitle className="font-display text-base text-destructive">Emergency Notes</CardTitle>
+                  <EditBtn onClick={() => setEditUserOpen(true)} />
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-foreground whitespace-pre-wrap">{user.emergency_notes}</p>
@@ -372,6 +428,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <HeartPulse className="h-5 w-5 text-vyva-pink" />
                 <CardTitle className="font-display text-base">Health Conditions</CardTitle>
+                <EditBtn onClick={() => setEditHealthOpen(true)} />
               </CardHeader>
               <CardContent>
                 {health?.health_conditions?.length ? (
@@ -393,6 +450,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <Activity className="h-5 w-5 text-vyva-teal" />
                 <CardTitle className="font-display text-base">Mobility Needs</CardTitle>
+                <EditBtn onClick={() => setEditHealthOpen(true)} />
               </CardHeader>
               <CardContent>
                 {health?.mobility_needs?.length ? (
@@ -414,6 +472,9 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <Pill className="h-5 w-5 text-accent" />
                 <CardTitle className="font-display text-base">Medications ({medications.length})</CardTitle>
+                <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={() => { setEditMedTarget(null); setEditMedOpen(true); }}>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
               </CardHeader>
               <CardContent>
                 {medications.length === 0 ? (
@@ -427,7 +488,14 @@ export default function UserProfile() {
                             <p className="font-semibold text-sm text-foreground">{med.medication_name}</p>
                             {med.purpose && <p className="text-xs text-muted-foreground mt-0.5">{med.purpose}</p>}
                           </div>
-                          <Pill className="h-4 w-4 text-accent shrink-0" />
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }}>
+                              <Pencil className="h-3 w-3" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" onClick={() => handleDeleteMedication(med.id)}>
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2">
                           {med.dosage && (
@@ -448,6 +516,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <PhoneCall className="h-5 w-5 text-vyva-teal" />
                 <CardTitle className="font-display text-base">Check-in Settings</CardTitle>
+                {checkins && <EditBtn onClick={() => setEditCheckinOpen(true)} />}
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2 mb-3">
@@ -464,6 +533,7 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <Brain className="h-5 w-5 text-vyva-purple" />
                 <CardTitle className="font-display text-base">Brain Coach</CardTitle>
+                {brainCoach && <EditBtn onClick={() => setEditBrainOpen(true)} />}
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2 mb-3">
@@ -541,7 +611,6 @@ export default function UserProfile() {
         {/* ALERTS TAB */}
         <TabsContent value="alerts">
           <div className="space-y-4">
-            {/* Alert Charts */}
             <div className="grid gap-4 md:grid-cols-2">
               <Card>
                 <CardHeader className="pb-2">
@@ -588,7 +657,6 @@ export default function UserProfile() {
               </Card>
             </div>
 
-            {/* Alerts List */}
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="font-display text-base">All Alerts ({alerts.length})</CardTitle>
@@ -706,6 +774,26 @@ export default function UserProfile() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Edit Dialogs */}
+      {editUserOpen && (
+        <EditUserDialog open={editUserOpen} onOpenChange={setEditUserOpen} user={user} />
+      )}
+      {editHealthOpen && health && (
+        <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />
+      )}
+      {editMedOpen && (
+        <EditMedicationDialog open={editMedOpen} onOpenChange={setEditMedOpen} vyvaUserId={user.id} medication={editMedTarget} />
+      )}
+      {editCaregiverOpen && (
+        <EditCaregiverDialog open={editCaregiverOpen} onOpenChange={setEditCaregiverOpen} vyvaUserId={user.id} caregiver={editCaregiverTarget} />
+      )}
+      {editCheckinOpen && checkins && (
+        <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" table="vyva_user_checkins" />
+      )}
+      {editBrainOpen && brainCoach && (
+        <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" table="vyva_user_brain_coach" />
+      )}
     </div>
   );
 }
