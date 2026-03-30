@@ -9,19 +9,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { toast } from "sonner";
 
 export default function Login() {
-  const { user, signIn, resetPassword } = useAuth();
+  const { session, signIn, resetPassword } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const rateLimitUntil = useRef(0);
 
-  if (user) return <Navigate to="/" replace />;
+  if (session) return <Navigate to="/" replace />;
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (Date.now() < rateLimitUntil.current) {
-      toast.error("Rate limited", { description: "Please wait 30 seconds and close any other open tabs/previews." });
+      toast.error("Rate limited", { description: "Please wait 30 seconds before trying again." });
       return;
     }
     setLoading(true);
@@ -30,7 +30,7 @@ export default function Login() {
       const msg = error.message?.toLowerCase() ?? "";
       if (msg.includes("rate") || msg.includes("429")) {
         rateLimitUntil.current = Date.now() + 30_000;
-        toast.error("Too many attempts", { description: "Close other tabs and wait 30 seconds before trying again." });
+        toast.error("Too many attempts", { description: "Wait 30 seconds before trying again." });
       } else {
         toast.error("Login failed", { description: error.message });
       }
@@ -109,6 +109,9 @@ export default function Login() {
             >
               {showForgot ? "Back to Sign In" : "Forgot password?"}
             </button>
+            <p className="mt-3 text-xs text-center text-muted-foreground/60">
+              If login fails in preview, try the published URL.
+            </p>
           </CardContent>
         </Card>
       </div>
