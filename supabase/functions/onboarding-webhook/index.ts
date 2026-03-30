@@ -42,18 +42,20 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Insert main user record
+    // Insert main user record (with field aliases)
     const { data: user, error: userError } = await supabase
       .from("vyva_users")
       .insert({
         first_name: payload.first_name,
         last_name: payload.last_name,
-        phone: payload.phone || null,
+        phone: payload.phone_number || payload.phone || null,
         city: payload.city || null,
         street: payload.street || null,
         house_number: payload.house_number || null,
-        post_code: payload.post_code || null,
-        timezone: payload.timezone || "Europe/Amsterdam",
+        post_code: payload.postal_code || payload.post_code || null,
+        country: payload.country || "Germany",
+        language: payload.language || "de",
+        timezone: payload.timezone || "Europe/Berlin",
       })
       .select("id")
       .single();
@@ -61,66 +63,108 @@ Deno.serve(async (req) => {
     if (userError) throw userError;
     const userId = user.id;
 
-    // Insert consent
-    if (payload.consent_given !== undefined || payload.caretaker_consent !== undefined) {
+    // Insert consent (accept data_consent_given alias)
+    const consentGiven = payload.data_consent_given ?? payload.consent_given;
+    const caretakerConsent = payload.caretaker_consent;
+    if (consentGiven !== undefined || caretakerConsent !== undefined) {
       await supabase.from("vyva_user_consent").insert({
         vyva_user_id: userId,
-        consent_given: payload.consent_given ?? false,
-        caretaker_consent: payload.caretaker_consent ?? false,
+        consent_given: consentGiven ?? false,
+        caretaker_consent: caretakerConsent ?? false,
       });
     }
 
-    // Insert health data
-    if (payload.health_conditions || payload.mobility_needs) {
+    // Insert health data (accept health_concerns / mobility_restrictions aliases)
+    const healthConditions = payload.health_conditions || payload.health_concerns;
+    const mobilityNeeds = payload.mobility_needs || payload.mobility_restrictions;
+    if (healthConditions || mobilityNeeds) {
+      // Normalize to arrays
+      const toArray = (v: any) => {
+        if (!v) return [];
+        if (Array.isArray(v)) return v;
+        if (typeof v === "string") return v === "none" || v === "" ? [] : [v];
+        return [];
+      };
       await supabase.from("vyva_user_health").insert({
         vyva_user_id: userId,
-        health_conditions: payload.health_conditions || [],
-        mobility_needs: payload.mobility_needs || [],
+        health_conditions: toArray(healthConditions),
+        mobility_needs: toArray(mobilityNeeds),
       });
     }
 
-    // Insert medications
+    // Insert medications — support both array format and flat format
+    let meds: any[] = [];
     if (payload.medications && Array.isArray(payload.medications)) {
-      const meds = payload.medications.map((m: any) => ({
+      meds = payload.medications.map((m: any) => ({
         vyva_user_id: userId,
         medication_name: m.medication_name || m.name,
         purpose: m.purpose || null,
         dosage: m.dosage || null,
         schedule_times: m.schedule_times || [],
       }));
-      if (meds.length > 0) {
-        await supabase.from("vyva_user_medications").insert(meds);
-      }
+    } else if (payload.takes_medications === true || payload.takes_medications === "yes") {
+      // Flat format: convert medication_schedule to a single medication entry
+      const schedule = payload.medication_schedule || null;
+      meds = [{
+        vyva_user_id: userId,
+        medication_name: "Prescribed medication",
+        purpose: null,
+        dosage: null,
+        schedule_times: schedule ? [schedule] : [],
+      }];
+    }
+    if (meds.length > 0) {
+      await supabase.from("vyva_user_medications").insert(meds);
     }
 
-    // Insert check-in settings
+    // Insert check-in settings — accept both nested and flat formats
+    let checkinData: any = null;
     if (payload.checkins !== undefined) {
       const ci = typeof payload.checkins === "object" ? payload.checkins : { enabled: !!payload.checkins };
+      checkinData = ci;
+    } else if (payload.check_in_frequency || payload.check_in_time) {
+      checkinData = {
+        enabled: true,
+        frequency: payload.check_in_frequency || null,
+        preferred_time: payload.check_in_time || null,
+      };
+    }
+    if (checkinData) {
       await supabase.from("vyva_user_checkins").insert({
         vyva_user_id: userId,
-        enabled: ci.enabled ?? false,
-        frequency: ci.frequency || null,
-        preferred_time: ci.preferred_time || null,
+        enabled: checkinData.enabled ?? false,
+        frequency: checkinData.frequency || null,
+        preferred_time: checkinData.preferred_time || null,
       });
     }
 
-    // Insert brain coach settings
+    // Insert brain coach settings — accept brain_coach_interest alias
+    let brainCoachData: any = null;
     if (payload.brain_coach !== undefined) {
       const bc = typeof payload.brain_coach === "object" ? payload.brain_coach : { enabled: !!payload.brain_coach };
+      brainCoachData = bc;
+    } else if (payload.brain_coach_interest !== undefined) {
+      brainCoachData = {
+        enabled: payload.brain_coach_interest === true || payload.brain_coach_interest === "yes",
+      };
+    }
+    if (brainCoachData) {
       await supabase.from("vyva_user_brain_coach").insert({
         vyva_user_id: userId,
-        enabled: bc.enabled ?? false,
-        frequency: bc.frequency || null,
-        preferred_time: bc.preferred_time || null,
+        enabled: brainCoachData.enabled ?? false,
+        frequency: brainCoachData.frequency || null,
+        preferred_time: brainCoachData.preferred_time || null,
       });
     }
 
-    // Insert caregiver
-    if (payload.caretaker_name || payload.caretaker_phone) {
+    // Insert caregiver — accept emergency_contact_* aliases
+    const caregiverName = payload.caretaker_name || payload.emergency_contact_name;
+    const caregiverPhone = payload.caretaker_phone || payload.emergency_contact_phone;
+    if (caregiverName || caregiverPhone) {
       await supabase.from("vyva_user_caregivers").insert({
         vyva_user_id: userId,
-        caretaker_name: payload.caretaker_name || null,
-        caretaker_phone: payload.caretaker_phone || null,
+        caretaker_name: caregiverName || null,
+        caretaker_phone: caregiverPhone || null,
       });
     }
 
