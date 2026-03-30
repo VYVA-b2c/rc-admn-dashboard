@@ -22,6 +22,7 @@ import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditServiceDialog } from "@/components/user/EditServiceDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
+import { EditSensorDialog } from "@/components/user/EditSensorDialog";
 
 function InfoRow({ label, value, icon }: { label: string; value: string | null | undefined; icon?: React.ReactNode }) {
   return (
