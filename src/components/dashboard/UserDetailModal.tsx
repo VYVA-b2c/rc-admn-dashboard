@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   User,
   Phone,
@@ -24,6 +25,7 @@ import {
   Calendar,
   ExternalLink,
 } from "lucide-react";
+import { getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
 
 interface UserDetailModalProps {
   user: GISUser | null;
