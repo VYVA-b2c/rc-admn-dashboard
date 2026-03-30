@@ -1,9 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X } from "lucide-react";
-import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,7 +9,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { GISMap } from "@/components/dashboard/GISMap";
 import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
-import { formatDistanceToNow } from "date-fns";
+import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
@@ -104,6 +101,9 @@ export default function Dashboard() {
         <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
+      {/* Priority Alerts Panel */}
+      <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} />
+
       {/* Search & Filter Bar */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -167,85 +167,33 @@ export default function Dashboard() {
         </span>
       </div>
 
-      {/* Bottom panels */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Active Alerts Feed */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="font-display text-base flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-destructive" />
-              Active Alerts
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className="h-[240px]">
-              {data?.activeAlerts && data.activeAlerts.length > 0 ? (
-                <div className="space-y-2 pr-3">
-                  {data.activeAlerts.map((alert) => (
-                    <div
-                      key={alert.id}
-                      className="flex items-start gap-3 rounded-lg border border-border p-3"
-                    >
-                      <span
-                        className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${
-                          alert.severity === "critical" ? "bg-destructive" : "bg-accent"
-                        }`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm font-medium truncate">{alert.user_name}</p>
-                          <Badge
-                            variant={alert.severity === "critical" ? "destructive" : "secondary"}
-                            className="text-[10px] shrink-0"
-                          >
-                            {alert.severity}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground truncate">
-                          {alert.alert_type}: {alert.message || "No details"}
-                        </p>
-                        <p className="text-[10px] text-muted-foreground mt-1">
-                          {alert.city} · {formatDistanceToNow(new Date(alert.created_at), { addSuffix: true })}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="py-8 text-center text-sm text-muted-foreground">No active alerts</p>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-
-        {/* City Distribution */}
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="font-display text-base">Users by City</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data?.cityDistribution && data.cityDistribution.length > 0 ? (
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={data.cityDistribution}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis dataKey="city" className="text-xs" />
-                  <YAxis allowDecimals={false} />
-                  <Tooltip
-                    contentStyle={{
-                      borderRadius: "0.5rem",
-                      border: "1px solid hsl(var(--border))",
-                      background: "hsl(var(--card))",
-                    }}
-                  />
-                  <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="py-8 text-center text-sm text-muted-foreground">No data yet</p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {/* City Distribution */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="font-display text-base">Users by City</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {data?.cityDistribution && data.cityDistribution.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={data.cityDistribution}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                <XAxis dataKey="city" className="text-xs" />
+                <YAxis allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: "0.5rem",
+                    border: "1px solid hsl(var(--border))",
+                    background: "hsl(var(--card))",
+                  }}
+                />
+                <Bar dataKey="count" fill="hsl(var(--primary))" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted-foreground">No data yet</p>
+          )}
+        </CardContent>
+      </Card>
 
       <UserDetailModal user={selectedUser} open={modalOpen} onOpenChange={setModalOpen} />
     </div>
