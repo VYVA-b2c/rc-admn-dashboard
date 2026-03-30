@@ -52,6 +52,7 @@ function SeveritySummary({ alerts }: { alerts: ActiveAlert[] }) {
 
 interface Props {
   alerts: ActiveAlert[];
+  onAlertClick?: (alert: ActiveAlert) => void;
 }
 
 export function PriorityAlertsPanel({ alerts }: Props) {
