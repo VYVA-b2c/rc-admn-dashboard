@@ -16,6 +16,7 @@ import EmergencyContacts from "@/pages/EmergencyContacts";
 import CheckInMonitoring from "@/pages/CheckInMonitoring";
 import Sensors from "@/pages/Sensors";
 import Settings from "@/pages/Settings";
+import MedicationAdherence from "@/pages/MedicationAdherence";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
