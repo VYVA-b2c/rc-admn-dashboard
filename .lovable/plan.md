@@ -1,35 +1,31 @@
 
 
-## Plan: Advanced Live Map Enhancements
+## Plan: Replace VYVA Logo with DRK + "Powered by VYVA"
 
-### What's Already Done
-- Markers colored by alert status (red/orange/green) with risk scores inside
-- Clustering with worst-status color
-- Search + status + city filters
-- Click opens Intervention Panel with full user details + quick actions
-- Hover tooltip with name + city
+### Changes
 
-### What's Missing (Gaps to Close)
+**1. Add DRK Logo SVG (`src/assets/drk-logo.svg`)**
+Create an inline SVG of the standard DRK (Deutsches Rotes Kreuz) red cross emblem — a white cross on a red circular background, clean and scalable.
 
-**A. Pulsing animation for critical markers**
-Add a CSS `@keyframes` pulse animation in `index.css`. Update `createUserIcon` in `GISMap.tsx` to wrap critical markers in a pulsing outer ring.
+**2. Update `src/components/AppSidebar.tsx`**
+- Import DRK logo instead of VYVA logo as the main sidebar logo
+- Change alt text to "DRK Sachsen"
+- Add a small "Powered by VYVA" text below the logo (visible when sidebar is expanded), styled in muted foreground at ~8px, with subtle opacity
 
-**B. Risk level filter**
-The current "Status" filter uses alert-based categories (critical/warning/stable). Add a separate "Risk Level" filter dropdown: High (80+), Moderate (50-79), Low (20-49), Stable (0-19). This filters `filteredUsers` by `riskScore` band.
+**3. Update `src/pages/Login.tsx`**
+- Replace VYVA logo with DRK logo as the main visual
+- Change subtitle from "Super Admin Dashboard" to "DRK Sachsen — Admin Dashboard"
+- Add a "Powered by VYVA" footer line below the card, small and subtle
 
-**C. Richer marker popup (mini user card)**
-Replace the simple tooltip with a Leaflet popup that shows: name, risk score badge, city, last check-in status, sensor count, and two quick-action links ("Call" + "View"). The popup renders as styled HTML within Leaflet's native popup system.
+**4. Update `src/components/DashboardLayout.tsx`**
+- Change header title from "VYVA Admin" to "DRK Sachsen"
 
-**D. Use risk-based colors instead of alert-based**
-Update `getStatusColor` in `GISMap.tsx` to use `getRiskColor(user.riskScore)` from `riskScore.ts` instead of the current alert-count logic. This makes markers truly risk-colored (red/orange/yellow/green on 4 bands) and aligns map, list, and panel visuals.
-
-**E. Cluster risk-based coloring**
-Update `createClusterIcon` to use the highest risk score among child markers rather than just checking for critical/warning alerts.
+### Design
+- DRK logo is prominent (main brand)
+- "Powered by VYVA" appears as a small, muted footnote — not competing with DRK branding
+- Keep existing VYVA color palette and design system intact
 
 ### Files
-- **Modified**: `src/index.css` — add pulse keyframes for critical markers
-- **Modified**: `src/components/dashboard/GISMap.tsx` — risk-based colors, pulse animation, richer popup with mini card + quick actions, risk-based cluster colors
-- **Modified**: `src/pages/Dashboard.tsx` — add risk level filter dropdown
-
-### No database changes needed.
+- **New**: `src/assets/drk-logo.svg`
+- **Modified**: `src/components/AppSidebar.tsx`, `src/pages/Login.tsx`, `src/components/DashboardLayout.tsx`
 
