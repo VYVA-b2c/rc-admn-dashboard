@@ -41,6 +41,30 @@ export type Database = {
         }
         Relationships: []
       }
+      sensor_type_catalog: {
+        Row: {
+          created_at: string | null
+          id: string
+          is_custom: boolean | null
+          label: string
+          type_key: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          is_custom?: boolean | null
+          label: string
+          type_key: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          is_custom?: boolean | null
+          label?: string
+          type_key?: string
+        }
+        Relationships: []
+      }
       user_roles: {
         Row: {
           id: string
@@ -374,7 +398,10 @@ export type Database = {
           device_id: string
           device_name: string | null
           id: string
+          integration_config: Json | null
+          integration_method: string | null
           last_reading_at: string | null
+          notes: string | null
           sensor_type: string
           status: string
           updated_at: string
@@ -386,7 +413,10 @@ export type Database = {
           device_id: string
           device_name?: string | null
           id?: string
+          integration_config?: Json | null
+          integration_method?: string | null
           last_reading_at?: string | null
+          notes?: string | null
           sensor_type: string
           status?: string
           updated_at?: string
@@ -398,7 +428,10 @@ export type Database = {
           device_id?: string
           device_name?: string | null
           id?: string
+          integration_config?: Json | null
+          integration_method?: string | null
           last_reading_at?: string | null
+          notes?: string | null
           sensor_type?: string
           status?: string
           updated_at?: string
