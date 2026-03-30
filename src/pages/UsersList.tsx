@@ -133,12 +133,16 @@ export default function UsersList() {
     });
   }, [users, search, cityFilter, statusFilter]);
 
-  // Health risk level
-  const getRiskLevel = (user: any) => {
-    if (user.alerts.critical > 0) return { label: "Critical", color: "bg-destructive text-destructive-foreground" };
-    if (user.alerts.warning > 0) return { label: "Warning", color: "bg-accent text-accent-foreground" };
-    if (user.health.conditions.length > 2 || user.medsCount > 3) return { label: "Monitor", color: "bg-vyva-teal/20 text-vyva-teal" };
-    return { label: "Stable", color: "bg-vyva-green/20 text-vyva-green" };
+  // Risk score computation
+  const getUserRiskScore = (user: any) => {
+    return computeRiskScore({
+      criticalAlerts: user.alerts.critical,
+      activeAlerts: user.alerts.critical + user.alerts.warning,
+      missedMeds7d: 0, // Would need separate query; using 0 for list view
+      checkinEnabled: user.checkinsEnabled,
+      offlineSensors: Math.max(user.sensors.total - user.sensors.online, 0),
+      healthConditions: user.health.conditions.length,
+    });
   };
 
   if (isLoading) {
