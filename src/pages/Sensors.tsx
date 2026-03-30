@@ -3,9 +3,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/StatCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap } from "lucide-react";
+import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap, Settings } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
