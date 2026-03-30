@@ -59,8 +59,8 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <img src={vyvaLogo} alt="VYVA" className="mx-auto mb-4 h-20 w-auto rounded-2xl shadow-lg" />
-          <p className="text-muted-foreground mt-1">Super Admin Dashboard</p>
+          <img src={drkLogo} alt="DRK Sachsen" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
+          <p className="text-muted-foreground mt-1">DRK Sachsen — Admin Dashboard</p>
         </div>
 
         <Card className="border-border/50 shadow-xl">
