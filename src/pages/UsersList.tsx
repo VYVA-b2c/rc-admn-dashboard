@@ -228,6 +228,7 @@ export default function UsersList() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Users</SelectItem>
+            <SelectItem value="highest-risk">Sort by Highest Risk</SelectItem>
             <SelectItem value="alerts">With Active Alerts</SelectItem>
             <SelectItem value="sensors">With Sensors</SelectItem>
             <SelectItem value="no-caregiver">No Caregiver</SelectItem>
