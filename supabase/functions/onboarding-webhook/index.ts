@@ -168,6 +168,32 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Insert medication adherence logs if provided
+    if (payload.medication_adherence && Array.isArray(payload.medication_adherence)) {
+      for (const entry of payload.medication_adherence) {
+        // Try to find the medication by name
+        const { data: medMatch } = await supabase
+          .from("vyva_user_medications")
+          .select("id")
+          .eq("vyva_user_id", userId)
+          .ilike("medication_name", entry.medication_name || "")
+          .maybeSingle();
+
+        if (medMatch) {
+          await supabase.from("vyva_medication_logs").upsert({
+            vyva_user_id: userId,
+            medication_id: medMatch.id,
+            scheduled_date: entry.date,
+            scheduled_time: entry.time || null,
+            status: entry.status || "pending",
+            reported_at: new Date().toISOString(),
+            call_id: entry.call_id || null,
+            notes: entry.notes || null,
+          }, { onConflict: "medication_id,scheduled_date,scheduled_time" });
+        }
+      }
+    }
+
     return new Response(JSON.stringify({ success: true, user_id: userId }), {
       status: 201,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
