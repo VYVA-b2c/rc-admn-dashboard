@@ -287,7 +287,16 @@ export default function UsersList() {
                         </div>
                       </div>
                     </div>
-                    <Badge className={`text-xs shrink-0 ${risk.color}`}>{risk.label}</Badge>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge className={`text-xs shrink-0 border-0 ${getRiskBadgeClasses(riskScore)}`}>
+                            {riskScore} · {getRiskLabel(riskScore)}
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent>Based on activity, check-ins, medication adherence, and alerts</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </div>
 
                   {/* Health Indicators */}
