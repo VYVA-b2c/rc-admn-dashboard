@@ -255,7 +255,7 @@ export default function UsersList() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((user: any) => {
-            const risk = getRiskLevel(user);
+            const riskScore = getUserRiskScore(user);
             return (
               <Card
                 key={user.id}
