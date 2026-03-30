@@ -450,6 +450,7 @@ export type Database = {
       vyva_users: {
         Row: {
           city: string | null
+          country: string | null
           created_at: string
           date_of_birth: string | null
           emergency_notes: string | null
@@ -468,6 +469,7 @@ export type Database = {
         }
         Insert: {
           city?: string | null
+          country?: string | null
           created_at?: string
           date_of_birth?: string | null
           emergency_notes?: string | null
@@ -486,6 +488,7 @@ export type Database = {
         }
         Update: {
           city?: string | null
+          country?: string | null
           created_at?: string
           date_of_birth?: string | null
           emergency_notes?: string | null
