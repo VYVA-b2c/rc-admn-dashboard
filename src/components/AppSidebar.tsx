@@ -1,5 +1,5 @@
 import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall, Activity, Settings } from "lucide-react";
-import drkLogo from "@/assets/drk-logo.png";
+import drkLogo from "@/assets/drk-logo.svg";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
