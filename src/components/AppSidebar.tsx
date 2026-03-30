@@ -25,6 +25,7 @@ const navItems = [
   { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
   { title: "Sensors", url: "/sensors", icon: Activity },
   { title: "Invite Admin", url: "/invite", icon: UserPlus },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
