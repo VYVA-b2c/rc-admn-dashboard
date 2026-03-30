@@ -154,6 +154,18 @@ export default function Dashboard() {
             ))}
           </SelectContent>
         </Select>
+        <Select value={riskFilter} onValueChange={setRiskFilter}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="Risk Level" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All risk levels</SelectItem>
+            <SelectItem value="high">🔴 High Risk</SelectItem>
+            <SelectItem value="moderate">🟠 Moderate</SelectItem>
+            <SelectItem value="low">🟡 Low</SelectItem>
+            <SelectItem value="stable">🟢 Stable</SelectItem>
+          </SelectContent>
+        </Select>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
             <X className="mr-1 h-3.5 w-3.5" /> Clear
