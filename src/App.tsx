@@ -16,6 +16,7 @@ import EmergencyContacts from "@/pages/EmergencyContacts";
 import CheckInMonitoring from "@/pages/CheckInMonitoring";
 import Sensors from "@/pages/Sensors";
 import Settings from "@/pages/Settings";
+import MedicationAdherence from "@/pages/MedicationAdherence";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -56,6 +57,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <UserProfile />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/users/:id/medications"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <MedicationAdherence />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

@@ -486,9 +486,14 @@ export default function UserProfile() {
               <CardHeader className="flex flex-row items-center gap-2 pb-3">
                 <Pill className="h-5 w-5 text-accent" />
                 <CardTitle className="font-display text-base">Medications ({medications.length})</CardTitle>
-                <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={() => { setEditMedTarget(null); setEditMedOpen(true); }}>
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
+                <div className="ml-auto flex gap-1">
+                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => navigate(`/users/${id}/medications`)}>
+                    <Pill className="h-3 w-3" /> View Adherence
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditMedTarget(null); setEditMedOpen(true); }}>
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 {medications.length === 0 ? (

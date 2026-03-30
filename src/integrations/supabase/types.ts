@@ -83,6 +83,60 @@ export type Database = {
         }
         Relationships: []
       }
+      vyva_medication_logs: {
+        Row: {
+          call_id: string | null
+          created_at: string
+          id: string
+          medication_id: string
+          notes: string | null
+          reported_at: string | null
+          scheduled_date: string
+          scheduled_time: string | null
+          status: string
+          vyva_user_id: string
+        }
+        Insert: {
+          call_id?: string | null
+          created_at?: string
+          id?: string
+          medication_id: string
+          notes?: string | null
+          reported_at?: string | null
+          scheduled_date: string
+          scheduled_time?: string | null
+          status?: string
+          vyva_user_id: string
+        }
+        Update: {
+          call_id?: string | null
+          created_at?: string
+          id?: string
+          medication_id?: string
+          notes?: string | null
+          reported_at?: string | null
+          scheduled_date?: string
+          scheduled_time?: string | null
+          status?: string
+          vyva_user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vyva_medication_logs_medication_id_fkey"
+            columns: ["medication_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_user_medications"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vyva_medication_logs_vyva_user_id_fkey"
+            columns: ["vyva_user_id"]
+            isOneToOne: false
+            referencedRelation: "vyva_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       vyva_sensor_alerts: {
         Row: {
           alert_type: string
