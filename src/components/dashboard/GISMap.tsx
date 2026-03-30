@@ -22,7 +22,7 @@ function getStatusColor(user: GISUser): string {
 
 function createUserIcon(user: GISUser): L.DivIcon {
   const color = getStatusColor(user);
-  const initials = `${(user.first_name?.[0] ?? "").toUpperCase()}${(user.last_name?.[0] ?? "").toUpperCase()}`;
+  const score = user.riskScore ?? 0;
 
   return L.divIcon({
     className: "",
