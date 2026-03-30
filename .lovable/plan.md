@@ -1,58 +1,76 @@
 
 
-## Plan: Smart Alert Prioritization Panel
+## Plan: User Risk Score + One-Click Intervention Panel
 
-### Overview
-Replace the current basic "Active Alerts" card in the dashboard with a prominent "Priority Alerts Panel" placed at the top of the page (before the map). The panel features 4-level severity sorting, a summary bar, and quick action buttons per alert.
+### 1. Risk Score Computation
 
-### Changes
+Add a `computeRiskScore(user)` utility function used across dashboard, user cards, map markers, and the intervention panel. The score (0–100) is computed client-side from existing data:
 
-**1. Update `src/hooks/useGISData.ts`**
-- Add `vyva_user_id` to the `ActiveAlert` interface
-- Extend severity support: the current data only has `critical` and `warning` — add mapping logic so alerts can also be `high`, `medium`, `low` (future-proof, map existing `warning` to `high` for now)
-- Sort alerts by severity weight (critical > high > medium > low), then by recency
+- **Alerts**: critical alert = +30 each (cap 60), warning = +15 each (cap 30)
+- **Medications**: missed medication logs in last 7 days = +5 each (cap 20)
+- **Check-in**: check-ins disabled = +10
+- **Sensors**: offline sensors = +5 each (cap 15)
+- **Health**: 3+ conditions = +10
 
-**2. Create `src/components/dashboard/PriorityAlertsPanel.tsx`**
-- Summary bar at top: colored badges showing count per severity level (e.g., "3 Critical · 5 High · 3 Medium · 1 Low")
-- Scrollable ranked list of alerts, each row showing:
-  - Color-coded severity dot (red/orange/yellow/green)
-  - User name + city
-  - Alert type (missed check-in, sensor anomaly, etc.)
-  - Time since triggered (using `formatDistanceToNow`)
-  - Severity badge
-  - Quick action buttons: "View user" (links to `/users/:id`), "Call" (tel: link using user phone), "Resolve" (marks alert resolved via update to `vyva_sensor_alerts.resolved_at`)
-- Critical alerts pinned at top regardless of recency
-- Empty state when no alerts
+Color bands: 80–100 red, 50–79 orange, 20–49 yellow, 0–19 green.
 
-**3. Update `src/pages/Dashboard.tsx`**
-- Add the `PriorityAlertsPanel` component between the stat row and the search/filter bar
-- Remove the old "Active Alerts Feed" card from the bottom grid (replaced by the new panel)
-- Keep the "Users by City" chart as a full-width or half-width card
+Create `src/lib/riskScore.ts` with the scoring function and color/label helpers.
 
-**4. Database: Add RLS policy for UPDATE on `vyva_sensor_alerts`**
-- Currently admins cannot update alerts (no UPDATE policy). Need a migration to add:
-  ```sql
-  CREATE POLICY "Admins can update alerts" ON vyva_sensor_alerts
-  FOR UPDATE TO authenticated USING (is_admin_user(auth.uid()))
-  WITH CHECK (is_admin_user(auth.uid()));
-  ```
-- This enables the "Resolve" action
+### 2. Extend Data Hooks
 
-**5. Update `useGISData` to include phone numbers in active alerts**
-- Map user phone into the `ActiveAlert` type so the "Call" button works
+**`src/hooks/useGISData.ts`**: Add `riskScore` to `GISUser` interface. Compute it during the query using alert counts, sensor counts, and checkin status. Also fetch recent medication logs (last 7 days, status = "missed") grouped by user to factor into score.
 
-### Severity Mapping
-```text
-critical  → Red    (#dc2626)  — weight 4
-high      → Orange (#f97316)  — weight 3
-warning   → Orange (#f97316)  — weight 3 (alias for high)
-medium    → Yellow (#eab308)  — weight 2
-low       → Green  (#22c55e)  — weight 1
-```
+**`src/pages/UsersList.tsx`**: Import `computeRiskScore` and use it instead of the existing `getRiskLevel`. Add a "Sort by highest risk" option to the status filter dropdown.
+
+### 3. Risk Score on Map Markers
+
+**`src/components/dashboard/GISMap.tsx`**: Update `createUserIcon` to show the risk score number inside the marker circle (replacing initials). The pin color already reflects alert status — keep that, but add the numeric score inside.
+
+### 4. Risk Score on User Detail Modal
+
+**`src/components/dashboard/UserDetailModal.tsx`**: Add a prominent circular risk score indicator at the top of the modal next to the user name. Show tooltip on hover: "Based on activity, check-ins, medication adherence, and alerts."
+
+### 5. One-Click Intervention Panel (Slide-in Sheet)
+
+**New file: `src/components/dashboard/InterventionPanel.tsx`**
+
+A right-side slide-in panel (`Sheet` from shadcn) that opens when clicking an alert row or a user marker/card. Contains:
+
+- **Header**: User name, city, age (from `date_of_birth`)
+- **Risk score**: Large circular progress indicator with color
+- **Last activity summary**: Last check-in time, last sensor reading
+- **Current alerts**: List of active alerts for this user
+- **Action buttons** (large, icon + label):
+  - **Call User** (primary/highlighted, `tel:` link) — `Phone` icon
+  - **Trigger Check-in** — `PhoneCall` icon, shows success toast
+  - **Request Doctor** — `Stethoscope` icon, shows success toast
+  - **Notify Caregiver** — `UserCheck` icon, shows success toast
+  - **Send Message** — `MessageSquare` icon, shows success toast
+- Each button shows loading spinner on click, then success state (checkmark) for 2 seconds
+- Actions are simulated for now (toast confirmation) — ready for real integrations later
+
+### 6. Wire It Up
+
+**`src/pages/Dashboard.tsx`**:
+- Import `InterventionPanel`
+- Open it from alert row clicks and map marker clicks (instead of / in addition to the modal)
+- Pass selected user data + alerts to the panel
+
+**`src/pages/UsersList.tsx`**:
+- Add click handler on user cards to open the intervention panel
+- Import and render `InterventionPanel`
+
+### 7. Data Changes
+
+**No database migration needed.** Risk score is computed client-side from existing tables. The medication logs table already exists. Action buttons are simulated (toast feedback).
 
 ### Files
-- **Migration**: Add UPDATE policy on `vyva_sensor_alerts`
-- **New**: `src/components/dashboard/PriorityAlertsPanel.tsx`
-- **Modified**: `src/hooks/useGISData.ts` (add phone + vyva_user_id to ActiveAlert, severity sorting)
-- **Modified**: `src/pages/Dashboard.tsx` (add panel, remove old alerts card)
+- **New**: `src/lib/riskScore.ts` — scoring function + color helpers
+- **New**: `src/components/dashboard/InterventionPanel.tsx` — slide-in panel
+- **Modified**: `src/hooks/useGISData.ts` — add `riskScore` to GISUser, fetch med logs
+- **Modified**: `src/components/dashboard/GISMap.tsx` — show score in markers
+- **Modified**: `src/components/dashboard/UserDetailModal.tsx` — add risk score display
+- **Modified**: `src/components/dashboard/PriorityAlertsPanel.tsx` — open intervention panel on alert click
+- **Modified**: `src/pages/Dashboard.tsx` — integrate intervention panel
+- **Modified**: `src/pages/UsersList.tsx` — add risk score + sort + intervention panel
 
