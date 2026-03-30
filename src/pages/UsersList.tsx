@@ -117,7 +117,7 @@ export default function UsersList() {
 
   // Filter + search
   const filtered = useMemo(() => {
-    return (users || []).filter((u: any) => {
+    let result = (users || []).filter((u: any) => {
       if (cityFilter !== "all" && u.city !== cityFilter) return false;
       if (statusFilter === "alerts" && u.alerts.critical === 0 && u.alerts.warning === 0) return false;
       if (statusFilter === "sensors" && u.sensors.total === 0) return false;
@@ -131,6 +131,10 @@ export default function UsersList() {
         u.caregiverNames.join(" ").toLowerCase().includes(s)
       );
     });
+    if (statusFilter === "highest-risk") {
+      result = [...result].sort((a, b) => getUserRiskScore(b) - getUserRiskScore(a));
+    }
+    return result;
   }, [users, search, cityFilter, statusFilter]);
 
   // Risk score computation
