@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Navigate } from "react-router-dom";
-import vyvaLogo from "@/assets/logo-with-bg.png";
+import drkLogo from "@/assets/drk-logo.png";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
