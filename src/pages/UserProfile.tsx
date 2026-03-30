@@ -124,6 +124,17 @@ export default function UserProfile() {
     }
   };
 
+  const handleDeleteSensor = async (sensorId: string) => {
+    const { error } = await supabase.from("vyva_user_sensors").delete().eq("id", sensorId);
+    if (error) {
+      toast({ title: "Error deleting sensor", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Sensor removed" });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      queryClient.invalidateQueries({ queryKey: ["sensor-devices"] });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-6">
