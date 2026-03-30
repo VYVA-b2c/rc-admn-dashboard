@@ -1,55 +1,58 @@
 
-Goal: stabilize admin login so it stops immediately logging out and hitting refresh-token rate limits.
 
-What I found
-- Your backend auth is accepting the password login. The logs show successful `grant_type=password` requests with status 200 for `karim.assad@mokadigital.net`.
-- The breakage happens right after that: there is a rapid loop of `refresh_token` requests, token revocations, and `429 over_request_rate_limit`.
-- In the current frontend auth code, `signIn()` manually deletes the auth storage key before calling `signInWithPassword()`. That is risky because it interferes with the auth client’s own session lifecycle.
-- The preview environment is also likely amplifying the issue. The provided platform note says preview auth POST requests can misbehave, so even correct auth code may look broken there.
+## Plan: Smart Alert Prioritization Panel
 
-Implementation plan
+### Overview
+Replace the current basic "Active Alerts" card in the dashboard with a prominent "Priority Alerts Panel" placed at the top of the page (before the map). The panel features 4-level severity sorting, a summary bar, and quick action buttons per alert.
 
-1. Fix auth state handling in `src/contexts/AuthContext.tsx`
-- Remove the manual `localStorage.removeItem(...)` call before `signInWithPassword()`
-- Stop manually clearing the auth storage key on normal flows unless there is a confirmed unrecoverable restore error
-- Keep `onAuthStateChange` registered before `getSession()`, but make session application idempotent and avoid extra state churn
-- Handle sign-out by using the auth client only, then clear local React state cleanly
+### Changes
 
-2. Make route guards less trigger-happy
-- Update `src/components/ProtectedRoute.tsx` so it does not instantly redirect during transient session hydration
-- Use the actual `session` presence, not just `user`, if needed to avoid brief null states causing route bounces
+**1. Update `src/hooks/useGISData.ts`**
+- Add `vyva_user_id` to the `ActiveAlert` interface
+- Extend severity support: the current data only has `critical` and `warning` — add mapping logic so alerts can also be `high`, `medium`, `low` (future-proof, map existing `warning` to `high` for now)
+- Sort alerts by severity weight (critical > high > medium > low), then by recency
 
-3. Improve login page behavior
-- In `src/pages/Login.tsx`, avoid adding more client-side churn during sign-in
-- Keep the local 30-second cooldown messaging, but make sure it only reflects true auth errors from the client
-- Add clearer messaging that preview can be unreliable if the session still fails after a confirmed successful password login
+**2. Create `src/components/dashboard/PriorityAlertsPanel.tsx`**
+- Summary bar at top: colored badges showing count per severity level (e.g., "3 Critical · 5 High · 3 Medium · 1 Low")
+- Scrollable ranked list of alerts, each row showing:
+  - Color-coded severity dot (red/orange/yellow/green)
+  - User name + city
+  - Alert type (missed check-in, sensor anomaly, etc.)
+  - Time since triggered (using `formatDistanceToNow`)
+  - Severity badge
+  - Quick action buttons: "View user" (links to `/users/:id`), "Call" (tel: link using user phone), "Resolve" (marks alert resolved via update to `vyva_sensor_alerts.resolved_at`)
+- Critical alerts pinned at top regardless of recency
+- Empty state when no alerts
 
-4. Verify settings/reset flows don’t destabilize the session
-- Ensure password update flows in `src/pages/Settings.tsx` and `src/pages/ResetPassword.tsx` do not rely on stale session assumptions
-- Keep the user signed in after password change where possible, without forcing unnecessary redirects
+**3. Update `src/pages/Dashboard.tsx`**
+- Add the `PriorityAlertsPanel` component between the stat row and the search/filter bar
+- Remove the old "Active Alerts Feed" card from the bottom grid (replaced by the new panel)
+- Keep the "Users by City" chart as a full-width or half-width card
 
-5. Add lightweight diagnostics
-- Add a few targeted `console.log` / `console.warn` statements around auth events and session restoration
-- This will let the next round of logs confirm whether the refresh storm is gone without changing backend behavior
+**4. Database: Add RLS policy for UPDATE on `vyva_sensor_alerts`**
+- Currently admins cannot update alerts (no UPDATE policy). Need a migration to add:
+  ```sql
+  CREATE POLICY "Admins can update alerts" ON vyva_sensor_alerts
+  FOR UPDATE TO authenticated USING (is_admin_user(auth.uid()))
+  WITH CHECK (is_admin_user(auth.uid()));
+  ```
+- This enables the "Resolve" action
 
-6. Validation approach
-- First validate logically against the code paths
-- Then, once implemented, test on the preview
-- If preview still shows auth instability but logs show successful login + sane session handling, the fallback conclusion is platform preview auth interference rather than broken app code
+**5. Update `useGISData` to include phone numbers in active alerts**
+- Map user phone into the `ActiveAlert` type so the "Call" button works
 
-Expected outcome
-- No more forced local token wiping before login
-- Fewer token revocations / refresh storms
-- More stable session persistence after sign-in
-- Clear separation between app-level auth bugs and preview-only platform issues
+### Severity Mapping
+```text
+critical  → Red    (#dc2626)  — weight 4
+high      → Orange (#f97316)  — weight 3
+warning   → Orange (#f97316)  — weight 3 (alias for high)
+medium    → Yellow (#eab308)  — weight 2
+low       → Green  (#22c55e)  — weight 1
+```
 
-Files to update
-- `src/contexts/AuthContext.tsx`
-- `src/components/ProtectedRoute.tsx`
-- `src/pages/Login.tsx`
-- potentially `src/pages/Settings.tsx`
-- potentially `src/pages/ResetPassword.tsx`
+### Files
+- **Migration**: Add UPDATE policy on `vyva_sensor_alerts`
+- **New**: `src/components/dashboard/PriorityAlertsPanel.tsx`
+- **Modified**: `src/hooks/useGISData.ts` (add phone + vyva_user_id to ActiveAlert, severity sorting)
+- **Modified**: `src/pages/Dashboard.tsx` (add panel, remove old alerts card)
 
-Technical note
-- Do not try to solve this with CORS changes, backend auth config changes, or fetch overrides. The issue is frontend session handling plus possible preview auth instability.
-- If needed afterward, we should publish the app and test login there, because preview is explicitly known to be a bad signal for this class of auth bug.
