@@ -503,7 +503,10 @@ export type Database = {
       }
       vyva_users: {
         Row: {
+          call_duration: number | null
+          call_timestamp: string | null
           city: string | null
+          conversation_id: string | null
           country: string | null
           created_at: string
           date_of_birth: string | null
@@ -519,10 +522,14 @@ export type Database = {
           post_code: string | null
           street: string | null
           timezone: string | null
+          transcript: string | null
           updated_at: string
         }
         Insert: {
+          call_duration?: number | null
+          call_timestamp?: string | null
           city?: string | null
+          conversation_id?: string | null
           country?: string | null
           created_at?: string
           date_of_birth?: string | null
@@ -538,10 +545,14 @@ export type Database = {
           post_code?: string | null
           street?: string | null
           timezone?: string | null
+          transcript?: string | null
           updated_at?: string
         }
         Update: {
+          call_duration?: number | null
+          call_timestamp?: string | null
           city?: string | null
+          conversation_id?: string | null
           country?: string | null
           created_at?: string
           date_of_birth?: string | null
@@ -557,6 +568,7 @@ export type Database = {
           post_code?: string | null
           street?: string | null
           timezone?: string | null
+          transcript?: string | null
           updated_at?: string
         }
         Relationships: []
