@@ -189,7 +189,7 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={filteredUsers} onUserClick={handleUserClick} />
+          <GISMap users={filteredUsers} onUserClick={handleUserClick} heatmapMode={heatmapMode} />
         </CardContent>
       </Card>
 
