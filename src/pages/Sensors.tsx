@@ -3,9 +3,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { StatCard } from "@/components/StatCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap } from "lucide-react";
+import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap, Settings } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -483,7 +484,7 @@ export default function Sensors() {
                           <p className="font-medium text-sm text-foreground">
                             {alert.alert_type.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
                           </p>
-                          <p className="text-xs text-muted-foreground">
+                         <p className="text-xs text-muted-foreground">
                             {alert.vyva_users?.first_name} {alert.vyva_users?.last_name}
                             {alert.vyva_user_sensors?.device_name && ` — ${alert.vyva_user_sensors.device_name}`}
                           </p>
@@ -496,6 +497,14 @@ export default function Sensors() {
                         <p className="text-xs text-muted-foreground">
                           {new Date(alert.created_at).toLocaleString()}
                         </p>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-xs mt-1 h-6 px-2"
+                          onClick={(e) => { e.stopPropagation(); navigate(`/users/${alert.vyva_user_id}`); }}
+                        >
+                          <Settings className="h-3 w-3 mr-1" /> Configure
+                        </Button>
                       </div>
                     </div>
                   ))}

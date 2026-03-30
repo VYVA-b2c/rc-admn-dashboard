@@ -22,6 +22,7 @@ import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditServiceDialog } from "@/components/user/EditServiceDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
+import { EditSensorDialog } from "@/components/user/EditSensorDialog";
 
 function InfoRow({ label, value, icon }: { label: string; value: string | null | undefined; icon?: React.ReactNode }) {
   return (
@@ -68,6 +69,8 @@ export default function UserProfile() {
   const [editCaregiverTarget, setEditCaregiverTarget] = useState<any>(null);
   const [editCheckinOpen, setEditCheckinOpen] = useState(false);
   const [editBrainOpen, setEditBrainOpen] = useState(false);
+  const [editSensorOpen, setEditSensorOpen] = useState(false);
+  const [editSensorTarget, setEditSensorTarget] = useState<any>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
@@ -118,6 +121,17 @@ export default function UserProfile() {
     } else {
       toast({ title: "Caregiver removed" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    }
+  };
+
+  const handleDeleteSensor = async (sensorId: string) => {
+    const { error } = await supabase.from("vyva_user_sensors").delete().eq("id", sensorId);
+    if (error) {
+      toast({ title: "Error deleting sensor", description: error.message, variant: "destructive" });
+    } else {
+      toast({ title: "Sensor removed" });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      queryClient.invalidateQueries({ queryKey: ["sensor-devices"] });
     }
   };
 
@@ -548,62 +562,76 @@ export default function UserProfile() {
           </div>
         </TabsContent>
 
-        {/* SENSORS TAB */}
         <TabsContent value="sensors">
           <div className="space-y-4">
+            <div className="flex justify-end">
+              <Button size="sm" onClick={() => { setEditSensorTarget(null); setEditSensorOpen(true); }}>
+                <Plus className="h-4 w-4 mr-1" /> Add Sensor
+              </Button>
+            </div>
             {sensors.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <Activity className="mx-auto h-12 w-12 text-muted-foreground/50 mb-2" />
                   <p className="text-lg font-medium text-foreground">No sensors assigned</p>
-                  <p className="text-sm text-muted-foreground">IoT devices will appear here once linked.</p>
+                  <p className="text-sm text-muted-foreground">Click "Add Sensor" to configure a device for this user.</p>
                 </CardContent>
               </Card>
             ) : (
-              <>
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {sensors.map((sensor: any) => (
-                    <Card key={sensor.id} className={sensor.status === "online" ? "border-vyva-green/30" : "border-border"}>
-                      <CardContent className="pt-5">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            {sensor.status === "online" ? (
-                              <Wifi className="h-4 w-4 text-vyva-green" />
-                            ) : (
-                              <WifiOff className="h-4 w-4 text-muted-foreground" />
-                            )}
-                            <div>
-                              <p className="font-medium text-sm">{sensor.device_name || sensor.device_id}</p>
-                              <p className="text-xs text-muted-foreground"><SensorTypeLabel type={sensor.sensor_type} /></p>
-                            </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {sensors.map((sensor: any) => (
+                  <Card key={sensor.id} className={sensor.status === "online" ? "border-vyva-green/30" : "border-border"}>
+                    <CardContent className="pt-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          {sensor.status === "online" ? (
+                            <Wifi className="h-4 w-4 text-vyva-green" />
+                          ) : (
+                            <WifiOff className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <div>
+                            <p className="font-medium text-sm">{sensor.device_name || sensor.device_id}</p>
+                            <p className="text-xs text-muted-foreground"><SensorTypeLabel type={sensor.sensor_type} /></p>
                           </div>
+                        </div>
+                        <div className="flex items-center gap-1">
                           <Badge variant={sensor.status === "online" ? "default" : "secondary"} className="text-xs">
                             {sensor.status}
                           </Badge>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditSensorTarget(sensor); setEditSensorOpen(true); }}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDeleteSensor(sensor.id)}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
-                        {sensor.battery_level != null && (
-                          <div className="mb-2">
-                            <div className="flex items-center justify-between text-xs mb-1">
-                              <span className="flex items-center gap-1 text-muted-foreground">
-                                <Battery className="h-3 w-3" /> Battery
-                              </span>
-                              <span className={sensor.battery_level < 20 ? "text-destructive font-medium" : "text-foreground"}>
-                                {sensor.battery_level}%
-                              </span>
-                            </div>
-                            <Progress
-                              value={sensor.battery_level}
-                              className={`h-1.5 ${sensor.battery_level < 20 ? "[&>div]:bg-destructive" : sensor.battery_level < 50 ? "[&>div]:bg-accent" : "[&>div]:bg-vyva-green"}`}
-                            />
+                      </div>
+                      {sensor.battery_level != null && (
+                        <div className="mb-2">
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span className="flex items-center gap-1 text-muted-foreground">
+                              <Battery className="h-3 w-3" /> Battery
+                            </span>
+                            <span className={sensor.battery_level < 20 ? "text-destructive font-medium" : "text-foreground"}>
+                              {sensor.battery_level}%
+                            </span>
                           </div>
-                        )}
-                        <InfoRow label="Device ID" value={sensor.device_id} />
-                        <InfoRow label="Last Reading" value={sensor.last_reading_at ? new Date(sensor.last_reading_at).toLocaleString() : null} />
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </>
+                          <Progress
+                            value={sensor.battery_level}
+                            className={`h-1.5 ${sensor.battery_level < 20 ? "[&>div]:bg-destructive" : sensor.battery_level < 50 ? "[&>div]:bg-accent" : "[&>div]:bg-vyva-green"}`}
+                          />
+                        </div>
+                      )}
+                      <InfoRow label="Device ID" value={sensor.device_id} />
+                      <InfoRow label="Integration" value={(sensor.integration_method || "manual").toUpperCase()} />
+                      <InfoRow label="Last Reading" value={sensor.last_reading_at ? new Date(sensor.last_reading_at).toLocaleString() : null} />
+                      {sensor.notes && (
+                        <p className="text-[10px] text-muted-foreground mt-2 italic">{sensor.notes}</p>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             )}
           </div>
         </TabsContent>
@@ -793,6 +821,9 @@ export default function UserProfile() {
       )}
       {editBrainOpen && brainCoach && (
         <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" table="vyva_user_brain_coach" />
+      )}
+      {editSensorOpen && (
+        <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />
       )}
     </div>
   );
