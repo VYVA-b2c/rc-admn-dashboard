@@ -1,4 +1,4 @@
-import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall, Activity } from "lucide-react";
+import { LayoutDashboard, Users, UserPlus, LogOut, Phone, PhoneCall, Activity, Settings } from "lucide-react";
 import vyvaLogo from "@/assets/logo-with-bg.png";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
@@ -25,6 +25,7 @@ const navItems = [
   { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
   { title: "Sensors", url: "/sensors", icon: Activity },
   { title: "Invite Admin", url: "/invite", icon: UserPlus },
+  { title: "Settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {

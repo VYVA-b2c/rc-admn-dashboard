@@ -15,6 +15,7 @@ import InviteAdmin from "@/pages/InviteAdmin";
 import EmergencyContacts from "@/pages/EmergencyContacts";
 import CheckInMonitoring from "@/pages/CheckInMonitoring";
 import Sensors from "@/pages/Sensors";
+import Settings from "@/pages/Settings";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -95,6 +96,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <InviteAdmin />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <Settings />
                   </DashboardLayout>
                 </ProtectedRoute>
               }
