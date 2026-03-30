@@ -55,7 +55,7 @@ interface Props {
   onAlertClick?: (alert: ActiveAlert) => void;
 }
 
-export function PriorityAlertsPanel({ alerts }: Props) {
+export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
   const queryClient = useQueryClient();
 
   const handleResolve = useCallback(
