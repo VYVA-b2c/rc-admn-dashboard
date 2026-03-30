@@ -1,76 +1,35 @@
 
 
-## Plan: User Risk Score + One-Click Intervention Panel
+## Plan: Advanced Live Map Enhancements
 
-### 1. Risk Score Computation
+### What's Already Done
+- Markers colored by alert status (red/orange/green) with risk scores inside
+- Clustering with worst-status color
+- Search + status + city filters
+- Click opens Intervention Panel with full user details + quick actions
+- Hover tooltip with name + city
 
-Add a `computeRiskScore(user)` utility function used across dashboard, user cards, map markers, and the intervention panel. The score (0–100) is computed client-side from existing data:
+### What's Missing (Gaps to Close)
 
-- **Alerts**: critical alert = +30 each (cap 60), warning = +15 each (cap 30)
-- **Medications**: missed medication logs in last 7 days = +5 each (cap 20)
-- **Check-in**: check-ins disabled = +10
-- **Sensors**: offline sensors = +5 each (cap 15)
-- **Health**: 3+ conditions = +10
+**A. Pulsing animation for critical markers**
+Add a CSS `@keyframes` pulse animation in `index.css`. Update `createUserIcon` in `GISMap.tsx` to wrap critical markers in a pulsing outer ring.
 
-Color bands: 80–100 red, 50–79 orange, 20–49 yellow, 0–19 green.
+**B. Risk level filter**
+The current "Status" filter uses alert-based categories (critical/warning/stable). Add a separate "Risk Level" filter dropdown: High (80+), Moderate (50-79), Low (20-49), Stable (0-19). This filters `filteredUsers` by `riskScore` band.
 
-Create `src/lib/riskScore.ts` with the scoring function and color/label helpers.
+**C. Richer marker popup (mini user card)**
+Replace the simple tooltip with a Leaflet popup that shows: name, risk score badge, city, last check-in status, sensor count, and two quick-action links ("Call" + "View"). The popup renders as styled HTML within Leaflet's native popup system.
 
-### 2. Extend Data Hooks
+**D. Use risk-based colors instead of alert-based**
+Update `getStatusColor` in `GISMap.tsx` to use `getRiskColor(user.riskScore)` from `riskScore.ts` instead of the current alert-count logic. This makes markers truly risk-colored (red/orange/yellow/green on 4 bands) and aligns map, list, and panel visuals.
 
-**`src/hooks/useGISData.ts`**: Add `riskScore` to `GISUser` interface. Compute it during the query using alert counts, sensor counts, and checkin status. Also fetch recent medication logs (last 7 days, status = "missed") grouped by user to factor into score.
-
-**`src/pages/UsersList.tsx`**: Import `computeRiskScore` and use it instead of the existing `getRiskLevel`. Add a "Sort by highest risk" option to the status filter dropdown.
-
-### 3. Risk Score on Map Markers
-
-**`src/components/dashboard/GISMap.tsx`**: Update `createUserIcon` to show the risk score number inside the marker circle (replacing initials). The pin color already reflects alert status — keep that, but add the numeric score inside.
-
-### 4. Risk Score on User Detail Modal
-
-**`src/components/dashboard/UserDetailModal.tsx`**: Add a prominent circular risk score indicator at the top of the modal next to the user name. Show tooltip on hover: "Based on activity, check-ins, medication adherence, and alerts."
-
-### 5. One-Click Intervention Panel (Slide-in Sheet)
-
-**New file: `src/components/dashboard/InterventionPanel.tsx`**
-
-A right-side slide-in panel (`Sheet` from shadcn) that opens when clicking an alert row or a user marker/card. Contains:
-
-- **Header**: User name, city, age (from `date_of_birth`)
-- **Risk score**: Large circular progress indicator with color
-- **Last activity summary**: Last check-in time, last sensor reading
-- **Current alerts**: List of active alerts for this user
-- **Action buttons** (large, icon + label):
-  - **Call User** (primary/highlighted, `tel:` link) — `Phone` icon
-  - **Trigger Check-in** — `PhoneCall` icon, shows success toast
-  - **Request Doctor** — `Stethoscope` icon, shows success toast
-  - **Notify Caregiver** — `UserCheck` icon, shows success toast
-  - **Send Message** — `MessageSquare` icon, shows success toast
-- Each button shows loading spinner on click, then success state (checkmark) for 2 seconds
-- Actions are simulated for now (toast confirmation) — ready for real integrations later
-
-### 6. Wire It Up
-
-**`src/pages/Dashboard.tsx`**:
-- Import `InterventionPanel`
-- Open it from alert row clicks and map marker clicks (instead of / in addition to the modal)
-- Pass selected user data + alerts to the panel
-
-**`src/pages/UsersList.tsx`**:
-- Add click handler on user cards to open the intervention panel
-- Import and render `InterventionPanel`
-
-### 7. Data Changes
-
-**No database migration needed.** Risk score is computed client-side from existing tables. The medication logs table already exists. Action buttons are simulated (toast feedback).
+**E. Cluster risk-based coloring**
+Update `createClusterIcon` to use the highest risk score among child markers rather than just checking for critical/warning alerts.
 
 ### Files
-- **New**: `src/lib/riskScore.ts` — scoring function + color helpers
-- **New**: `src/components/dashboard/InterventionPanel.tsx` — slide-in panel
-- **Modified**: `src/hooks/useGISData.ts` — add `riskScore` to GISUser, fetch med logs
-- **Modified**: `src/components/dashboard/GISMap.tsx` — show score in markers
-- **Modified**: `src/components/dashboard/UserDetailModal.tsx` — add risk score display
-- **Modified**: `src/components/dashboard/PriorityAlertsPanel.tsx` — open intervention panel on alert click
-- **Modified**: `src/pages/Dashboard.tsx` — integrate intervention panel
-- **Modified**: `src/pages/UsersList.tsx` — add risk score + sort + intervention panel
+- **Modified**: `src/index.css` — add pulse keyframes for critical markers
+- **Modified**: `src/components/dashboard/GISMap.tsx` — risk-based colors, pulse animation, richer popup with mini card + quick actions, risk-based cluster colors
+- **Modified**: `src/pages/Dashboard.tsx` — add risk level filter dropdown
+
+### No database changes needed.
 
