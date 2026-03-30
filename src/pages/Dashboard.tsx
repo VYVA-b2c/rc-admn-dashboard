@@ -33,6 +33,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
   const [cityFilter, setCityFilter] = useState<string>("all");
+  const [riskFilter, setRiskFilter] = useState<string>("all");
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);

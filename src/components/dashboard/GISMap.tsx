@@ -3,6 +3,7 @@ import L from "leaflet";
 import "leaflet.markercluster";
 import type { GISUser } from "@/hooks/useGISData";
 import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
+import { getRiskColor, getRiskBand, getRiskLabel } from "@/lib/riskScore";
 
 type GISMappableUser = GISUser & { coords: [number, number] };
 
@@ -14,23 +15,24 @@ interface GISMapProps {
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
 
-function getStatusColor(user: GISUser): string {
-  if (user.criticalAlerts > 0) return "#dc2626";
-  if (user.activeAlerts > 0) return "#f59e0b";
-  return "#22c55e";
-}
-
 function createUserIcon(user: GISUser): L.DivIcon {
-  const color = getStatusColor(user);
   const score = user.riskScore ?? 0;
+  const color = getRiskColor(score);
+  const band = getRiskBand(score);
+  const isCritical = band === "high";
+
+  const pulseRing = isCritical
+    ? `<div style="position:absolute;top:-4px;left:-4px;width:34px;height:34px;border-radius:50%;border:3px solid ${color};" class="marker-pulse-ring"></div>`
+    : "";
 
   return L.divIcon({
     className: "",
     iconSize: [26, 32],
     iconAnchor: [13, 32],
-    popupAnchor: [0, -32],
+    popupAnchor: [0, -34],
     html: `
       <div style="position:relative; width:26px; height:32px; cursor:pointer;">
+        ${pulseRing}
         <svg width="26" height="32" viewBox="0 0 26 32" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M13 32C13 32 26 20.4 26 13.1C26 5.86 20.18 0 13 0C5.82 0 0 5.86 0 13.1C0 20.4 13 32 13 32Z" fill="${color}"/>
           <circle cx="13" cy="13" r="8.5" fill="white" fill-opacity="0.95"/>
@@ -47,16 +49,13 @@ function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
   const markers = cluster.getAllChildMarkers();
   const count = markers.length;
 
-  // Determine worst status color
-  let hasCritical = false;
-  let hasWarning = false;
+  let maxScore = 0;
   for (const m of markers) {
     const user = (m as any)._gisUser as GISUser | undefined;
-    if (user?.criticalAlerts && user.criticalAlerts > 0) { hasCritical = true; break; }
-    if (user?.activeAlerts && user.activeAlerts > 0) hasWarning = true;
+    if (user?.riskScore != null && user.riskScore > maxScore) maxScore = user.riskScore;
   }
 
-  const bg = hasCritical ? "#dc2626" : hasWarning ? "#f59e0b" : "#22c55e";
+  const bg = getRiskColor(maxScore);
 
   return L.divIcon({
     className: "",
@@ -69,6 +68,29 @@ function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
   });
 }
 
+function buildPopupHtml(user: GISUser): string {
+  const score = user.riskScore ?? 0;
+  const color = getRiskColor(score);
+  const label = getRiskLabel(score);
+  const phone = user.phone ?? "";
+
+  return `
+    <div style="padding:12px;font-family:Inter,sans-serif;min-width:200px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="width:32px;height:32px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;">${score}</div>
+        <div>
+          <div style="font-weight:600;font-size:13px;">${user.first_name} ${user.last_name}</div>
+          <div style="font-size:11px;color:#888;">${user.city ?? "Unknown"} · ${label}</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        ${phone ? `<a href="tel:${phone}" style="flex:1;text-align:center;padding:6px 0;background:hsl(252,85%,60%);color:#fff;border-radius:6px;font-size:11px;font-weight:600;text-decoration:none;">📞 Call</a>` : ""}
+        <button onclick="document.dispatchEvent(new CustomEvent('gis-view-user',{detail:'${user.id}'}))" style="flex:1;text-align:center;padding:6px 0;background:hsl(220,15%,93%);color:hsl(225,25%,12%);border-radius:6px;font-size:11px;font-weight:600;border:none;cursor:pointer;">👤 View</button>
+      </div>
+    </div>
+  `;
+}
+
 export function GISMap({ users, onUserClick }: GISMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -78,6 +100,17 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
     () => users.filter((u): u is GISMappableUser => u.coords !== null),
     [users],
   );
+
+  // Listen for "View" button clicks from popups
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const userId = (e as CustomEvent).detail;
+      const user = users.find((u) => u.id === userId);
+      if (user) onUserClick?.(user);
+    };
+    document.addEventListener("gis-view-user", handler);
+    return () => document.removeEventListener("gis-view-user", handler);
+  }, [users, onUserClick]);
 
   // Init map once
   useEffect(() => {
@@ -127,10 +160,11 @@ export function GISMap({ users, onUserClick }: GISMapProps) {
       const marker = L.marker(user.coords, { icon: createUserIcon(user) });
       (marker as any)._gisUser = user;
 
-      marker.bindTooltip(
-        `<strong>${user.first_name} ${user.last_name}</strong><br/>${user.city ?? "Unknown"}`,
-        { direction: "top", offset: [0, -32], className: "gis-tooltip" },
-      );
+      marker.bindPopup(buildPopupHtml(user), {
+        className: "gis-popup",
+        closeButton: true,
+        maxWidth: 260,
+      });
 
       marker.on("click", () => onUserClick?.(user));
 
