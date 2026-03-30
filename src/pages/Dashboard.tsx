@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { getRiskBand } from "@/lib/riskScore";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -33,6 +34,7 @@ export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "critical" | "warning" | "stable">("all");
   const [cityFilter, setCityFilter] = useState<string>("all");
+  const [riskFilter, setRiskFilter] = useState<string>("all");
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
@@ -69,15 +71,19 @@ export default function Dashboard() {
     else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
     else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
     if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
+    if (riskFilter !== "all") {
+      users = users.filter((u) => getRiskBand(u.riskScore ?? 0) === riskFilter);
+    }
     return users;
-  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter]);
+  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all";
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all" || riskFilter !== "all";
 
   const clearFilters = () => {
     setSearchQuery("");
     setStatusFilter("all");
     setCityFilter("all");
+    setRiskFilter("all");
   };
 
   if (isLoading) {
@@ -146,6 +152,18 @@ export default function Dashboard() {
             {cities.map((c) => (
               <SelectItem key={c} value={c}>{c}</SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={riskFilter} onValueChange={setRiskFilter}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="Risk Level" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All risk levels</SelectItem>
+            <SelectItem value="high">🔴 High Risk</SelectItem>
+            <SelectItem value="moderate">🟠 Moderate</SelectItem>
+            <SelectItem value="low">🟡 Low</SelectItem>
+            <SelectItem value="stable">🟢 Stable</SelectItem>
           </SelectContent>
         </Select>
         {hasActiveFilters && (
