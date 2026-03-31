@@ -75,7 +75,8 @@ export default function UserProfile() {
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
     queryFn: async () => {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/user-info?user_id=${id}&organization_name="Red Cross"`);
+      const orgName = encodeURIComponent("Red Cross"); // safely encode spaces
+      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/user-info?user_id=${id}&organization_name=${orgName}`);
 
       if (!res.ok) {
         throw new Error("Failed to fetch user profile");
@@ -85,7 +86,6 @@ export default function UserProfile() {
     },
     enabled: !!id,
   });
-
   const handleDeleteMedication = async (medId: string) => {
     try {
       const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/medications/${medId}`, {
