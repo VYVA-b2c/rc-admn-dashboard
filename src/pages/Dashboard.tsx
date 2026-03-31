@@ -13,6 +13,9 @@ import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel";
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 import { OperationsQueuePanel } from "@/components/dashboard/OperationsQueuePanel";
+import { useQuery } from "@tanstack/react-query";
+import { getCityCoords } from "@/lib/saxonyCities";
+
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
@@ -38,6 +41,40 @@ export default function Dashboard() {
   const [riskFilter, setRiskFilter] = useState<string>("all");
   const [heatmapMode, setHeatmapMode] = useState(false);
 
+  const filteredUsersRaw = useMemo(() => {
+    let users = data?.gisUsers ?? [];
+    const q = searchQuery.toLowerCase().trim();
+    if (q) {
+      users = users.filter(
+        (u) =>
+          `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
+          (u.city?.toLowerCase().includes(q) ?? false),
+      );
+    }
+    if (statusFilter === "critical") users = users.filter((u) => u.criticalAlerts > 0);
+    else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
+    else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
+    if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
+    if (riskFilter !== "all") {
+      users = users.filter((u) => getRiskBand(u.riskScore ?? 0) === riskFilter);
+    }
+    return users;
+  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
+
+  // Fetch coords for filtered users
+  const { data: usersWithCoords = [], isLoading: coordsLoading } = useQuery({
+    queryKey: ["users-with-coords", filteredUsersRaw],
+    queryFn: async () => {
+      const results = await Promise.all(
+        filteredUsersRaw.map(async (u) => {
+          const coords = await getCityCoords(u.city); // coords is [number, number]
+          return { ...u, coords } as GISUser;         // <-- assert type here
+        })
+      );
+      return results;
+    },
+    enabled: filteredUsersRaw.length > 0,
+  });
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
     setInterventionOpen(true);
@@ -59,25 +96,6 @@ export default function Dashboard() {
     return Array.from(set).sort();
   }, [data?.gisUsers]);
 
-  const filteredUsers = useMemo(() => {
-    let users = data?.gisUsers ?? [];
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      users = users.filter(
-        (u) =>
-          `${u.first_name} ${u.last_name}`.toLowerCase().includes(q) ||
-          (u.city?.toLowerCase().includes(q) ?? false),
-      );
-    }
-    if (statusFilter === "critical") users = users.filter((u) => u.criticalAlerts > 0);
-    else if (statusFilter === "warning") users = users.filter((u) => u.activeAlerts > 0 && u.criticalAlerts === 0);
-    else if (statusFilter === "stable") users = users.filter((u) => u.activeAlerts === 0);
-    if (cityFilter !== "all") users = users.filter((u) => u.city === cityFilter);
-    if (riskFilter !== "all") {
-      users = users.filter((u) => getRiskBand(u.riskScore ?? 0) === riskFilter);
-    }
-    return users;
-  }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
   const hasActiveFilters = searchQuery || statusFilter !== "all" || cityFilter !== "all" || riskFilter !== "all";
 
@@ -186,17 +204,27 @@ export default function Dashboard() {
           </Button>
         )}
         <span className="text-xs text-muted-foreground ml-auto">
-          {filteredUsers.length} of {data?.totalUsers ?? 0} users
+          {filteredUsersRaw.length} of {data?.totalUsers ?? 0} users
         </span>
       </div>
 
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <GISMap users={filteredUsers} onUserClick={handleUserClick} heatmapMode={heatmapMode} />
+          {coordsLoading ? (
+            <div className="h-[420px] w-full flex items-center justify-center">
+              <p className="text-sm text-muted-foreground">Loading map…</p>
+            </div>
+          ) : (
+            <GISMap
+              users={usersWithCoords} // ✅ now has coords
+              onUserClick={handleUserClick}
+              heatmapMode={heatmapMode}
+            />
+          )}
         </CardContent>
-      </Card>
 
+      </Card>
       {/* Legend */}
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">

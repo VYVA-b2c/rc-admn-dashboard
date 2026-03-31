@@ -10,7 +10,8 @@ export interface GISUser {
   city: string | null;
   phone: string | null;
   date_of_birth: string | null;
-  coords: [number, number] | null;
+  coords: [number, number] | Promise<[number, number]>;
+
   activeAlerts: number;
   criticalAlerts: number;
   sensorCount: number;
