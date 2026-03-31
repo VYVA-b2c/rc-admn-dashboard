@@ -182,12 +182,12 @@ export function useGISData() {
         });
 
       return {
-        totalUsers: users.length,
-        checkinsEnabled: checkins.filter((c) => c.enabled).length,
-        activeAlertCount: alerts.length,
+        totalUsers: statsRes.total_users,
+        checkinsEnabled: statsRes.checkins_active,
+        activeAlertCount: statsRes.active_alerts,
         criticalAlertCount: alerts.filter((a) => a.severity === "critical").length,
-        totalSensors: sensors.length,
-        caregiversLinked: caregiversRes.count || 0,
+        totalSensors: statsRes.sensors,
+        caregiversLinked: statsRes.caregivers,
         gisUsers,
         activeAlerts,
         cityDistribution,
