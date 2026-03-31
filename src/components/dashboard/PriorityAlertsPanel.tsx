@@ -32,7 +32,7 @@ const ALERT_MESSAGES: Record<string, string> = {
 };
 
 function formatAlertMessage(alertType: string, message: string | null): string {
-  return ALERT_MESSAGES[alertType] || message || "Alert requires attention";
+  return ALERT_MESSAGES[alertType] || message || alertType.replace(/_/g, " ");
 }
 
 /* ---------- Status derivation ---------- */
