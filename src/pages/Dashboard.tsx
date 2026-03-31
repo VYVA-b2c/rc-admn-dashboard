@@ -60,20 +60,7 @@ export default function Dashboard() {
     return users;
   }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
-  // Fetch coords for filtered users
-  const { data: usersWithCoords = [], isLoading: coordsLoading } = useQuery({
-    queryKey: ["users-with-coords", filteredUsersRaw],
-    queryFn: async () => {
-      const results = await Promise.all(
-        filteredUsersRaw.map(async (u) => {
-          const coords = await getCityCoords(u.city); // coords is [number, number]
-          return { ...u, coords } as GISUser;         // <-- assert type here
-        })
-      );
-      return results;
-    },
-    enabled: filteredUsersRaw.length > 0,
-  });
+  const usersWithCoords = filteredUsersRaw;
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
     setInterventionOpen(true);
