@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCityCoords } from "@/lib/saxonyCities";
+
 import { computeRiskScore } from "@/lib/riskScore";
 import { apiFetch } from "@/lib/apiClient";
 
@@ -10,7 +10,7 @@ export interface GISUser {
   city: string | null;
   phone: string | null;
   date_of_birth: string | null;
-  coords: [number, number] | Promise<[number, number]>;
+  coords: [number, number] | null;
 
   activeAlerts: number;
   criticalAlerts: number;
@@ -61,7 +61,9 @@ export function useGISData() {
 
       const gisUsers = res.gisUsers.map((u) => ({
         ...u,
-        coords: u.coords || getCityCoords(u.city),
+        coords: Array.isArray(u.coords) && u.coords.length === 2
+          ? [Number(u.coords[0]), Number(u.coords[1])] as [number, number]
+          : null,
       }));
 
       return {
