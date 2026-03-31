@@ -46,7 +46,10 @@ export default function CheckInMonitoring() {
       inactive: all.filter((c) => !c.is_active).length,
     };
   }, [checkins]);
-
+  function formatFrequency(days?: number) {
+    if (!days) return "—";
+    return `Every ${days} day${days > 1 ? "s" : ""}`;
+  }
   // Frontend filtering/search
   const filtered = useMemo(() => {
     let list = checkins || [];
@@ -172,7 +175,7 @@ export default function CheckInMonitoring() {
                       {c.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
-                  <TableCell>{c.frequency_days || "—"}</TableCell>
+                  <TableCell>{formatFrequency(c.frequency_days)}</TableCell>
                   <TableCell>{c.preferred_time || "—"}</TableCell>
                 </TableRow>
               ))
