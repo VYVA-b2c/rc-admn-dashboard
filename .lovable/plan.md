@@ -1,37 +1,52 @@
 
 
-## Plan: Heatmap Toggle for Intervention Frequency
+## Plan: At-Risk Users Panel
 
 ### Overview
-Add a toggle button above the map that switches between the current marker/cluster view and a heatmap layer visualizing intervention density by geographic area. The heatmap uses `leaflet.heat` to render intensity based on how many alerts/interventions each location has.
+Add a proactive "At-Risk Users" panel next to the existing "Priority Alerts" panel, showing the top 8 users sorted by risk score descending. This panel highlights users trending toward risk based on behavioral patterns — complementing the reactive alerts panel.
 
 ### Changes
 
-**1. Install `leaflet.heat`**
-Add `leaflet-heat` package (provides `L.heatLayer`). Add type declaration since it has no @types package.
+**1. New component: `src/components/dashboard/AtRiskUsersPanel.tsx`**
 
-**2. Add type declaration (`src/types/leaflet-heat.d.ts`)**
-Declare the `L.heatLayer` extension on the Leaflet namespace.
+A card matching the Priority Alerts panel height and style (ScrollArea h-[280px]).
 
-**3. Update `src/components/dashboard/GISMap.tsx`**
-- Accept new prop `heatmapMode: boolean`
-- When `heatmapMode` is true:
-  - Hide the marker cluster layer
-  - Show a heat layer where each user's coordinates are weighted by their `activeAlerts + criticalAlerts` count (minimum weight 1 so all users appear)
-  - Gradient: green → yellow → orange → red
-- When toggled off, remove heat layer and restore clusters
-- The heat layer data points are: `[lat, lng, intensity]` where intensity = `user.activeAlerts + user.criticalAlerts + 1`
+Structure per row:
+- Left: colored risk score number (large, bold) with risk band badge
+- Center: user name, city (muted), 1-line reason text, trend arrow icon (↑/↓/→)
+- Right: View (Eye icon link to `/users/{id}`) and Call (Phone icon) quick actions
 
-**4. Update `src/pages/Dashboard.tsx`**
-- Add a `heatmapMode` state boolean (default false)
-- Add a toggle button in the filter bar (next to existing filters) using the `Flame` lucide icon
-- Label: "Heatmap" — styled as a toggle button (outlined when off, filled when on)
-- Pass `heatmapMode` prop to `<GISMap>`
+Risk reason is generated client-side from the user's data:
+- `criticalAlerts > 0` → "X critical alert(s) unresolved"
+- `missedMeds7d > 0` → "Missed X medication(s) this week"
+- `offlineSensors > 0` → "X sensor(s) offline"
+- `!checkinEnabled` → "Check-ins not enabled"
+- `healthConditions >= 3` → "Multiple health conditions"
+- Fallback: "Reduced activity patterns"
+
+Trend indicator is derived by comparing risk factors (simulated — uses simple heuristic: critical alerts or missed meds → ↑ worsening, offlineSensors only → → stable, otherwise ↓ improving).
+
+Header includes subtitle "Based on recent trends" in muted text.
+
+Filters out users with riskScore === 0 (fully stable). Shows top 8 by score.
+
+Clicking a row triggers the same `onUserClick` callback used elsewhere to open the Intervention Panel.
+
+**2. Update `src/pages/Dashboard.tsx`**
+- Import `AtRiskUsersPanel`
+- Replace the single `<PriorityAlertsPanel>` line with a 2-column grid:
+  ```
+  <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+    <PriorityAlertsPanel ... />
+    <AtRiskUsersPanel ... />
+  </div>
+  ```
+- Pass `gisUsers` and `handleUserClick` to the new panel
 
 ### No database changes needed.
+Risk data already exists via `computeRiskScore` in `useGISData`.
 
 ### Files
-- **New**: `src/types/leaflet-heat.d.ts`
-- **Modified**: `src/components/dashboard/GISMap.tsx`, `src/pages/Dashboard.tsx`
-- **Package**: `leaflet-heat`
+- **New**: `src/components/dashboard/AtRiskUsersPanel.tsx`
+- **Modified**: `src/pages/Dashboard.tsx`
 
