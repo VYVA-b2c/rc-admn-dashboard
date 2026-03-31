@@ -1,4 +1,4 @@
-export const BASE_URL = "http://localhost:8000";
+export const BASE_URL = "https://api.vyva.io";
 
 export async function apiFetch<T = unknown>(path: string): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`);
@@ -7,4 +7,3 @@ export async function apiFetch<T = unknown>(path: string): Promise<T> {
   }
   return res.json();
 }
-
