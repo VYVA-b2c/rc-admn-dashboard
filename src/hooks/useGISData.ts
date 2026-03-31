@@ -68,7 +68,7 @@ export function useGISData() {
           city: null,
           phone: null,
           date_of_birth: null,
-          coords: [loc.lat, loc.lng] as [number, number],
+          coords: (loc.lat != null && loc.lng != null) ? [loc.lat, loc.lng] as [number, number] : null,
           activeAlerts: 0,
           criticalAlerts: 0,
           sensorCount: 0,
