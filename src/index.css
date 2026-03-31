@@ -125,6 +125,15 @@
   animation: pulse-critical 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
+/* Pulse animation for critical alert indicators */
+@keyframes alert-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; filter: drop-shadow(0 0 4px hsl(0 84% 60%)); }
+}
+.animate-alert-pulse {
+  animation: alert-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
 /* Leaflet popup override for mini user cards */
 .gis-popup .leaflet-popup-content-wrapper {
   font-family: 'Inter', sans-serif;
