@@ -1,44 +1,68 @@
 
 
-## Plan: Enhance Priority Alerts Panel — Realistic Operations Feel
+## Plan: Replace At-Risk Users with Operations Queue
 
 ### Overview
-Make the Priority Alerts panel feel like a live operations console by adding status labels, smarter alert copy, pulsing critical indicators, and deriving alert status from timestamp age relative to severity.
+Replace the "At-Risk Users" panel with an operational "Operations Queue" panel that shows actionable tasks derived from active alerts and user data. Each row is a clear instruction — not analytics.
 
 ### Changes
 
-**1. Add pulse animation to `src/index.css`**
-Add a `@keyframes alert-pulse` animation — a soft red glow pulse on a 2s cycle for the severity dot and badge on critical alerts.
+**1. Delete `src/components/dashboard/AtRiskUsersPanel.tsx`** — replaced entirely.
 
-**2. Update `src/components/dashboard/PriorityAlertsPanel.tsx`**
+**2. New component: `src/components/dashboard/OperationsQueuePanel.tsx`**
 
-**Status derivation logic** (client-side, no DB changes):
-- Derive status from `created_at` age + severity:
-  - Critical: <15 min → "New", 15 min–2 hr → "Ongoing", >2 hr → "Escalated"
-  - High: <1 hr → "New", 1–4 hr → "Ongoing", >4 hr → "Escalated"
-  - Medium/Low: <4 hr → "New", 4–24 hr → "Ongoing", >24 hr → "Escalated"
+Derives tasks from `ActiveAlert[]` and `GISUser[]` data:
 
-**Improved alert message formatting**:
-- Add a `formatAlertMessage(alert_type, message)` helper that maps raw `alert_type` values to human-readable operational copy:
-  - `fall_detected` → "Possible fall detected — no confirmation received"
-  - `missed_checkin` → "No response after scheduled check-in attempts"
-  - `high_heart_rate` → "Heart rate above threshold"
-  - `low_battery` → "Battery critically low"
-  - `medication_missed` → "Medication not confirmed after reminder window"
-  - `inactivity_detected` → "No activity detected"
-  - Fallback: use original message or "Alert requires attention"
+- Each unresolved alert becomes a task with:
+  - **User name** from alert
+  - **Action** (bold): mapped from `alert_type` (e.g. `fall_detected` → "Call user immediately", `missed_checkin` → "Follow up check-in", `medication_missed` → "Verify medication status")
+  - **Reason** (short): reuses alert message logic
+  - **Priority**: mapped from severity (critical → red, high → orange, medium → yellow)
+  - **Time urgency**: derived from severity + age (critical → "Now", high < 30min → "Within 30 min", medium → "In 10 min", etc.)
 
-**Status pill**: Add a small pill badge below the message line showing "New" (blue), "Ongoing" (amber), or "Escalated" (red outline).
+- Additionally generates routine tasks from GISUsers with check-ins enabled but no recent alerts (e.g. "Routine check-in" — medium priority)
 
-**Pulse animation on critical alerts**:
-- The severity dot gets class `animate-alert-pulse` for critical alerts
-- The "Critical" badge also pulses subtly
+Task list capped at 8 items, sorted by priority then urgency.
 
-**Row layout** stays compact — same structure, just adding the status pill inline after the time.
+Each row layout:
+- Left: colored priority indicator dot
+- Center: user name, bold action line, short reason, time urgency pill
+- Right: Call button, View button, Mark as Done (checkmark) button
 
-**3. Files**
-- **Modified**: `src/index.css` — add pulse keyframes
-- **Modified**: `src/components/dashboard/PriorityAlertsPanel.tsx` — status logic, message formatting, pulse classes, status pill
+"Mark as done" removes the task from the local list (client-side state via `useState` tracking dismissed IDs). For alert-based tasks, also resolves the underlying alert in the database.
+
+Header: "Operations Queue" with subtitle "What to do next"
+
+**3. Update `src/pages/Dashboard.tsx`**
+- Replace `AtRiskUsersPanel` import with `OperationsQueuePanel`
+- Pass `alerts` and `gisUsers` as props
+- Keep the 2-column grid layout alongside Priority Alerts
+
+### Action-type mapping
+```text
+fall_detected      → "Call user immediately"
+missed_checkin     → "Follow up check-in"
+high_heart_rate    → "Review health status"
+medication_missed  → "Verify medication status"
+inactivity_detected → "Welfare check required"
+low_battery        → "Replace sensor battery"
+temperature_high   → "Check environment"
+door_open          → "Verify user safety"
+default            → "Review alert"
+```
+
+### Time urgency logic
+```text
+critical           → "Now"
+high, <30 min old  → "Within 10 min"
+high, >30 min old  → "Within 30 min"
+medium             → "Within 1 hour"
+```
 
 ### No database changes needed.
+
+### Files
+- **Deleted**: `src/components/dashboard/AtRiskUsersPanel.tsx`
+- **New**: `src/components/dashboard/OperationsQueuePanel.tsx`
+- **Modified**: `src/pages/Dashboard.tsx`
 
