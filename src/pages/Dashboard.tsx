@@ -12,7 +12,7 @@ import { GISMap } from "@/components/dashboard/GISMap";
 import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel";
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
-import { AtRiskUsersPanel } from "@/components/dashboard/AtRiskUsersPanel";
+import { OperationsQueuePanel } from "@/components/dashboard/OperationsQueuePanel";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
@@ -123,7 +123,7 @@ export default function Dashboard() {
       {/* Priority Alerts + At-Risk Users */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
         <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} onAlertClick={handleAlertClick} />
-        <AtRiskUsersPanel users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
+        <OperationsQueuePanel alerts={data?.activeAlerts ?? []} users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
       </div>
 
       {/* Search & Filter Bar */}
