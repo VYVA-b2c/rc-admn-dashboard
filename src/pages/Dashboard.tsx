@@ -14,7 +14,6 @@ import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel"
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 import { OperationsQueuePanel } from "@/components/dashboard/OperationsQueuePanel";
 import { useQuery } from "@tanstack/react-query";
-import { getCityCoords } from "@/lib/saxonyCities";
 
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
