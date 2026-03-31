@@ -35,7 +35,12 @@ export default function UsersList() {
       critical: u.criticalAlerts,
       warning: u.activeAlerts - u.criticalAlerts,
     },
-    caregiverNames: [],
+    caregiverNames: u.caretakerNames ?? [],
+    
+    checkinsEnabled: u.checkinEnabled ?? false,
+
+    brainCoachEnabled: u.brainCoachEnabled ?? false,
+
   }));
   const statsLoading = isLoading;
   const totalUsers = gisData?.totalUsers ?? 0;
