@@ -61,7 +61,9 @@ export function useGISData() {
 
       const gisUsers = res.gisUsers.map((u) => ({
         ...u,
-        coords: u.coords || getCityCoords(u.city),
+        coords: Array.isArray(u.coords) && u.coords.length === 2
+          ? [Number(u.coords[0]), Number(u.coords[1])] as [number, number]
+          : null,
       }));
 
       return {
