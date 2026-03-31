@@ -1,6 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCityCoords } from "@/lib/saxonyCities";
-import { computeRiskScore } from "@/lib/riskScore";
 import { apiFetch } from "@/lib/apiClient";
 
 export interface GISUser {
@@ -10,7 +8,7 @@ export interface GISUser {
   city: string | null;
   phone: string | null;
   date_of_birth: string | null;
-  coords: [number, number] | Promise<[number, number]>;
+  coords: [number, number] | null;
 
   activeAlerts: number;
   criticalAlerts: number;
@@ -34,46 +32,64 @@ export interface ActiveAlert {
   phone: string | null;
 }
 
-const SEVERITY_WEIGHT: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  warning: 3,
-  medium: 2,
-  low: 1,
-};
+interface LocationEntry {
+  id: number;
+  lat: number;
+  lng: number;
+  name: string;
+  status: string;
+}
 
 export function useGISData() {
   return useQuery({
     queryKey: ["gis-data"],
     refetchInterval: 30000,
     queryFn: async () => {
-      const res = await apiFetch<{
-        totalUsers: number;
-        checkinsEnabled: number;
-        activeAlertCount: number;
-        criticalAlertCount: number;
-        totalSensors: number;
-        caregiversLinked: number;
-        gisUsers: GISUser[];
-        activeAlerts: ActiveAlert[];
-        cityDistribution: { city: string; count: number }[];
-      }>("/api/v1/user-dashboard/users");
+      const [statsRes, locations] = await Promise.all([
+        apiFetch<{
+          total_users: number;
+          checkins_active: number;
+          active_alerts: number;
+          sensors: number;
+          caregivers: number;
+        }>("/api/v1/dashboard/stats"),
+        apiFetch<LocationEntry[]>("/api/v1/dashboard/locations"),
+      ]);
 
-      const gisUsers = res.gisUsers.map((u) => ({
-        ...u,
-        coords: u.coords || getCityCoords(u.city),
-      }));
+      const gisUsers: GISUser[] = locations.map((loc) => {
+        const nameParts = loc.name.split(" ");
+        const first_name = nameParts[0] || "";
+        const last_name = nameParts.slice(1).join(" ") || "";
+
+        return {
+          id: String(loc.id),
+          first_name,
+          last_name,
+          city: null,
+          phone: null,
+          date_of_birth: null,
+          coords: [loc.lat, loc.lng] as [number, number],
+          activeAlerts: 0,
+          criticalAlerts: 0,
+          sensorCount: 0,
+          offlineSensors: 0,
+          checkinEnabled: false,
+          healthConditions: 0,
+          missedMeds7d: 0,
+          riskScore: 0,
+        };
+      });
 
       return {
-        totalUsers: res.totalUsers,
-        checkinsEnabled: res.checkinsEnabled,
-        activeAlertCount: res.activeAlertCount,
-        criticalAlertCount: res.criticalAlertCount,
-        totalSensors: res.totalSensors,
-        caregiversLinked: res.caregiversLinked,
+        totalUsers: statsRes.total_users,
+        checkinsEnabled: statsRes.checkins_active,
+        activeAlertCount: statsRes.active_alerts,
+        criticalAlertCount: 0,
+        totalSensors: statsRes.sensors,
+        caregiversLinked: statsRes.caregivers,
         gisUsers,
-        activeAlerts: res.activeAlerts || [],
-        cityDistribution: res.cityDistribution || [],
+        activeAlerts: [] as ActiveAlert[],
+        cityDistribution: [] as { city: string; count: number }[],
       };
     },
   });
