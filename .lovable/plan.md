@@ -1,52 +1,44 @@
 
 
-## Plan: At-Risk Users Panel
+## Plan: Enhance Priority Alerts Panel — Realistic Operations Feel
 
 ### Overview
-Add a proactive "At-Risk Users" panel next to the existing "Priority Alerts" panel, showing the top 8 users sorted by risk score descending. This panel highlights users trending toward risk based on behavioral patterns — complementing the reactive alerts panel.
+Make the Priority Alerts panel feel like a live operations console by adding status labels, smarter alert copy, pulsing critical indicators, and deriving alert status from timestamp age relative to severity.
 
 ### Changes
 
-**1. New component: `src/components/dashboard/AtRiskUsersPanel.tsx`**
+**1. Add pulse animation to `src/index.css`**
+Add a `@keyframes alert-pulse` animation — a soft red glow pulse on a 2s cycle for the severity dot and badge on critical alerts.
 
-A card matching the Priority Alerts panel height and style (ScrollArea h-[280px]).
+**2. Update `src/components/dashboard/PriorityAlertsPanel.tsx`**
 
-Structure per row:
-- Left: colored risk score number (large, bold) with risk band badge
-- Center: user name, city (muted), 1-line reason text, trend arrow icon (↑/↓/→)
-- Right: View (Eye icon link to `/users/{id}`) and Call (Phone icon) quick actions
+**Status derivation logic** (client-side, no DB changes):
+- Derive status from `created_at` age + severity:
+  - Critical: <15 min → "New", 15 min–2 hr → "Ongoing", >2 hr → "Escalated"
+  - High: <1 hr → "New", 1–4 hr → "Ongoing", >4 hr → "Escalated"
+  - Medium/Low: <4 hr → "New", 4–24 hr → "Ongoing", >24 hr → "Escalated"
 
-Risk reason is generated client-side from the user's data:
-- `criticalAlerts > 0` → "X critical alert(s) unresolved"
-- `missedMeds7d > 0` → "Missed X medication(s) this week"
-- `offlineSensors > 0` → "X sensor(s) offline"
-- `!checkinEnabled` → "Check-ins not enabled"
-- `healthConditions >= 3` → "Multiple health conditions"
-- Fallback: "Reduced activity patterns"
+**Improved alert message formatting**:
+- Add a `formatAlertMessage(alert_type, message)` helper that maps raw `alert_type` values to human-readable operational copy:
+  - `fall_detected` → "Possible fall detected — no confirmation received"
+  - `missed_checkin` → "No response after scheduled check-in attempts"
+  - `high_heart_rate` → "Heart rate above threshold"
+  - `low_battery` → "Battery critically low"
+  - `medication_missed` → "Medication not confirmed after reminder window"
+  - `inactivity_detected` → "No activity detected"
+  - Fallback: use original message or "Alert requires attention"
 
-Trend indicator is derived by comparing risk factors (simulated — uses simple heuristic: critical alerts or missed meds → ↑ worsening, offlineSensors only → → stable, otherwise ↓ improving).
+**Status pill**: Add a small pill badge below the message line showing "New" (blue), "Ongoing" (amber), or "Escalated" (red outline).
 
-Header includes subtitle "Based on recent trends" in muted text.
+**Pulse animation on critical alerts**:
+- The severity dot gets class `animate-alert-pulse` for critical alerts
+- The "Critical" badge also pulses subtly
 
-Filters out users with riskScore === 0 (fully stable). Shows top 8 by score.
+**Row layout** stays compact — same structure, just adding the status pill inline after the time.
 
-Clicking a row triggers the same `onUserClick` callback used elsewhere to open the Intervention Panel.
-
-**2. Update `src/pages/Dashboard.tsx`**
-- Import `AtRiskUsersPanel`
-- Replace the single `<PriorityAlertsPanel>` line with a 2-column grid:
-  ```
-  <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
-    <PriorityAlertsPanel ... />
-    <AtRiskUsersPanel ... />
-  </div>
-  ```
-- Pass `gisUsers` and `handleUserClick` to the new panel
+**3. Files**
+- **Modified**: `src/index.css` — add pulse keyframes
+- **Modified**: `src/components/dashboard/PriorityAlertsPanel.tsx` — status logic, message formatting, pulse classes, status pill
 
 ### No database changes needed.
-Risk data already exists via `computeRiskScore` in `useGISData`.
-
-### Files
-- **New**: `src/components/dashboard/AtRiskUsersPanel.tsx`
-- **Modified**: `src/pages/Dashboard.tsx`
 
