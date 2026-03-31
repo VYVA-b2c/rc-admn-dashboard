@@ -108,7 +108,7 @@ export function GISMap({ users, onUserClick, heatmapMode = false }: GISMapProps)
   useEffect(() => {
     const handler = (e: Event) => {
       const userId = (e as CustomEvent).detail;
-      const user = users.find((u) => u.id === userId);
+      const user = users.find((u) => String(u.id) === String(userId));
       if (user) onUserClick?.(user);
     };
     document.addEventListener("gis-view-user", handler);
