@@ -195,14 +195,6 @@ export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
                           </a>
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-vyva-green hover:text-vyva-green"
-                        onClick={(e) => { e.stopPropagation(); handleResolve(alert.id); }}
-                      >
-                        <CheckCircle className="h-3.5 w-3.5" />
-                      </Button>
                     </div>
                   </div>
                 );
