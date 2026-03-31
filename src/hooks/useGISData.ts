@@ -2,6 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { getCityCoords } from "@/lib/saxonyCities";
 import { computeRiskScore } from "@/lib/riskScore";
+import { apiFetch } from "@/lib/apiClient";
+
+interface DashboardStatsResponse {
+  total_users: number;
+  checkins_active: number;
+  active_alerts: number;
+  sensors: number;
+  caregivers: number;
+}
 
 export interface GISUser {
   id: string;
