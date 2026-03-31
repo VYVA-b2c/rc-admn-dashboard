@@ -187,24 +187,18 @@ export default function Dashboard() {
           </Button>
         )}
         <span className="text-xs text-muted-foreground ml-auto">
-          {filteredUsersRaw.length} of {data?.totalUsers ?? 0} users
+          {filteredUsers.length} of {data?.totalUsers ?? 0} users
         </span>
       </div>
 
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          {coordsLoading ? (
-            <div className="h-[420px] w-full flex items-center justify-center">
-              <p className="text-sm text-muted-foreground">Loading map…</p>
-            </div>
-          ) : (
-            <GISMap
-              users={usersWithCoords} // ✅ now has coords
-              onUserClick={handleUserClick}
-              heatmapMode={heatmapMode}
-            />
-          )}
+          <GISMap
+            users={filteredUsers}
+            onUserClick={handleUserClick}
+            heatmapMode={heatmapMode}
+          />
         </CardContent>
 
       </Card>
