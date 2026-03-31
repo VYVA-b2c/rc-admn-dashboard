@@ -120,8 +120,11 @@ export default function Dashboard() {
         <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
-      {/* Priority Alerts Panel */}
-      <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} onAlertClick={handleAlertClick} />
+      {/* Priority Alerts + At-Risk Users */}
+      <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
+        <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} onAlertClick={handleAlertClick} />
+        <AtRiskUsersPanel users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
+      </div>
 
       {/* Search & Filter Bar */}
       <div className="flex flex-wrap items-center gap-2">
