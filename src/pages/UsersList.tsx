@@ -1,7 +1,5 @@
 import { useState, useMemo, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,7 +26,7 @@ export default function UsersList() {
   const normalizedUsers = users.map((u: any) => ({
     ...u,
     health: { conditions: Array(u.healthConditions).fill("x") },
-    medsCount: 0,
+    medsCount: u.medsCount ?? 0,
     sensors: {
       total: u.sensorCount,
       online: u.sensorCount - u.offlineSensors,

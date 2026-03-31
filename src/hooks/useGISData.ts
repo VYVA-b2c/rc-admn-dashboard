@@ -46,7 +46,6 @@ export function useGISData() {
     queryKey: ["gis-data"],
     refetchInterval: 30000,
     queryFn: async () => {
-      // Fetch all GIS dashboard data in one call
       const res = await apiFetch<{
         totalUsers: number;
         checkinsEnabled: number;
@@ -59,7 +58,6 @@ export function useGISData() {
         cityDistribution: { city: string; count: number }[];
       }>("/api/v1/user-dashboard/users");
 
-      // Ensure coords exist for each user (fallback to getCityCoords)
       const gisUsers = res.gisUsers.map((u) => ({
         ...u,
         coords: u.coords || getCityCoords(u.city),
