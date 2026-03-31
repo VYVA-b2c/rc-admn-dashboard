@@ -2,6 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { getCityCoords } from "@/lib/saxonyCities";
 import { computeRiskScore } from "@/lib/riskScore";
+import { apiFetch } from "@/lib/apiClient";
+
+interface DashboardStatsResponse {
+  total_users: number;
+  checkins_active: number;
+  active_alerts: number;
+  sensors: number;
+  caregivers: number;
+}
 
 export interface GISUser {
   id: string;
@@ -51,12 +60,12 @@ export function useGISData() {
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       const sevenDaysAgoStr = sevenDaysAgo.toISOString().split("T")[0];
 
-      const [usersRes, alertsRes, sensorsRes, checkinsRes, caregiversRes, healthRes, medLogsRes] = await Promise.all([
+      const [statsRes, usersRes, alertsRes, sensorsRes, checkinsRes, healthRes, medLogsRes] = await Promise.all([
+        apiFetch<DashboardStatsResponse>("/api/v1/dashboard/stats"),
         supabase.from("vyva_users").select("id, first_name, last_name, city, phone, date_of_birth"),
         supabase.from("vyva_sensor_alerts").select("*").is("resolved_at", null),
         supabase.from("vyva_user_sensors").select("id, vyva_user_id, status"),
         supabase.from("vyva_user_checkins").select("vyva_user_id, enabled"),
-        supabase.from("vyva_user_caregivers").select("id", { count: "exact", head: true }),
         supabase.from("vyva_user_health").select("vyva_user_id, health_conditions"),
         supabase.from("vyva_medication_logs").select("vyva_user_id, status, scheduled_date").eq("status", "missed").gte("scheduled_date", sevenDaysAgoStr),
       ]);
@@ -173,12 +182,12 @@ export function useGISData() {
         });
 
       return {
-        totalUsers: users.length,
-        checkinsEnabled: checkins.filter((c) => c.enabled).length,
-        activeAlertCount: alerts.length,
+        totalUsers: statsRes.total_users,
+        checkinsEnabled: statsRes.checkins_active,
+        activeAlertCount: statsRes.active_alerts,
         criticalAlertCount: alerts.filter((a) => a.severity === "critical").length,
-        totalSensors: sensors.length,
-        caregiversLinked: caregiversRes.count || 0,
+        totalSensors: statsRes.sensors,
+        caregiversLinked: statsRes.caregivers,
         gisUsers,
         activeAlerts,
         cityDistribution,
