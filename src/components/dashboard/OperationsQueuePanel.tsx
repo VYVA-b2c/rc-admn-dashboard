@@ -18,13 +18,24 @@ interface OperationsQueuePanelProps {
 
 const ACTION_MAP: Record<string, string> = {
   fall_detected: "Call user immediately",
-  missed_checkin: "Follow up check-in",
-  high_heart_rate: "Review health status",
-  medication_missed: "Verify medication status",
-  inactivity_detected: "Welfare check required",
-  low_battery: "Replace sensor battery",
-  temperature_high: "Check environment",
-  door_open: "Verify user safety",
+  missed_checkin: "Retry check-in call",
+  high_heart_rate: "Assess user condition via call",
+  medication_missed: "Call to confirm medication taken",
+  inactivity_detected: "Schedule welfare check-in",
+  low_battery: "Contact user to verify device status",
+  temperature_high: "Call user about room conditions",
+  door_open: "Contact user to confirm safety",
+};
+
+const REASON_MAP: Record<string, string> = {
+  fall_detected: "No response after fall detection",
+  missed_checkin: "Multiple check-in attempts unanswered",
+  high_heart_rate: "Elevated heart rate detected",
+  medication_missed: "Medication reminder window expired",
+  inactivity_detected: "Extended period without activity",
+  low_battery: "Device battery may fail soon",
+  temperature_high: "Unusual room temperature reported",
+  door_open: "Door left open for unusual duration",
 };
 
 const SEVERITY_PRIORITY: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -63,8 +74,8 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
         userName: a.user_name,
         userId: a.vyva_user_id,
         phone: a.phone,
-        action: ACTION_MAP[a.alert_type] || "Review alert",
-        reason: a.message || `${a.alert_type} detected`,
+        action: ACTION_MAP[a.alert_type] || "Contact user",
+        reason: REASON_MAP[a.alert_type] || a.message || a.alert_type.replace(/_/g, " "),
         severity: a.severity,
         urgency: getUrgency(a.severity, a.created_at),
         priority: SEVERITY_PRIORITY[a.severity] ?? 3,

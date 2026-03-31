@@ -1,4 +1,3 @@
-import { useCallback } from "react";
 import { AlertTriangle, Eye, Phone, CheckCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,9 +5,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDistanceToNow, differenceInMinutes } from "date-fns";
-import { supabase } from "@/integrations/supabase/client";
-import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "@/hooks/use-toast";
 import type { ActiveAlert } from "@/hooks/useGISData";
 
 const SEVERITY_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -36,7 +32,7 @@ const ALERT_MESSAGES: Record<string, string> = {
 };
 
 function formatAlertMessage(alertType: string, message: string | null): string {
-  return ALERT_MESSAGES[alertType] || message || "Alert requires attention";
+  return ALERT_MESSAGES[alertType] || message || alertType.replace(/_/g, " ");
 }
 
 /* ---------- Status derivation ---------- */
@@ -103,25 +99,6 @@ interface Props {
 }
 
 export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
-  const queryClient = useQueryClient();
-
-  const handleResolve = useCallback(
-    async (alertId: string) => {
-      const { error } = await supabase
-        .from("vyva_sensor_alerts")
-        .update({ resolved_at: new Date().toISOString() })
-        .eq("id", alertId);
-
-      if (error) {
-        toast({ title: "Failed to resolve alert", description: error.message, variant: "destructive" });
-      } else {
-        toast({ title: "Alert resolved" });
-        queryClient.invalidateQueries({ queryKey: ["gis-data"] });
-      }
-    },
-    [queryClient],
-  );
-
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -195,14 +172,6 @@ export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
                           </a>
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-vyva-green hover:text-vyva-green"
-                        onClick={(e) => { e.stopPropagation(); handleResolve(alert.id); }}
-                      >
-                        <CheckCircle className="h-3.5 w-3.5" />
-                      </Button>
                     </div>
                   </div>
                 );
