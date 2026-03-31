@@ -197,17 +197,11 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          {coordsLoading ? (
-            <div className="h-[420px] w-full flex items-center justify-center">
-              <p className="text-sm text-muted-foreground">Loading map…</p>
-            </div>
-          ) : (
-            <GISMap
-              users={usersWithCoords} // ✅ now has coords
-              onUserClick={handleUserClick}
-              heatmapMode={heatmapMode}
-            />
-          )}
+          <GISMap
+            users={usersWithCoords}
+            onUserClick={handleUserClick}
+            heatmapMode={heatmapMode}
+          />
         </CardContent>
 
       </Card>
