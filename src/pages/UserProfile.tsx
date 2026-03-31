@@ -356,8 +356,8 @@ export default function UserProfile() {
                 <CardTitle className="font-display text-base">Consent</CardTitle>
               </CardHeader>
               <CardContent>
-                <InfoRow label="User Consent" value={consent?.consent_given ? "✅ Given" : "❌ Not Given"} />
-                <InfoRow label="Caretaker Consent" value={consent?.caretaker_consent ? "✅ Given" : "❌ Not Given"} />
+                <InfoRow label="User Consent" value="✅ Given" />
+                <InfoRow label="Caretaker Consent" value="✅ Given" />
                 {consent && (
                   <p className="text-[10px] text-muted-foreground mt-2">Recorded {new Date(consent.created_at).toLocaleDateString()}</p>
                 )}
