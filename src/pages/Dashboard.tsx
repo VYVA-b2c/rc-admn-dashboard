@@ -12,7 +12,7 @@ import { GISMap } from "@/components/dashboard/GISMap";
 import { UserDetailModal } from "@/components/dashboard/UserDetailModal";
 import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel";
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
-import { AtRiskUsersPanel } from "@/components/dashboard/AtRiskUsersPanel";
+import { OperationsQueuePanel } from "@/components/dashboard/OperationsQueuePanel";
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
   return (
