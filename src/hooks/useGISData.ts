@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCityCoords } from "@/lib/saxonyCities";
+
 import { computeRiskScore } from "@/lib/riskScore";
 import { apiFetch } from "@/lib/apiClient";
 
