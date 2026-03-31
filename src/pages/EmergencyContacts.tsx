@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Phone } from "lucide-react";
+import { BASE_URL } from "@/lib/apiClient";
 
 export default function EmergencyContacts() {
   const [search, setSearch] = useState("");
@@ -14,31 +15,11 @@ export default function EmergencyContacts() {
   const { data: contacts, isLoading } = useQuery({
     queryKey: ["emergency-contacts"],
     queryFn: async () => {
-      const { data: caregivers, error: cErr } = await supabase
-        .from("vyva_user_caregivers")
-        .select("*");
-      if (cErr) throw cErr;
-
-      const userIds = [...new Set((caregivers || []).map((c) => c.vyva_user_id))];
-      if (userIds.length === 0) return [];
-
-      const { data: users, error: uErr } = await supabase
-        .from("vyva_users")
-        .select("id, first_name, last_name, phone, city")
-        .in("id", userIds);
-      if (uErr) throw uErr;
-
-      const userMap = new Map((users || []).map((u) => [u.id, u]));
-
-      return (caregivers || []).map((c) => {
-        const user = userMap.get(c.vyva_user_id);
-        return {
-          ...c,
-          userName: user ? `${user.first_name} ${user.last_name}` : "Unknown",
-          userPhone: user?.phone ?? null,
-          city: user?.city ?? null,
-        };
-      });
+      // Call your backend API instead of Supabase
+      const res = await fetch(`${BASE_URL}/api/v1/caretaker-dashboard/caretakers`);
+      if (!res.ok) throw new Error("Failed to fetch contacts");
+      const data = await res.json();
+      return data.caretakers; // match your backend response
     },
   });
 
@@ -46,10 +27,10 @@ export default function EmergencyContacts() {
     if (!search) return true;
     const s = search.toLowerCase();
     return (
-      c.userName.toLowerCase().includes(s) ||
-      c.caretaker_name?.toLowerCase().includes(s) ||
-      c.caretaker_phone?.toLowerCase().includes(s) ||
-      c.userPhone?.toLowerCase().includes(s)
+      c.user_name.toLowerCase().includes(s) ||
+      c.caregiver_name?.toLowerCase().includes(s) ||
+      c.caregiver_phone?.toLowerCase().includes(s) ||
+      c.user_phone?.toLowerCase().includes(s)
     );
   });
 
@@ -102,16 +83,16 @@ export default function EmergencyContacts() {
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((c) => (
+              filtered.map((c, index) => (
                 <TableRow
-                  key={c.id}
+                  key={index}
                   className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => navigate(`/users/${c.vyva_user_id}`)}
+                  onClick={() => navigate(`/users/${c.user_id || c.id || ""}`)} // backend must return user id if you want navigation
                 >
-                  <TableCell className="font-medium">{c.userName}</TableCell>
-                  <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
-                  <TableCell>{c.caretaker_name || "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{c.caretaker_phone || "—"}</TableCell>
+                  <TableCell className="font-medium">{c.user_name}</TableCell>
+                  <TableCell className="text-muted-foreground">{c.user_phone || "—"}</TableCell>
+                  <TableCell>{c.caregiver_name || "—"}</TableCell>
+                  <TableCell className="text-muted-foreground">{c.caregiver_phone || "—"}</TableCell>
                   <TableCell>{c.city || "—"}</TableCell>
                 </TableRow>
               ))

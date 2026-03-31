@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +12,7 @@ import {
   Calendar, Globe, Phone, AlertTriangle, Battery, Wifi, WifiOff, Zap, Pencil, Plus, Trash2,
 } from "lucide-react";
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   LineChart, Line, PieChart, Pie, Cell, Legend,
 } from "recharts";
 import { toast } from "@/hooks/use-toast";
@@ -23,6 +22,7 @@ import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditServiceDialog } from "@/components/user/EditServiceDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
 import { EditSensorDialog } from "@/components/user/EditSensorDialog";
+import { BASE_URL } from "@/lib/apiClient";
 
 function InfoRow({ label, value, icon }: { label: string; value: string | null | undefined; icon?: React.ReactNode }) {
   return (
@@ -75,63 +75,46 @@ export default function UserProfile() {
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
     queryFn: async () => {
-      const [userRes, consentRes, healthRes, medsRes, checkinsRes, brainRes, careRes, sensorsRes, alertsRes, readingsRes] =
-        await Promise.all([
-          supabase.from("vyva_users").select("*").eq("id", id!).single(),
-          supabase.from("vyva_user_consent").select("*").eq("vyva_user_id", id!).maybeSingle(),
-          supabase.from("vyva_user_health").select("*").eq("vyva_user_id", id!).maybeSingle(),
-          supabase.from("vyva_user_medications").select("*").eq("vyva_user_id", id!),
-          supabase.from("vyva_user_checkins").select("*").eq("vyva_user_id", id!).maybeSingle(),
-          supabase.from("vyva_user_brain_coach").select("*").eq("vyva_user_id", id!).maybeSingle(),
-          supabase.from("vyva_user_caregivers").select("*").eq("vyva_user_id", id!),
-          supabase.from("vyva_user_sensors").select("*").eq("vyva_user_id", id!),
-          supabase.from("vyva_sensor_alerts").select("*, vyva_user_sensors(device_name, sensor_type)").eq("vyva_user_id", id!).order("created_at", { ascending: false }).limit(50),
-          supabase.from("vyva_sensor_readings").select("*, vyva_user_sensors!inner(sensor_type, vyva_user_id)").eq("vyva_user_sensors.vyva_user_id", id!).order("recorded_at", { ascending: false }).limit(200),
-        ]);
-      return {
-        user: userRes.data,
-        consent: consentRes.data,
-        health: healthRes.data,
-        medications: medsRes.data || [],
-        checkins: checkinsRes.data,
-        brainCoach: brainRes.data,
-        caregivers: careRes.data || [],
-        sensors: sensorsRes.data || [],
-        alerts: alertsRes.data || [],
-        readings: readingsRes.data || [],
-      };
+      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/user-info?user_id=${id}`);
+
+      if (!res.ok) {
+        throw new Error("Failed to fetch user profile");
+      }
+
+      return res.json();
     },
     enabled: !!id,
   });
 
   const handleDeleteMedication = async (medId: string) => {
-    const { error } = await supabase.from("vyva_user_medications").delete().eq("id", medId);
-    if (error) {
-      toast({ title: "Error deleting", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/medications/${medId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) throw new Error("Failed");
+
       toast({ title: "Medication deleted" });
+
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    } catch (err) {
+      toast({ title: "Error deleting", variant: "destructive" });
     }
   };
 
   const handleDeleteCaregiver = async (caregiverId: string) => {
-    const { error } = await supabase.from("vyva_user_caregivers").delete().eq("id", caregiverId);
-    if (error) {
-      toast({ title: "Error deleting", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Caregiver removed" });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
-    }
-  };
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/caregivers/${caregiverId}`, {
+        method: "DELETE",
+      });
 
-  const handleDeleteSensor = async (sensorId: string) => {
-    const { error } = await supabase.from("vyva_user_sensors").delete().eq("id", sensorId);
-    if (error) {
-      toast({ title: "Error deleting sensor", description: error.message, variant: "destructive" });
-    } else {
-      toast({ title: "Sensor removed" });
+      if (!res.ok) throw new Error("Failed");
+
+      toast({ title: "Caregiver removed" });
+
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
-      queryClient.invalidateQueries({ queryKey: ["sensor-devices"] });
+    } catch (err) {
+      toast({ title: "Error deleting", variant: "destructive" });
     }
   };
 
@@ -202,10 +185,8 @@ export default function UserProfile() {
     return Object.values(days);
   })();
 
-  // Onboarded days ago
   const daysOnboarded = Math.floor((Date.now() - new Date(user.created_at).getTime()) / (24 * 60 * 60 * 1000));
 
-  // Services completion
   const services = [
     { name: "Check-ins", active: checkins?.enabled, icon: PhoneCall },
     { name: "Brain Coach", active: brainCoach?.enabled, icon: Brain },
@@ -605,9 +586,6 @@ export default function UserProfile() {
                           </Badge>
                           <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditSensorTarget(sensor); setEditSensorOpen(true); }}>
                             <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDeleteSensor(sensor.id)}>
-                            <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       </div>

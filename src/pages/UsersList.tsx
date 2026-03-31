@@ -11,118 +11,56 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
   Search, Users, HeartPulse, Pill, PhoneCall, Brain, MapPin, Activity,
-  ShieldCheck, User, ChevronRight, AlertTriangle, Heart,
+  User, ChevronRight, AlertTriangle, Heart,
 } from "lucide-react";
 import { computeRiskScore, getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
+import { useGISData } from "@/hooks/useGISData"; // adjust path
 
 export default function UsersList() {
   const [search, setSearch] = useState("");
   const [cityFilter, setCityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const navigate = useNavigate();
+  const { data: gisData, isLoading } = useGISData();
 
-  const { data: users, isLoading } = useQuery({
-    queryKey: ["vyva-users-list-full"],
-    queryFn: async () => {
-      const { data: usersData, error } = await supabase
-        .from("vyva_users")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
+  const users = gisData?.gisUsers ?? [];
 
-      const userIds = (usersData || []).map((u: any) => u.id);
-      if (userIds.length === 0) return [];
-
-      const [checkinsRes, brainRes, careRes, healthRes, medsRes, sensorsRes, alertsRes] = await Promise.all([
-        supabase.from("vyva_user_checkins").select("vyva_user_id, enabled").in("vyva_user_id", userIds),
-        supabase.from("vyva_user_brain_coach").select("vyva_user_id, enabled").in("vyva_user_id", userIds),
-        supabase.from("vyva_user_caregivers").select("vyva_user_id, caretaker_name").in("vyva_user_id", userIds),
-        supabase.from("vyva_user_health").select("vyva_user_id, health_conditions, mobility_needs").in("vyva_user_id", userIds),
-        supabase.from("vyva_user_medications").select("vyva_user_id, medication_name").in("vyva_user_id", userIds),
-        supabase.from("vyva_user_sensors").select("vyva_user_id, status, battery_level").in("vyva_user_id", userIds),
-        supabase.from("vyva_sensor_alerts").select("vyva_user_id, severity, resolved_at").in("vyva_user_id", userIds),
-      ]);
-
-      const checkinsMap = new Map((checkinsRes.data || []).map((c: any) => [c.vyva_user_id, c.enabled]));
-      const brainMap = new Map((brainRes.data || []).map((b: any) => [b.vyva_user_id, b.enabled]));
-
-      // Group caregivers
-      const careMap = new Map<string, string[]>();
-      (careRes.data || []).forEach((c: any) => {
-        const arr = careMap.get(c.vyva_user_id) || [];
-        if (c.caretaker_name) arr.push(c.caretaker_name);
-        careMap.set(c.vyva_user_id, arr);
-      });
-
-      // Group health conditions
-      const healthMap = new Map<string, { conditions: string[]; mobility: string[] }>();
-      (healthRes.data || []).forEach((h: any) => {
-        healthMap.set(h.vyva_user_id, {
-          conditions: h.health_conditions || [],
-          mobility: h.mobility_needs || [],
-        });
-      });
-
-      // Count meds per user
-      const medsCountMap = new Map<string, number>();
-      (medsRes.data || []).forEach((m: any) => {
-        medsCountMap.set(m.vyva_user_id, (medsCountMap.get(m.vyva_user_id) || 0) + 1);
-      });
-
-      // Sensors per user
-      const sensorsMap = new Map<string, { total: number; online: number; lowBattery: number }>();
-      (sensorsRes.data || []).forEach((s: any) => {
-        const cur = sensorsMap.get(s.vyva_user_id) || { total: 0, online: 0, lowBattery: 0 };
-        cur.total++;
-        if (s.status === "online") cur.online++;
-        if (s.battery_level != null && s.battery_level < 20) cur.lowBattery++;
-        sensorsMap.set(s.vyva_user_id, cur);
-      });
-
-      // Active alerts per user
-      const alertsMap = new Map<string, { critical: number; warning: number }>();
-      (alertsRes.data || []).forEach((a: any) => {
-        if (a.resolved_at) return;
-        const cur = alertsMap.get(a.vyva_user_id) || { critical: 0, warning: 0 };
-        if (a.severity === "critical") cur.critical++;
-        else cur.warning++;
-        alertsMap.set(a.vyva_user_id, cur);
-      });
-
-      return (usersData || []).map((u: any) => ({
-        ...u,
-        checkinsEnabled: checkinsMap.get(u.id) ?? false,
-        brainCoachEnabled: brainMap.get(u.id) ?? false,
-        caregiverNames: careMap.get(u.id) || [],
-        health: healthMap.get(u.id) || { conditions: [], mobility: [] },
-        medsCount: medsCountMap.get(u.id) || 0,
-        sensors: sensorsMap.get(u.id) || { total: 0, online: 0, lowBattery: 0 },
-        alerts: alertsMap.get(u.id) || { critical: 0, warning: 0 },
-      }));
+  const normalizedUsers = users.map((u: any) => ({
+    ...u,
+    health: { conditions: Array(u.healthConditions).fill("x") },
+    medsCount: 0,
+    sensors: {
+      total: u.sensorCount,
+      online: u.sensorCount - u.offlineSensors,
     },
-  });
-
-  // Derived stats
-  const totalUsers = users?.length || 0;
-  const withCheckins = users?.filter((u: any) => u.checkinsEnabled).length || 0;
-  const withAlerts = users?.filter((u: any) => u.alerts.critical > 0 || u.alerts.warning > 0).length || 0;
-  const withSensors = users?.filter((u: any) => u.sensors.total > 0).length || 0;
+    alerts: {
+      critical: u.criticalAlerts,
+      warning: u.activeAlerts - u.criticalAlerts,
+    },
+    caregiverNames: [],
+  }));
+  const statsLoading = isLoading;
+  const totalUsers = gisData?.totalUsers ?? 0;
+  const withCheckins = gisData?.checkinsEnabled ?? 0;
+  const withAlerts = gisData?.activeAlertCount ?? 0;
+  const withSensors = gisData?.totalSensors ?? 0;
 
   // Cities for filter
   const cities = useMemo(() => {
-    if (!users?.length) return [];
-    const set = new Set(users.map((u: any) => u.city).filter(Boolean));
+    if (!normalizedUsers.length) return [];
+    const set = new Set(normalizedUsers.map((u: any) => u.city).filter(Boolean));
     return Array.from(set).sort() as string[];
-  }, [users]);
+  }, [normalizedUsers]);
 
   // Filter + search
   const filtered = useMemo(() => {
-    let result = (users || []).filter((u: any) => {
+    let result = normalizedUsers.filter((u: any) => {
       if (cityFilter !== "all" && u.city !== cityFilter) return false;
       if (statusFilter === "alerts" && u.alerts.critical === 0 && u.alerts.warning === 0) return false;
       if (statusFilter === "sensors" && u.sensors.total === 0) return false;
       if (statusFilter === "no-caregiver" && u.caregiverNames.length > 0) return false;
       if (!search) return true;
+
       const s = search.toLowerCase();
       return (
         `${u.first_name} ${u.last_name}`.toLowerCase().includes(s) ||
@@ -131,18 +69,20 @@ export default function UsersList() {
         u.caregiverNames.join(" ").toLowerCase().includes(s)
       );
     });
+
     if (statusFilter === "highest-risk") {
       result = [...result].sort((a, b) => getUserRiskScore(b) - getUserRiskScore(a));
     }
+
     return result;
-  }, [users, search, cityFilter, statusFilter]);
+  }, [normalizedUsers, search, cityFilter, statusFilter]);
 
   // Risk score computation
   const getUserRiskScore = (user: any) => {
     return computeRiskScore({
       criticalAlerts: user.alerts.critical,
       activeAlerts: user.alerts.critical + user.alerts.warning,
-      missedMeds7d: 0, // Would need separate query; using 0 for list view
+      missedMeds7d: 0, 
       checkinEnabled: user.checkinsEnabled,
       offlineSensors: Math.max(user.sensors.total - user.sensors.online, 0),
       healthConditions: user.health.conditions.length,

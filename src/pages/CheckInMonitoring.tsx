@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -9,8 +8,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/StatCard";
 import { Search, PhoneCall, CheckCircle, XCircle, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { BASE_URL } from "@/lib/apiClient";
 
 type FilterTab = "all" | "active" | "inactive";
+
+interface Checkin {
+  id: number;
+  user_id: number;
+  userName: string;
+  userPhone?: string;
+  city?: string;
+  is_active: boolean;
+  frequency_days: number;
+  preferred_time?: string | null;
+}
 
 export default function CheckInMonitoring() {
   const [search, setSearch] = useState("");
@@ -18,49 +29,29 @@ export default function CheckInMonitoring() {
   const navigate = useNavigate();
 
   const { data: checkins, isLoading } = useQuery({
-    queryKey: ["checkin-monitoring"],
-    queryFn: async () => {
-      const { data: checkinData, error: cErr } = await supabase
-        .from("vyva_user_checkins")
-        .select("*");
-      if (cErr) throw cErr;
-
-      const userIds = [...new Set((checkinData || []).map((c) => c.vyva_user_id))];
-      if (userIds.length === 0) return [];
-
-      const { data: users, error: uErr } = await supabase
-        .from("vyva_users")
-        .select("id, first_name, last_name, phone, city")
-        .in("id", userIds);
-      if (uErr) throw uErr;
-
-      const userMap = new Map((users || []).map((u) => [u.id, u]));
-
-      return (checkinData || []).map((c) => {
-        const user = userMap.get(c.vyva_user_id);
-        return {
-          ...c,
-          userName: user ? `${user.first_name} ${user.last_name}` : "Unknown",
-          userPhone: user?.phone ?? null,
-          city: user?.city ?? null,
-        };
-      });
+    queryKey: ["checkin-monitoring"], // Removed search/filter from key
+    queryFn: async (): Promise<Checkin[]> => {
+      const res = await fetch(`${BASE_URL}/api/v1/checkins-dashboard/checkins`); // Direct API call
+      if (!res.ok) throw new Error("Failed to fetch check-ins");
+      return res.json();
     },
   });
 
+  // Stats
   const stats = useMemo(() => {
     const all = checkins || [];
     return {
       total: all.length,
-      active: all.filter((c) => c.enabled).length,
-      inactive: all.filter((c) => !c.enabled).length,
+      active: all.filter((c) => c.is_active).length,
+      inactive: all.filter((c) => !c.is_active).length,
     };
   }, [checkins]);
 
+  // Frontend filtering/search
   const filtered = useMemo(() => {
     let list = checkins || [];
-    if (filter === "active") list = list.filter((c) => c.enabled);
-    if (filter === "inactive") list = list.filter((c) => !c.enabled);
+    if (filter === "active") list = list.filter((c) => c.is_active);
+    if (filter === "inactive") list = list.filter((c) => !c.is_active);
     if (search) {
       const s = search.toLowerCase();
       list = list.filter(
@@ -136,6 +127,7 @@ export default function CheckInMonitoring() {
         </div>
       </div>
 
+      {/* Table */}
       <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
         <Table>
           <TableHeader>
@@ -170,17 +162,17 @@ export default function CheckInMonitoring() {
                 <TableRow
                   key={c.id}
                   className="cursor-pointer hover:bg-muted/50 transition-colors"
-                  onClick={() => navigate(`/users/${c.vyva_user_id}`)}
+                  onClick={() => navigate(`/users/${c.user_id}`)}
                 >
                   <TableCell className="font-medium">{c.userName}</TableCell>
                   <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
                   <TableCell>{c.city || "—"}</TableCell>
                   <TableCell>
-                    <Badge variant={c.enabled ? "default" : "secondary"} className="text-xs">
-                      {c.enabled ? "Active" : "Inactive"}
+                    <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
+                      {c.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
-                  <TableCell>{c.frequency || "—"}</TableCell>
+                  <TableCell>{c.frequency_days || "—"}</TableCell>
                   <TableCell>{c.preferred_time || "—"}</TableCell>
                 </TableRow>
               ))

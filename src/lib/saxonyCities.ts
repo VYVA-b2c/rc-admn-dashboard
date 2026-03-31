@@ -18,6 +18,8 @@ export const SAXONY_CITY_COORDS: Record<string, [number, number]> = {
   Delitzsch: [51.5254, 12.3428],
   Torgau: [51.5603, 12.9961],
   Annaberg: [50.5799, 13.0021],
+  Hamburg: [50.5799, 13.0021],
+  Berlin: [50.5799, 13.0021],
   "Annaberg-Buchholz": [50.5799, 13.0021],
 };
 
