@@ -1,68 +1,49 @@
 
 
-## Plan: Replace At-Risk Users with Operations Queue
+## Plan: Refactor Priority Alerts + Operations Queue for Clear Role Separation
 
-### Overview
-Replace the "At-Risk Users" panel with an operational "Operations Queue" panel that shows actionable tasks derived from active alerts and user data. Each row is a clear instruction — not analytics.
+### Problem
+Both panels share similar wording and logic. The Operations Queue contains bad actions ("Review alert", "Replace sensor battery", "Verify user safety") and reuses raw alert messages as reasons instead of translating them into human-readable action context.
 
 ### Changes
 
-**1. Delete `src/components/dashboard/AtRiskUsersPanel.tsx`** — replaced entirely.
+**1. `src/components/dashboard/PriorityAlertsPanel.tsx`** — make purely informational
+- Remove the "Resolve" (CheckCircle) action button — resolving belongs in the Operations Queue
+- Keep only View (Eye) and Call (Phone) as quick-reference actions
+- Update fallback message from "Alert requires attention" to just use the raw message or alert_type label
+- This panel stays as-is otherwise — it already has good event-style copy
 
-**2. New component: `src/components/dashboard/OperationsQueuePanel.tsx`**
+**2. `src/components/dashboard/OperationsQueuePanel.tsx`** — fix action copy and reasons
 
-Derives tasks from `ActiveAlert[]` and `GISUser[]` data:
-
-- Each unresolved alert becomes a task with:
-  - **User name** from alert
-  - **Action** (bold): mapped from `alert_type` (e.g. `fall_detected` → "Call user immediately", `missed_checkin` → "Follow up check-in", `medication_missed` → "Verify medication status")
-  - **Reason** (short): reuses alert message logic
-  - **Priority**: mapped from severity (critical → red, high → orange, medium → yellow)
-  - **Time urgency**: derived from severity + age (critical → "Now", high < 30min → "Within 30 min", medium → "In 10 min", etc.)
-
-- Additionally generates routine tasks from GISUsers with check-ins enabled but no recent alerts (e.g. "Routine check-in" — medium priority)
-
-Task list capped at 8 items, sorted by priority then urgency.
-
-Each row layout:
-- Left: colored priority indicator dot
-- Center: user name, bold action line, short reason, time urgency pill
-- Right: Call button, View button, Mark as Done (checkmark) button
-
-"Mark as done" removes the task from the local list (client-side state via `useState` tracking dismissed IDs). For alert-based tasks, also resolves the underlying alert in the database.
-
-Header: "Operations Queue" with subtitle "What to do next"
-
-**3. Update `src/pages/Dashboard.tsx`**
-- Replace `AtRiskUsersPanel` import with `OperationsQueuePanel`
-- Pass `alerts` and `gisUsers` as props
-- Keep the 2-column grid layout alongside Priority Alerts
-
-### Action-type mapping
-```text
+Replace the ACTION_MAP with proper human-actionable verbs:
+```
 fall_detected      → "Call user immediately"
-missed_checkin     → "Follow up check-in"
-high_heart_rate    → "Review health status"
-medication_missed  → "Verify medication status"
-inactivity_detected → "Welfare check required"
-low_battery        → "Replace sensor battery"
-temperature_high   → "Check environment"
-door_open          → "Verify user safety"
-default            → "Review alert"
+missed_checkin     → "Retry check-in call"
+high_heart_rate    → "Assess user condition via call"
+medication_missed  → "Call to confirm medication taken"
+inactivity_detected → "Schedule welfare check-in"
+low_battery        → "Contact user to verify device status"
+temperature_high   → "Call user about room conditions"
+door_open          → "Contact user to confirm safety"
+default            → "Contact user"
 ```
 
-### Time urgency logic
-```text
-critical           → "Now"
-high, <30 min old  → "Within 10 min"
-high, >30 min old  → "Within 30 min"
-medium             → "Within 1 hour"
+Add a separate REASON_MAP so reasons differ from alert copy:
 ```
-
-### No database changes needed.
+fall_detected      → "No response after fall detection"
+missed_checkin     → "Multiple check-in attempts unanswered"
+high_heart_rate    → "Elevated heart rate detected"
+medication_missed  → "Medication reminder window expired"
+inactivity_detected → "Extended period without activity"
+low_battery        → "Device battery may fail soon"
+temperature_high   → "Unusual room temperature reported"
+door_open          → "Door left open for unusual duration"
+default            → uses raw message
+```
 
 ### Files
-- **Deleted**: `src/components/dashboard/AtRiskUsersPanel.tsx`
-- **New**: `src/components/dashboard/OperationsQueuePanel.tsx`
-- **Modified**: `src/pages/Dashboard.tsx`
+- **Modified**: `src/components/dashboard/PriorityAlertsPanel.tsx` — remove resolve button
+- **Modified**: `src/components/dashboard/OperationsQueuePanel.tsx` — new ACTION_MAP + REASON_MAP, remove "Review alert" fallback
+
+### No database changes needed.
 
