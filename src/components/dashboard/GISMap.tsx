@@ -211,7 +211,7 @@ export function GISMap({ users, onUserClick, heatmapMode = false }: GISMapProps)
           maxWidth: 260,
         });
 
-        marker.on("click", () => onUserClick?.(user));
+        
 
         cluster.addLayer(marker);
         bounds.extend(user.coords);
