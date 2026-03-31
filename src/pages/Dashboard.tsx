@@ -14,7 +14,6 @@ import { PriorityAlertsPanel } from "@/components/dashboard/PriorityAlertsPanel"
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 import { OperationsQueuePanel } from "@/components/dashboard/OperationsQueuePanel";
 import { useQuery } from "@tanstack/react-query";
-import { getCityCoords } from "@/lib/saxonyCities";
 
 
 function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label: string; value: number; color: string }) {
@@ -61,20 +60,7 @@ export default function Dashboard() {
     return users;
   }, [data?.gisUsers, searchQuery, statusFilter, cityFilter, riskFilter]);
 
-  // Fetch coords for filtered users
-  const { data: usersWithCoords = [], isLoading: coordsLoading } = useQuery({
-    queryKey: ["users-with-coords", filteredUsersRaw],
-    queryFn: async () => {
-      const results = await Promise.all(
-        filteredUsersRaw.map(async (u) => {
-          const coords = await getCityCoords(u.city); // coords is [number, number]
-          return { ...u, coords } as GISUser;         // <-- assert type here
-        })
-      );
-      return results;
-    },
-    enabled: filteredUsersRaw.length > 0,
-  });
+  const usersWithCoords = filteredUsersRaw;
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
     setInterventionOpen(true);
@@ -211,17 +197,11 @@ export default function Dashboard() {
       {/* Map */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          {coordsLoading ? (
-            <div className="h-[420px] w-full flex items-center justify-center">
-              <p className="text-sm text-muted-foreground">Loading map…</p>
-            </div>
-          ) : (
-            <GISMap
-              users={usersWithCoords} // ✅ now has coords
-              onUserClick={handleUserClick}
-              heatmapMode={heatmapMode}
-            />
-          )}
+          <GISMap
+            users={usersWithCoords}
+            onUserClick={handleUserClick}
+            heatmapMode={heatmapMode}
+          />
         </CardContent>
 
       </Card>
