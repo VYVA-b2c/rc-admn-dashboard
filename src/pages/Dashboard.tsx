@@ -123,7 +123,7 @@ export default function Dashboard() {
       {/* Priority Alerts + At-Risk Users */}
       <div className="grid gap-4 grid-cols-1 lg:grid-cols-2">
         <PriorityAlertsPanel alerts={data?.activeAlerts ?? []} onAlertClick={handleAlertClick} />
-        <AtRiskUsersPanel users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
+        <OperationsQueuePanel alerts={data?.activeAlerts ?? []} users={data?.gisUsers ?? []} onUserClick={handleUserClick} />
       </div>
 
       {/* Search & Filter Bar */}
