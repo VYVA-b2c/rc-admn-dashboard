@@ -1,35 +1,50 @@
 
 
-## Plan: Integrate Backend API for Dashboard Stats
+## Plan: Admin Creates User with Temporary Password
 
 ### Overview
-Replace the Supabase-based stat queries with a fetch to the external API endpoint. The Dashboard currently gets its stats from `useGISData()` (which queries multiple Supabase tables). We'll update `useGISData` to fetch the top-level stats from the API instead, while keeping the rest of the GIS logic intact for now.
-
-### API
-```
-GET https://20f8-209-101-30-182.ngrok-free.app/api/v1/dashboard/stats
-→ { total_users, checkins_active, active_alerts, sensors, caregivers }
-```
+Replace the invite-by-email flow with a direct user creation approach. The admin enters an email + temporary password, the backend creates the user immediately, and the admin shares credentials manually.
 
 ### Changes
 
-**1. Create `src/lib/apiClient.ts`**
-- Export a `BASE_URL` constant pointing to the ngrok endpoint
-- Export a reusable `apiFetch(path)` helper that adds the `ngrok-skip-browser-warning` header (required for ngrok free tier) and handles JSON parsing + error throwing
+**1. Update Edge Function `supabase/functions/invite-admin/index.ts`**
+- Accept `{ email, password, role }` in request body (role defaults to "admin")
+- Replace `inviteUserByEmail` with `supabase.auth.admin.createUser({ email, password, email_confirm: true })`
+- This creates a confirmed user instantly — no email sent, no link needed
+- Still assigns role in `user_roles` table
+- Return `{ success: true, email }` on success
 
-**2. Update `src/hooks/useGISData.ts`**
-- Import `apiFetch` from the new API client
-- In the `queryFn`, fetch `/api/v1/dashboard/stats` in parallel with the existing Supabase calls (alerts, users for GIS, etc.)
-- Use the API response for the 5 top-level stats: `totalUsers`, `checkinsEnabled`, `activeAlertCount`, `totalSensors`, `caregiversLinked`
-- Keep existing Supabase queries for GIS user positions, alerts list, city distribution, and risk scoring (these aren't served by this endpoint yet)
+**2. Update `src/pages/InviteAdmin.tsx`**
+- Add a password input field next to email
+- Add a role selector (admin / operator / coordinator) using a Select dropdown
+- On submit, send `{ email, password, role }` to the edge function
+- On success, show a toast with the credentials so the admin can copy/share them
+- Optionally add a "copy credentials" button in the success toast
 
-**3. Clean up `src/hooks/useDashboardStats.ts`**
-- This hook is not imported anywhere. Delete it to avoid confusion since the dashboard stats now come from the API via `useGISData`.
+**3. No database changes needed**
+- `user_roles` table already supports admin/operator/coordinator roles
+- `profiles` table auto-populates via the `handle_new_user` trigger
+- Existing RLS policies cover all access patterns
+
+### Technical Details
+
+Edge function key change:
+```typescript
+// Replace inviteUserByEmail with:
+const { data, error } = await supabase.auth.admin.createUser({
+  email,
+  password,
+  email_confirm: true, // skip email verification
+  user_metadata: { role },
+});
+```
+
+UI form adds:
+- Password field (type="password", min 6 chars)
+- Role select (admin | operator | coordinator)
+- Success feedback with copyable credentials
 
 ### Files
-- **New**: `src/lib/apiClient.ts`
-- **Modified**: `src/hooks/useGISData.ts`
-- **Deleted**: `src/hooks/useDashboardStats.ts`
-
-### No database changes needed.
+- **Modified**: `supabase/functions/invite-admin/index.ts`
+- **Modified**: `src/pages/InviteAdmin.tsx`
 
