@@ -7,11 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserPlus } from "lucide-react";
+import { UserPlus, Copy } from "lucide-react";
 
 export default function InviteAdmin() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState<string>("admin");
   const [loading, setLoading] = useState(false);
 
   const { data: admins, refetch } = useQuery({
@@ -26,63 +29,106 @@ export default function InviteAdmin() {
     },
   });
 
-  const handleInvite = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) return;
+    if (!email || !password) return;
+    if (password.length < 6) {
+      toast.error("Password must be at least 6 characters");
+      return;
+    }
     setLoading(true);
 
     try {
       const { error } = await supabase.functions.invoke("invite-admin", {
-        body: { email },
+        body: { email, password, role },
       });
 
       if (error) throw error;
-      toast.success("Invitation sent", { description: `An invite email has been sent to ${email}` });
+
+      const creds = `Email: ${email}\nPassword: ${password}`;
+      toast.success("User created successfully", {
+        description: `Share these credentials with the user`,
+        duration: 15000,
+        action: {
+          label: "Copy credentials",
+          onClick: () => navigator.clipboard.writeText(creds),
+        },
+      });
       setEmail("");
+      setPassword("");
       refetch();
     } catch (err: any) {
-      toast.error("Failed to send invitation", { description: err.message });
+      toast.error("Failed to create user", { description: err.message });
     }
     setLoading(false);
   };
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Invite Admin</h1>
+      <h1 className="font-display text-2xl font-bold text-foreground">Create User</h1>
 
       <Card>
         <CardHeader>
           <CardTitle className="font-display flex items-center gap-2">
             <UserPlus className="h-5 w-5 text-primary" />
-            Send Invitation
+            Create New User
           </CardTitle>
           <CardDescription>
-            Invite a new administrator by email. They will receive a link to set their password.
+            Create a user with a temporary password. Share the credentials manually.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleInvite} className="flex gap-3">
-            <div className="flex-1">
-              <Label htmlFor="invite-email" className="sr-only">Email</Label>
-              <Input
-                id="invite-email"
-                type="email"
-                placeholder="newadmin@vyva.io"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
+          <form onSubmit={handleCreate} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="create-email">Email</Label>
+                <Input
+                  id="create-email"
+                  type="email"
+                  placeholder="user@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="create-password">Temporary Password</Label>
+                <Input
+                  id="create-password"
+                  type="password"
+                  placeholder="Min. 6 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={6}
+                  required
+                />
+              </div>
             </div>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Sending..." : "Invite"}
-            </Button>
+            <div className="flex gap-3 items-end">
+              <div className="w-48 space-y-1.5">
+                <Label>Role</Label>
+                <Select value={role} onValueChange={setRole}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="admin">Admin</SelectItem>
+                    <SelectItem value="operator">Operator</SelectItem>
+                    <SelectItem value="coordinator">Coordinator</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="submit" disabled={loading}>
+                {loading ? "Creating..." : "Create User"}
+              </Button>
+            </div>
           </form>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="font-display">Current Admins</CardTitle>
+          <CardTitle className="font-display">Current Users</CardTitle>
         </CardHeader>
         <CardContent>
           <Table>
@@ -97,7 +143,7 @@ export default function InviteAdmin() {
               {admins?.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
-                    No admins configured yet.
+                    No users configured yet.
                   </TableCell>
                 </TableRow>
               ) : (

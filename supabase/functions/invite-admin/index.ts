@@ -26,7 +26,6 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Check admin role
     const { data: roleData } = await supabase
       .from("user_roles")
       .select("role")
@@ -35,43 +34,43 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (!roleData) {
-      return new Response(JSON.stringify({ error: "Only admins can invite users" }), {
+      return new Response(JSON.stringify({ error: "Only admins can create users" }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { email } = await req.json();
-    if (!email) {
-      return new Response(JSON.stringify({ error: "Email is required" }), {
+    const { email, password, role } = await req.json();
+    if (!email || !password) {
+      return new Response(JSON.stringify({ error: "Email and password are required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Invite user via Supabase Auth admin API with branded email
-    const siteUrl = Deno.env.get("SITE_URL") || "https://heartbeat-guardian-console.lovable.app";
+    const assignedRole = role || "admin";
 
-    const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
-      redirectTo: `${siteUrl}/reset-password`,
-      data: { invited_role: "admin" },
+    const { data, error } = await supabase.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: { role: assignedRole },
     });
     if (error) throw error;
 
-    // Assign admin role to invited user
     if (data.user) {
       await supabase.from("user_roles").insert({
         user_id: data.user.id,
-        role: "admin",
+        role: assignedRole,
       });
     }
 
-    return new Response(JSON.stringify({ success: true }), {
+    return new Response(JSON.stringify({ success: true, email }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Invite error:", error);
+    console.error("Create user error:", error);
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
