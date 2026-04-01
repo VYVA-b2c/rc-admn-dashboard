@@ -17,7 +17,7 @@ export default function ResetPassword() {
 
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash.includes("type=recovery")) {
+    if (hash.includes("type=recovery") || hash.includes("type=invite")) {
       setIsRecovery(true);
     }
   }, []);
