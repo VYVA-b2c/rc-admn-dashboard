@@ -66,8 +66,8 @@ export default function ResetPassword() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader>
-          <CardTitle className="font-display">Set New Password</CardTitle>
-          <CardDescription>Enter your new password below.</CardDescription>
+          <CardTitle className="font-display">{isInvite ? "Set Your Password" : "Reset Password"}</CardTitle>
+          <CardDescription>{isInvite ? "Welcome! Set a password to activate your account." : "Enter your new password below."}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
