@@ -9,12 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserPlus, Copy } from "lucide-react";
+import { UserPlus, Eye, EyeOff } from "lucide-react";
 
 export default function InviteAdmin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("admin");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const { data: admins, refetch } = useQuery({
@@ -93,15 +94,26 @@ export default function InviteAdmin() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="create-password">Temporary Password</Label>
-                <Input
-                  id="create-password"
-                  type="password"
-                  placeholder="Min. 6 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  minLength={6}
-                  required
-                />
+                <div className="relative">
+                  <Input
+                    id="create-password"
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Min. 6 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    minLength={6}
+                    required
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             </div>
             <div className="flex gap-3 items-end">
