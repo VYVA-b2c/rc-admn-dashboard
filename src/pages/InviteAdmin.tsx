@@ -15,6 +15,7 @@ export default function InviteAdmin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("admin");
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const { data: admins, refetch } = useQuery({
