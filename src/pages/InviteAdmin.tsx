@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserPlus, Copy } from "lucide-react";
+import { UserPlus, Eye, EyeOff } from "lucide-react";
 
 export default function InviteAdmin() {
   const [email, setEmail] = useState("");
