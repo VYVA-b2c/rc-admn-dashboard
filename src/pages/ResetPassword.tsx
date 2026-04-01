@@ -13,12 +13,16 @@ export default function ResetPassword() {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
-  const [isRecovery, setIsRecovery] = useState(false);
+  const [isValid, setIsValid] = useState(false);
+  const [isInvite, setIsInvite] = useState(false);
 
   useEffect(() => {
     const hash = window.location.hash;
-    if (hash.includes("type=recovery") || hash.includes("type=invite")) {
-      setIsRecovery(true);
+    if (hash.includes("type=invite")) {
+      setIsValid(true);
+      setIsInvite(true);
+    } else if (hash.includes("type=recovery")) {
+      setIsValid(true);
     }
   }, []);
 
