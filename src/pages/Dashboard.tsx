@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { getRiskBand } from "@/lib/riskScore";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X, Flame } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
