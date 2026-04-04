@@ -156,7 +156,7 @@ export default function Dashboard() {
             <SelectValue placeholder="City" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All cities</SelectItem>
+            <SelectItem value="all">{t("dashboard.allCities")}</SelectItem>
             {cities.map((c) => (
               <SelectItem key={c} value={c}>{c}</SelectItem>
             ))}
