@@ -226,8 +226,8 @@ export default function Sensors() {
         <Card>
           <CardContent className="py-16 text-center">
             <Activity className="mx-auto h-12 w-12 text-muted-foreground mb-3" />
-            <p className="text-lg font-medium text-foreground mb-1">No sensor data yet</p>
-            <p className="text-sm text-muted-foreground">Sensor data will appear here once devices are connected via the onboarding agent.</p>
+            <p className="text-lg font-medium text-foreground mb-1">{t("sensors.noDataYet")}</p>
+            <p className="text-sm text-muted-foreground">{t("sensors.dataWillAppear")}</p>
           </CardContent>
         </Card>
       ) : (
