@@ -220,7 +220,7 @@ export default function Dashboard() {
       {/* City Distribution */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="font-display text-base">Users by City</CardTitle>
+          <CardTitle className="font-display text-base">{t("dashboard.usersByCity")}</CardTitle>
         </CardHeader>
         <CardContent>
           {data?.cityDistribution && data.cityDistribution.length > 0 ? (
