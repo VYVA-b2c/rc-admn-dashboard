@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap, Settings } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, AreaChart, Area, Legend,
@@ -26,6 +27,7 @@ const CHART_COLORS = [
 export default function Sensors() {
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
+  const { t } = useLanguage();
 
   const { data: alerts, isLoading: alertsLoading } = useQuery({
     queryKey: ["sensor-alerts"],
@@ -210,46 +212,22 @@ export default function Sensors() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Sensor Monitoring</h1>
+      <h1 className="font-display text-2xl font-bold text-foreground">{t("sensors.title")}</h1>
 
       {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Devices"
-          value={totalSensors}
-          icon={<Activity className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-purple to-primary"
-          subtitle={`${onlineCount} online · ${offlineCount} offline`}
-        />
-        <StatCard
-          title="Critical Alerts"
-          value={criticalCount}
-          icon={<ShieldAlert className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-red-600 to-red-800"
-          subtitle="Require immediate action"
-        />
-        <StatCard
-          title="Warnings"
-          value={warningCount}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-amber-500 to-orange-600"
-          subtitle="Need attention"
-        />
-        <StatCard
-          title="Low Battery"
-          value={lowBatteryCount}
-          icon={<Battery className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-pink to-destructive"
-          subtitle="Below 20% charge"
-        />
+        <StatCard title={t("sensors.totalDevices")} value={totalSensors} icon={<Activity className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-purple to-primary" subtitle={`${onlineCount} ${t("sensors.online")} · ${offlineCount} ${t("sensors.offline")}`} />
+        <StatCard title={t("sensors.criticalAlerts")} value={criticalCount} icon={<ShieldAlert className="h-5 w-5" />} gradient="bg-gradient-to-br from-red-600 to-red-800" subtitle={t("sensors.requireAction")} />
+        <StatCard title={t("sensors.warnings")} value={warningCount} icon={<AlertTriangle className="h-5 w-5" />} gradient="bg-gradient-to-br from-amber-500 to-orange-600" subtitle={t("sensors.needAttention")} />
+        <StatCard title={t("sensors.lowBattery")} value={lowBatteryCount} icon={<Battery className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-pink to-destructive" subtitle={t("sensors.below20")} />
       </div>
 
       {!hasData ? (
         <Card>
           <CardContent className="py-16 text-center">
             <Activity className="mx-auto h-12 w-12 text-muted-foreground mb-3" />
-            <p className="text-lg font-medium text-foreground mb-1">No sensor data yet</p>
-            <p className="text-sm text-muted-foreground">Sensor data will appear here once devices are connected via the onboarding agent.</p>
+            <p className="text-lg font-medium text-foreground mb-1">{t("sensors.noDataYet")}</p>
+            <p className="text-sm text-muted-foreground">{t("sensors.dataWillAppear")}</p>
           </CardContent>
         </Card>
       ) : (

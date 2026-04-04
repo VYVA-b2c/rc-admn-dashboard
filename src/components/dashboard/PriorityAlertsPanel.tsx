@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDistanceToNow, differenceInMinutes } from "date-fns";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ActiveAlert } from "@/hooks/useGISData";
 
 const SEVERITY_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
@@ -99,13 +100,14 @@ interface Props {
 }
 
 export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
+  const { t } = useLanguage();
   return (
     <Card>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="font-display text-base flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-destructive" />
-            Priority Alerts
+            {t("alerts.priorityAlerts")}
           </CardTitle>
           <SeveritySummary alerts={alerts} />
         </div>
@@ -180,7 +182,7 @@ export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
           ) : (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <CheckCircle className="h-8 w-8 mb-2 text-vyva-green" />
-              <p className="text-sm">All clear — no active alerts</p>
+              <p className="text-sm">{t("alerts.noActiveAlerts")}</p>
             </div>
           )}
         </ScrollArea>

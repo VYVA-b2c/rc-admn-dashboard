@@ -3,6 +3,7 @@ import drkLogo from "@/assets/drk-logo.svg";
 import { NavLink } from "@/components/NavLink";
 import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   Sidebar,
   SidebarContent,
@@ -19,13 +20,13 @@ import {
 import { Button } from "@/components/ui/button";
 
 const navItems = [
-  { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "Users", url: "/users", icon: Users },
-  { title: "Emergency Contacts", url: "/emergency-contacts", icon: Phone },
-  { title: "Check-In Monitoring", url: "/checkin-monitoring", icon: PhoneCall },
-  { title: "Sensors", url: "/sensors", icon: Activity },
-  { title: "Invite Admin", url: "/invite", icon: UserPlus },
-  { title: "Settings", url: "/settings", icon: Settings },
+  { titleKey: "sidebar.dashboard", url: "/", icon: LayoutDashboard },
+  { titleKey: "sidebar.users", url: "/users", icon: Users },
+  { titleKey: "sidebar.emergencyContacts", url: "/emergency-contacts", icon: Phone },
+  { titleKey: "sidebar.checkinMonitoring", url: "/checkin-monitoring", icon: PhoneCall },
+  { titleKey: "sidebar.sensors", url: "/sensors", icon: Activity },
+  { titleKey: "sidebar.inviteAdmin", url: "/invite", icon: UserPlus },
+  { titleKey: "sidebar.settings", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
@@ -33,6 +34,7 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const location = useLocation();
   const { signOut, user } = useAuth();
+  const { t } = useLanguage();
 
   return (
     <Sidebar collapsible="icon">
@@ -49,7 +51,7 @@ export function AppSidebar() {
                 DRK Sachsen
               </span>
               <span className="text-[8px] text-sidebar-foreground/30 font-normal">
-                Powered by VYVA
+                {t("common.poweredByVyva")}
               </span>
             </>
           )}
@@ -59,12 +61,12 @@ export function AppSidebar() {
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupLabel className="text-sidebar-foreground/50 uppercase text-[10px] tracking-widest">
-            Navigation
+            {t("sidebar.navigation")}
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
+                <SidebarMenuItem key={item.titleKey}>
                   <SidebarMenuButton asChild>
                     <NavLink
                       to={item.url}
@@ -73,7 +75,7 @@ export function AppSidebar() {
                       activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
                     >
                       <item.icon className="mr-2 h-4 w-4" />
-                      {!collapsed && <span>{item.title}</span>}
+                      {!collapsed && <span>{t(item.titleKey)}</span>}
                     </NavLink>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -96,7 +98,7 @@ export function AppSidebar() {
           className="w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-primary-foreground hover:bg-sidebar-accent"
         >
           <LogOut className="h-4 w-4" />
-          {!collapsed && <span className="ml-2">Sign Out</span>}
+          {!collapsed && <span className="ml-2">{t("sidebar.signOut")}</span>}
         </Button>
       </SidebarFooter>
     </Sidebar>

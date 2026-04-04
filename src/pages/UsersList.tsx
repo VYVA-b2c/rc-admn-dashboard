@@ -12,7 +12,8 @@ import {
   User, ChevronRight, AlertTriangle, Heart,
 } from "lucide-react";
 import { computeRiskScore, getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
-import { useGISData } from "@/hooks/useGISData"; // adjust path
+import { useGISData } from "@/hooks/useGISData";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function UsersList() {
   const [search, setSearch] = useState("");
@@ -20,6 +21,7 @@ export default function UsersList() {
   const [statusFilter, setStatusFilter] = useState("all");
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
+  const { t } = useLanguage();
 
   const users = gisData?.gisUsers ?? [];
 
@@ -108,38 +110,14 @@ export default function UsersList() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Users</h1>
+      <h1 className="font-display text-2xl font-bold text-foreground">{t("usersList.title")}</h1>
 
       {/* Summary Stats */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Users"
-          value={totalUsers}
-          icon={<Users className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-purple to-primary"
-          subtitle="Onboarded via agent"
-        />
-        <StatCard
-          title="Active Check-ins"
-          value={withCheckins}
-          icon={<PhoneCall className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-teal to-secondary"
-          subtitle="Check-ins enabled"
-        />
-        <StatCard
-          title="Users with Alerts"
-          value={withAlerts}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-red-600 to-red-800"
-          subtitle="Need attention"
-        />
-        <StatCard
-          title="With Sensors"
-          value={withSensors}
-          icon={<Activity className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-green to-secondary"
-          subtitle="IoT devices linked"
-        />
+        <StatCard title={t("usersList.totalUsers")} value={totalUsers} icon={<Users className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-purple to-primary" subtitle={t("usersList.onboarded")} />
+        <StatCard title={t("usersList.activeCheckins")} value={withCheckins} icon={<PhoneCall className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-teal to-secondary" subtitle={t("usersList.checkinsEnabled")} />
+        <StatCard title={t("usersList.usersWithAlerts")} value={withAlerts} icon={<AlertTriangle className="h-5 w-5" />} gradient="bg-gradient-to-br from-red-600 to-red-800" subtitle={t("usersList.needAttention")} />
+        <StatCard title={t("usersList.withSensors")} value={withSensors} icon={<Activity className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-green to-secondary" subtitle={t("usersList.iotDevices")} />
       </div>
 
       {/* Filters */}
@@ -147,7 +125,7 @@ export default function UsersList() {
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search by name, phone, city, caregiver..."
+            placeholder={t("usersList.searchPlaceholder")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -159,7 +137,7 @@ export default function UsersList() {
             <SelectValue placeholder="All Cities" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Cities</SelectItem>
+            <SelectItem value="all">{t("usersList.allCities")}</SelectItem>
             {cities.map((city) => (
               <SelectItem key={city} value={city}>{city}</SelectItem>
             ))}
@@ -170,11 +148,11 @@ export default function UsersList() {
             <SelectValue placeholder="All Users" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Users</SelectItem>
-            <SelectItem value="highest-risk">Sort by Highest Risk</SelectItem>
-            <SelectItem value="alerts">With Active Alerts</SelectItem>
-            <SelectItem value="sensors">With Sensors</SelectItem>
-            <SelectItem value="no-caregiver">No Caregiver</SelectItem>
+            <SelectItem value="all">{t("usersList.allUsers")}</SelectItem>
+            <SelectItem value="highest-risk">{t("usersList.sortHighestRisk")}</SelectItem>
+            <SelectItem value="alerts">{t("usersList.withActiveAlerts")}</SelectItem>
+            <SelectItem value="sensors">{t("usersList.withSensorsFilter")}</SelectItem>
+            <SelectItem value="no-caregiver">{t("usersList.noCaregiver")}</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-sm text-muted-foreground ml-auto">{filtered.length} user{filtered.length !== 1 ? "s" : ""}</p>
@@ -186,12 +164,10 @@ export default function UsersList() {
           <CardContent className="py-16 text-center">
             <Users className="mx-auto h-12 w-12 text-muted-foreground mb-3" />
             <p className="text-lg font-medium text-foreground mb-1">
-              {totalUsers === 0 ? "No users yet" : "No users match your filters"}
+              {totalUsers === 0 ? t("usersList.noUsersYet") : t("usersList.noUsersMatch")}
             </p>
             <p className="text-sm text-muted-foreground">
-              {totalUsers === 0
-                ? "Data will appear once the onboarding agent sends records."
-                : "Try adjusting your search or filters."}
+              {totalUsers === 0 ? t("usersList.dataWillAppear") : t("usersList.adjustFilters")}
             </p>
           </CardContent>
         </Card>
@@ -237,7 +213,7 @@ export default function UsersList() {
                             {riskScore} · {getRiskLabel(riskScore)}
                           </Badge>
                         </TooltipTrigger>
-                        <TooltipContent>Based on activity, check-ins, medication adherence, and alerts</TooltipContent>
+                        <TooltipContent>{t("usersList.riskTooltip")}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </div>
@@ -247,17 +223,17 @@ export default function UsersList() {
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <HeartPulse className="h-4 w-4 mx-auto text-vyva-pink mb-1" />
                       <p className="text-xs font-medium text-foreground">{user.health.conditions.length}</p>
-                      <p className="text-[10px] text-muted-foreground">Conditions</p>
+                      <p className="text-[10px] text-muted-foreground">{t("usersList.conditions")}</p>
                     </div>
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <Pill className="h-4 w-4 mx-auto text-accent mb-1" />
                       <p className="text-xs font-medium text-foreground">{user.medsCount}</p>
-                      <p className="text-[10px] text-muted-foreground">Medications</p>
+                      <p className="text-[10px] text-muted-foreground">{t("usersList.medications")}</p>
                     </div>
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <Activity className="h-4 w-4 mx-auto text-vyva-teal mb-1" />
                       <p className="text-xs font-medium text-foreground">{user.sensors.total}</p>
-                      <p className="text-[10px] text-muted-foreground">Sensors</p>
+                      <p className="text-[10px] text-muted-foreground">{t("sidebar.sensors")}</p>
                     </div>
                   </div>
 
@@ -290,7 +266,7 @@ export default function UsersList() {
 
                   {/* View Profile Arrow */}
                   <div className="flex items-center justify-end mt-3 text-xs text-muted-foreground group-hover:text-primary transition-colors">
-                    View Profile <ChevronRight className="h-4 w-4 ml-0.5" />
+                    {t("usersList.viewProfile")} <ChevronRight className="h-4 w-4 ml-0.5" />
                   </div>
                 </CardContent>
               </Card>

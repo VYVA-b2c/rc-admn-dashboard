@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ActiveAlert, GISUser } from "@/hooks/useGISData";
 
 interface OperationsQueuePanelProps {
@@ -63,6 +64,7 @@ function getUrgencyClasses(urgency: string) {
 export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQueuePanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
   const tasks = useMemo(() => {
@@ -93,10 +95,10 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
         .update({ resolved_at: new Date().toISOString() })
         .eq("id", task.id);
       if (error) {
-        toast.error("Failed to resolve alert");
+        toast.error(t("ops.failedToResolve"));
         setDismissedIds((prev) => { const n = new Set(prev); n.delete(task.id); return n; });
       } else {
-        toast.success("Task completed");
+        toast.success(t("ops.taskCompleted"));
         queryClient.invalidateQueries({ queryKey: ["gis-data"] });
       }
     }
@@ -111,14 +113,14 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="font-display text-base flex items-center justify-between">
-          Operations Queue
-          <span className="text-xs font-normal text-muted-foreground">What to do next</span>
+          {t("ops.operationsQueue")}
+          <span className="text-xs font-normal text-muted-foreground">{t("ops.whatToDoNext")}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0">
         <ScrollArea className="h-[280px]">
           {tasks.length === 0 ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No pending tasks</p>
+            <p className="p-6 text-center text-sm text-muted-foreground">{t("ops.noPendingTasks")}</p>
           ) : (
             <div className="divide-y divide-border">
               {tasks.map((task) => {

@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { getRiskBand } from "@/lib/riskScore";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Users, PhoneCall, AlertTriangle, Radio, Heart, MapPin, Search, X, Flame } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,6 +29,7 @@ function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label:
 
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
+  const { t } = useLanguage();
   const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [interventionUser, setInterventionUser] = useState<GISUser | null>(null);
@@ -108,17 +110,17 @@ export default function Dashboard() {
       <div className="flex items-center gap-2">
         <MapPin className="h-6 w-6 text-destructive" />
         <h1 className="font-display text-2xl font-bold text-foreground">
-          DRK Saxony — GIS Command Center
+          {t("dashboard.title")}
         </h1>
       </div>
 
       {/* Stat row */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-        <MiniStat icon={<Users className="h-4 w-4 text-primary-foreground" />} label="Users" value={data?.totalUsers ?? 0} color="bg-primary" />
-        <MiniStat icon={<PhoneCall className="h-4 w-4 text-primary-foreground" />} label="Check-ins Active" value={data?.checkinsEnabled ?? 0} color="bg-secondary" />
-        <MiniStat icon={<AlertTriangle className="h-4 w-4 text-primary-foreground" />} label="Active Alerts" value={data?.activeAlertCount ?? 0} color="bg-destructive" />
-        <MiniStat icon={<Radio className="h-4 w-4 text-primary-foreground" />} label="Sensors" value={data?.totalSensors ?? 0} color="bg-accent" />
-        <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
+        <MiniStat icon={<Users className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.users")} value={data?.totalUsers ?? 0} color="bg-primary" />
+        <MiniStat icon={<PhoneCall className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.checkinsActive")} value={data?.checkinsEnabled ?? 0} color="bg-secondary" />
+        <MiniStat icon={<AlertTriangle className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.activeAlerts")} value={data?.activeAlertCount ?? 0} color="bg-destructive" />
+        <MiniStat icon={<Radio className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.sensors")} value={data?.totalSensors ?? 0} color="bg-accent" />
+        <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.caregivers")} value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
       {/* Priority Alerts + At-Risk Users */}
@@ -132,7 +134,7 @@ export default function Dashboard() {
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search by name or city…"
+            placeholder={t("dashboard.searchPlaceholder")}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
@@ -143,10 +145,10 @@ export default function Dashboard() {
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="critical">Critical</SelectItem>
-            <SelectItem value="warning">Warning</SelectItem>
-            <SelectItem value="stable">Stable</SelectItem>
+            <SelectItem value="all">{t("dashboard.allStatuses")}</SelectItem>
+            <SelectItem value="critical">{t("dashboard.critical")}</SelectItem>
+            <SelectItem value="warning">{t("dashboard.warning")}</SelectItem>
+            <SelectItem value="stable">{t("dashboard.stable")}</SelectItem>
           </SelectContent>
         </Select>
         <Select value={cityFilter} onValueChange={setCityFilter}>
@@ -154,7 +156,7 @@ export default function Dashboard() {
             <SelectValue placeholder="City" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All cities</SelectItem>
+            <SelectItem value="all">{t("dashboard.allCities")}</SelectItem>
             {cities.map((c) => (
               <SelectItem key={c} value={c}>{c}</SelectItem>
             ))}
@@ -165,11 +167,11 @@ export default function Dashboard() {
             <SelectValue placeholder="Risk Level" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All risk levels</SelectItem>
-            <SelectItem value="high">🔴 High Risk</SelectItem>
-            <SelectItem value="moderate">🟠 Moderate</SelectItem>
-            <SelectItem value="low">🟡 Low</SelectItem>
-            <SelectItem value="stable">🟢 Stable</SelectItem>
+            <SelectItem value="all">{t("dashboard.allRiskLevels")}</SelectItem>
+            <SelectItem value="high">{t("dashboard.highRisk")}</SelectItem>
+            <SelectItem value="moderate">{t("dashboard.moderate")}</SelectItem>
+            <SelectItem value="low">{t("dashboard.low")}</SelectItem>
+            <SelectItem value="stable">{t("dashboard.stableRisk")}</SelectItem>
           </SelectContent>
         </Select>
         <Button
@@ -179,15 +181,15 @@ export default function Dashboard() {
           className="gap-1.5"
         >
           <Flame className="h-3.5 w-3.5" />
-          Heatmap
+          {t("dashboard.heatmap")}
         </Button>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
-            <X className="mr-1 h-3.5 w-3.5" /> Clear
+            <X className="mr-1 h-3.5 w-3.5" /> {t("dashboard.clear")}
           </Button>
         )}
         <span className="text-xs text-muted-foreground ml-auto">
-          {filteredUsers.length} of {data?.totalUsers ?? 0} users
+          {filteredUsers.length} {t("dashboard.ofUsers")} {data?.totalUsers ?? 0} {t("dashboard.usersLabel")}
         </span>
       </div>
 
@@ -205,20 +207,20 @@ export default function Dashboard() {
       {/* Legend */}
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-destructive" /> Critical
+          <span className="inline-block h-3 w-3 rounded-full bg-destructive" /> {t("dashboard.critical")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(24,94%,53%)]" /> Warning
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(24,94%,53%)]" /> {t("dashboard.warning")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(142,71%,45%)]" /> Stable
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(142,71%,45%)]" /> {t("dashboard.stable")}
         </span>
       </div>
 
       {/* City Distribution */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="font-display text-base">Users by City</CardTitle>
+          <CardTitle className="font-display text-base">{t("dashboard.usersByCity")}</CardTitle>
         </CardHeader>
         <CardContent>
           {data?.cityDistribution && data.cityDistribution.length > 0 ? (
@@ -238,7 +240,7 @@ export default function Dashboard() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <p className="py-8 text-center text-sm text-muted-foreground">No data yet</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">{t("dashboard.noDataYet")}</p>
           )}
         </CardContent>
       </Card>
