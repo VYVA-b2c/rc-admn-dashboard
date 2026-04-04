@@ -64,6 +64,7 @@ function getUrgencyClasses(urgency: string) {
 export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQueuePanelProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
 
   const tasks = useMemo(() => {
