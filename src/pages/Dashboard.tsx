@@ -189,7 +189,7 @@ export default function Dashboard() {
           </Button>
         )}
         <span className="text-xs text-muted-foreground ml-auto">
-          {filteredUsers.length} of {data?.totalUsers ?? 0} users
+          {filteredUsers.length} {t("dashboard.ofUsers")} {data?.totalUsers ?? 0} {t("dashboard.usersLabel")}
         </span>
       </div>
 
