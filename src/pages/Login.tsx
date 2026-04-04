@@ -2,14 +2,17 @@ import { useState, useRef } from "react";
 import { Navigate } from "react-router-dom";
 import drkLogo from "@/assets/drk-logo.svg";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
+import { LanguageSelector } from "@/components/LanguageSelector";
 
 export default function Login() {
   const { session, signIn, resetPassword } = useAuth();
+  const { t } = useLanguage();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -21,7 +24,7 @@ export default function Login() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (Date.now() < rateLimitUntil.current) {
-      toast.error("Rate limited", { description: "Please wait 30 seconds before trying again." });
+      toast.error(t("login.rateLimited"), { description: t("login.rateLimitDesc") });
       return;
     }
     setLoading(true);
@@ -30,9 +33,9 @@ export default function Login() {
       const msg = error.message?.toLowerCase() ?? "";
       if (msg.includes("rate") || msg.includes("429")) {
         rateLimitUntil.current = Date.now() + 30_000;
-        toast.error("Too many attempts", { description: "Wait 30 seconds before trying again." });
+        toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
       } else {
-        toast.error("Login failed", { description: error.message });
+        toast.error(t("login.loginFailed"), { description: error.message });
       }
     }
     setLoading(false);
@@ -41,15 +44,15 @@ export default function Login() {
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) {
-      toast.error("Please enter your email address");
+      toast.error(t("login.enterYourEmail"));
       return;
     }
     setLoading(true);
     const { error } = await resetPassword(email);
     if (error) {
-      toast.error("Failed to send reset email", { description: error.message });
+      toast.error(t("login.resetEmailFailed"), { description: error.message });
     } else {
-      toast.success("Password reset email sent", { description: "Check your inbox for the reset link." });
+      toast.success(t("login.resetEmailSent"), { description: t("login.resetEmailSentDesc") });
       setShowForgot(false);
     }
     setLoading(false);
@@ -60,24 +63,25 @@ export default function Login() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <img src={drkLogo} alt="DRK Sachsen" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
-          <p className="text-muted-foreground mt-1">DRK Sachsen — Admin Dashboard</p>
+          <p className="text-muted-foreground mt-1">{t("login.subtitle")}</p>
         </div>
 
         <Card className="border-border/50 shadow-xl">
           <CardHeader>
-            <CardTitle className="font-display">
-              {showForgot ? "Reset Password" : "Sign In"}
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="font-display">
+                {showForgot ? t("login.resetPassword") : t("login.signIn")}
+              </CardTitle>
+              <LanguageSelector />
+            </div>
             <CardDescription>
-              {showForgot
-                ? "Enter your email to receive a password reset link."
-                : "Enter your credentials to access the dashboard."}
+              {showForgot ? t("login.enterEmail") : t("login.enterCredentials")}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={showForgot ? handleForgotPassword : handleLogin} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
+                <Label htmlFor="email">{t("login.email")}</Label>
                 <Input
                   id="email"
                   type="email"
@@ -89,7 +93,7 @@ export default function Login() {
               </div>
               {!showForgot && (
                 <div className="space-y-2">
-                  <Label htmlFor="password">Password</Label>
+                  <Label htmlFor="password">{t("login.password")}</Label>
                   <Input
                     id="password"
                     type="password"
@@ -100,20 +104,20 @@ export default function Login() {
                 </div>
               )}
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? "Loading..." : showForgot ? "Send Reset Link" : "Sign In"}
+                {loading ? t("login.loading") : showForgot ? t("login.sendResetLink") : t("login.signIn")}
               </Button>
             </form>
             <button
               onClick={() => setShowForgot(!showForgot)}
               className="mt-4 block w-full text-center text-sm text-muted-foreground hover:text-primary transition-colors"
             >
-              {showForgot ? "Back to Sign In" : "Forgot password?"}
+              {showForgot ? t("login.backToSignIn") : t("login.forgotPassword")}
             </button>
             <p className="mt-3 text-xs text-center text-muted-foreground/60">
-              If login fails in preview, try the published URL.
+              {t("login.previewHint")}
             </p>
             <p className="mt-4 text-[10px] text-center text-muted-foreground/40">
-              Powered by VYVA
+              {t("common.poweredByVyva")}
             </p>
           </CardContent>
         </Card>
