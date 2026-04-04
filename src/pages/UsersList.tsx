@@ -164,12 +164,10 @@ export default function UsersList() {
           <CardContent className="py-16 text-center">
             <Users className="mx-auto h-12 w-12 text-muted-foreground mb-3" />
             <p className="text-lg font-medium text-foreground mb-1">
-              {totalUsers === 0 ? "No users yet" : "No users match your filters"}
+              {totalUsers === 0 ? t("usersList.noUsersYet") : t("usersList.noUsersMatch")}
             </p>
             <p className="text-sm text-muted-foreground">
-              {totalUsers === 0
-                ? "Data will appear once the onboarding agent sends records."
-                : "Try adjusting your search or filters."}
+              {totalUsers === 0 ? t("usersList.dataWillAppear") : t("usersList.adjustFilters")}
             </p>
           </CardContent>
         </Card>
