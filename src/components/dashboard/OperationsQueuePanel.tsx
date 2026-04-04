@@ -95,7 +95,7 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
         .update({ resolved_at: new Date().toISOString() })
         .eq("id", task.id);
       if (error) {
-        toast.error("Failed to resolve alert");
+        toast.error(t("ops.failedToResolve"));
         setDismissedIds((prev) => { const n = new Set(prev); n.delete(task.id); return n; });
       } else {
         toast.success("Task completed");
