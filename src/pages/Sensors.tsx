@@ -27,6 +27,7 @@ const CHART_COLORS = [
 export default function Sensors() {
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
+  const { t } = useLanguage();
 
   const { data: alerts, isLoading: alertsLoading } = useQuery({
     queryKey: ["sensor-alerts"],
