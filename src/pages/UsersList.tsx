@@ -266,7 +266,7 @@ export default function UsersList() {
 
                   {/* View Profile Arrow */}
                   <div className="flex items-center justify-end mt-3 text-xs text-muted-foreground group-hover:text-primary transition-colors">
-                    View Profile <ChevronRight className="h-4 w-4 ml-0.5" />
+                    {t("usersList.viewProfile")} <ChevronRight className="h-4 w-4 ml-0.5" />
                   </div>
                 </CardContent>
               </Card>

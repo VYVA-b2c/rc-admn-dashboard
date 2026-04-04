@@ -182,7 +182,7 @@ export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
           ) : (
             <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
               <CheckCircle className="h-8 w-8 mb-2 text-vyva-green" />
-              <p className="text-sm">All clear — no active alerts</p>
+              <p className="text-sm">{t("alerts.noActiveAlerts")}</p>
             </div>
           )}
         </ScrollArea>

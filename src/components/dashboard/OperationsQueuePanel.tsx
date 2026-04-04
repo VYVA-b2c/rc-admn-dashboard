@@ -120,7 +120,7 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
       <CardContent className="p-0">
         <ScrollArea className="h-[280px]">
           {tasks.length === 0 ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">No pending tasks</p>
+            <p className="p-6 text-center text-sm text-muted-foreground">{t("ops.noPendingTasks")}</p>
           ) : (
             <div className="divide-y divide-border">
               {tasks.map((task) => {
