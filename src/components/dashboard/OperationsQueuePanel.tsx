@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ActiveAlert, GISUser } from "@/hooks/useGISData";
 
 interface OperationsQueuePanelProps {
