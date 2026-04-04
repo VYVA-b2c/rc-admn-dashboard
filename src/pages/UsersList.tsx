@@ -110,7 +110,7 @@ export default function UsersList() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Users</h1>
+      <h1 className="font-display text-2xl font-bold text-foreground">{t("usersList.title")}</h1>
 
       {/* Summary Stats */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
