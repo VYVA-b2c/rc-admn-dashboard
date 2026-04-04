@@ -212,7 +212,7 @@ export default function Sensors() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">Sensor Monitoring</h1>
+      <h1 className="font-display text-2xl font-bold text-foreground">{t("sensors.title")}</h1>
 
       {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
