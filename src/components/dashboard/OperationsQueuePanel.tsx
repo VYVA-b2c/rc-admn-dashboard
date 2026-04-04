@@ -98,7 +98,7 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
         toast.error(t("ops.failedToResolve"));
         setDismissedIds((prev) => { const n = new Set(prev); n.delete(task.id); return n; });
       } else {
-        toast.success("Task completed");
+        toast.success(t("ops.taskCompleted"));
         queryClient.invalidateQueries({ queryKey: ["gis-data"] });
       }
     }
