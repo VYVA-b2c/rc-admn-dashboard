@@ -148,11 +148,11 @@ export default function UsersList() {
             <SelectValue placeholder="All Users" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Users</SelectItem>
-            <SelectItem value="highest-risk">Sort by Highest Risk</SelectItem>
-            <SelectItem value="alerts">With Active Alerts</SelectItem>
-            <SelectItem value="sensors">With Sensors</SelectItem>
-            <SelectItem value="no-caregiver">No Caregiver</SelectItem>
+            <SelectItem value="all">{t("usersList.allUsers")}</SelectItem>
+            <SelectItem value="highest-risk">{t("usersList.sortHighestRisk")}</SelectItem>
+            <SelectItem value="alerts">{t("usersList.withActiveAlerts")}</SelectItem>
+            <SelectItem value="sensors">{t("usersList.withSensorsFilter")}</SelectItem>
+            <SelectItem value="no-caregiver">{t("usersList.noCaregiver")}</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-sm text-muted-foreground ml-auto">{filtered.length} user{filtered.length !== 1 ? "s" : ""}</p>
