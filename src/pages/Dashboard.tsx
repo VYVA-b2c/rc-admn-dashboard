@@ -29,6 +29,7 @@ function MiniStat({ icon, label, value, color }: { icon: React.ReactNode; label:
 
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
+  const { t } = useLanguage();
   const [selectedUser, setSelectedUser] = useState<GISUser | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [interventionUser, setInterventionUser] = useState<GISUser | null>(null);
