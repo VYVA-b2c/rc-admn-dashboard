@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wifi, WifiOff, Zap, Settings } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
+import { useLanguage } from "@/contexts/LanguageContext";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, AreaChart, Area, Legend,
