@@ -213,7 +213,7 @@ export default function UsersList() {
                             {riskScore} · {getRiskLabel(riskScore)}
                           </Badge>
                         </TooltipTrigger>
-                        <TooltipContent>Based on activity, check-ins, medication adherence, and alerts</TooltipContent>
+                        <TooltipContent>{t("usersList.riskTooltip")}</TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
                   </div>
