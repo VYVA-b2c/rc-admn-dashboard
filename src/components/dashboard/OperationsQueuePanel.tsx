@@ -113,8 +113,8 @@ export function OperationsQueuePanel({ alerts, users, onUserClick }: OperationsQ
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="font-display text-base flex items-center justify-between">
-          Operations Queue
-          <span className="text-xs font-normal text-muted-foreground">What to do next</span>
+          {t("ops.operationsQueue")}
+          <span className="text-xs font-normal text-muted-foreground">{t("ops.whatToDoNext")}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0">
