@@ -216,34 +216,10 @@ export default function Sensors() {
 
       {/* Stat Cards */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Devices"
-          value={totalSensors}
-          icon={<Activity className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-purple to-primary"
-          subtitle={`${onlineCount} online · ${offlineCount} offline`}
-        />
-        <StatCard
-          title="Critical Alerts"
-          value={criticalCount}
-          icon={<ShieldAlert className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-red-600 to-red-800"
-          subtitle="Require immediate action"
-        />
-        <StatCard
-          title="Warnings"
-          value={warningCount}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-amber-500 to-orange-600"
-          subtitle="Need attention"
-        />
-        <StatCard
-          title="Low Battery"
-          value={lowBatteryCount}
-          icon={<Battery className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-pink to-destructive"
-          subtitle="Below 20% charge"
-        />
+        <StatCard title={t("sensors.totalDevices")} value={totalSensors} icon={<Activity className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-purple to-primary" subtitle={`${onlineCount} ${t("sensors.online")} · ${offlineCount} ${t("sensors.offline")}`} />
+        <StatCard title={t("sensors.criticalAlerts")} value={criticalCount} icon={<ShieldAlert className="h-5 w-5" />} gradient="bg-gradient-to-br from-red-600 to-red-800" subtitle={t("sensors.requireAction")} />
+        <StatCard title={t("sensors.warnings")} value={warningCount} icon={<AlertTriangle className="h-5 w-5" />} gradient="bg-gradient-to-br from-amber-500 to-orange-600" subtitle={t("sensors.needAttention")} />
+        <StatCard title={t("sensors.lowBattery")} value={lowBatteryCount} icon={<Battery className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-pink to-destructive" subtitle={t("sensors.below20")} />
       </div>
 
       {!hasData ? (
