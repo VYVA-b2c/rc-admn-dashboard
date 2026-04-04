@@ -114,34 +114,10 @@ export default function UsersList() {
 
       {/* Summary Stats */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Users"
-          value={totalUsers}
-          icon={<Users className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-purple to-primary"
-          subtitle="Onboarded via agent"
-        />
-        <StatCard
-          title="Active Check-ins"
-          value={withCheckins}
-          icon={<PhoneCall className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-teal to-secondary"
-          subtitle="Check-ins enabled"
-        />
-        <StatCard
-          title="Users with Alerts"
-          value={withAlerts}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-red-600 to-red-800"
-          subtitle="Need attention"
-        />
-        <StatCard
-          title="With Sensors"
-          value={withSensors}
-          icon={<Activity className="h-5 w-5" />}
-          gradient="bg-gradient-to-br from-vyva-green to-secondary"
-          subtitle="IoT devices linked"
-        />
+        <StatCard title={t("usersList.totalUsers")} value={totalUsers} icon={<Users className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-purple to-primary" subtitle={t("usersList.onboarded")} />
+        <StatCard title={t("usersList.activeCheckins")} value={withCheckins} icon={<PhoneCall className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-teal to-secondary" subtitle={t("usersList.checkinsEnabled")} />
+        <StatCard title={t("usersList.usersWithAlerts")} value={withAlerts} icon={<AlertTriangle className="h-5 w-5" />} gradient="bg-gradient-to-br from-red-600 to-red-800" subtitle={t("usersList.needAttention")} />
+        <StatCard title={t("usersList.withSensors")} value={withSensors} icon={<Activity className="h-5 w-5" />} gradient="bg-gradient-to-br from-vyva-green to-secondary" subtitle={t("usersList.iotDevices")} />
       </div>
 
       {/* Filters */}
