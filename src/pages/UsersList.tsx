@@ -12,7 +12,8 @@ import {
   User, ChevronRight, AlertTriangle, Heart,
 } from "lucide-react";
 import { computeRiskScore, getRiskColor, getRiskLabel, getRiskBadgeClasses } from "@/lib/riskScore";
-import { useGISData } from "@/hooks/useGISData"; // adjust path
+import { useGISData } from "@/hooks/useGISData";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 export default function UsersList() {
   const [search, setSearch] = useState("");
