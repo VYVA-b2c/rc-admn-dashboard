@@ -145,10 +145,10 @@ export default function Dashboard() {
             <SelectValue placeholder="Status" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="critical">Critical</SelectItem>
-            <SelectItem value="warning">Warning</SelectItem>
-            <SelectItem value="stable">Stable</SelectItem>
+            <SelectItem value="all">{t("dashboard.allStatuses")}</SelectItem>
+            <SelectItem value="critical">{t("dashboard.critical")}</SelectItem>
+            <SelectItem value="warning">{t("dashboard.warning")}</SelectItem>
+            <SelectItem value="stable">{t("dashboard.stable")}</SelectItem>
           </SelectContent>
         </Select>
         <Select value={cityFilter} onValueChange={setCityFilter}>
