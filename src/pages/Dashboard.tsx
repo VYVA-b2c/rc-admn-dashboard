@@ -110,7 +110,7 @@ export default function Dashboard() {
       <div className="flex items-center gap-2">
         <MapPin className="h-6 w-6 text-destructive" />
         <h1 className="font-display text-2xl font-bold text-foreground">
-          DRK Saxony — GIS Command Center
+          {t("dashboard.title")}
         </h1>
       </div>
 
