@@ -228,7 +228,7 @@ export default function UsersList() {
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <Pill className="h-4 w-4 mx-auto text-accent mb-1" />
                       <p className="text-xs font-medium text-foreground">{user.medsCount}</p>
-                      <p className="text-[10px] text-muted-foreground">Medications</p>
+                      <p className="text-[10px] text-muted-foreground">{t("usersList.medications")}</p>
                     </div>
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <Activity className="h-4 w-4 mx-auto text-vyva-teal mb-1" />
