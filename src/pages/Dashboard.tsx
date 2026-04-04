@@ -167,11 +167,11 @@ export default function Dashboard() {
             <SelectValue placeholder="Risk Level" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All risk levels</SelectItem>
-            <SelectItem value="high">🔴 High Risk</SelectItem>
-            <SelectItem value="moderate">🟠 Moderate</SelectItem>
-            <SelectItem value="low">🟡 Low</SelectItem>
-            <SelectItem value="stable">🟢 Stable</SelectItem>
+            <SelectItem value="all">{t("dashboard.allRiskLevels")}</SelectItem>
+            <SelectItem value="high">{t("dashboard.highRisk")}</SelectItem>
+            <SelectItem value="moderate">{t("dashboard.moderate")}</SelectItem>
+            <SelectItem value="low">{t("dashboard.low")}</SelectItem>
+            <SelectItem value="stable">{t("dashboard.stableRisk")}</SelectItem>
           </SelectContent>
         </Select>
         <Button
