@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { formatDistanceToNow, differenceInMinutes } from "date-fns";
+import { useLanguage } from "@/contexts/LanguageContext";
 import type { ActiveAlert } from "@/hooks/useGISData";
 
 const SEVERITY_CONFIG: Record<string, { color: string; bg: string; label: string }> = {
