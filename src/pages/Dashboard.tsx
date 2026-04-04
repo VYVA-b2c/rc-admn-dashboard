@@ -185,7 +185,7 @@ export default function Dashboard() {
         </Button>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
-            <X className="mr-1 h-3.5 w-3.5" /> Clear
+            <X className="mr-1 h-3.5 w-3.5" /> {t("dashboard.clear")}
           </Button>
         )}
         <span className="text-xs text-muted-foreground ml-auto">
