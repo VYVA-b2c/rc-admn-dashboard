@@ -207,13 +207,13 @@ export default function Dashboard() {
       {/* Legend */}
       <div className="flex gap-4 text-xs text-muted-foreground">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-destructive" /> Critical
+          <span className="inline-block h-3 w-3 rounded-full bg-destructive" /> {t("dashboard.critical")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(24,94%,53%)]" /> Warning
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(24,94%,53%)]" /> {t("dashboard.warning")}
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(142,71%,45%)]" /> Stable
+          <span className="inline-block h-3 w-3 rounded-full bg-[hsl(142,71%,45%)]" /> {t("dashboard.stable")}
         </span>
       </div>
 
