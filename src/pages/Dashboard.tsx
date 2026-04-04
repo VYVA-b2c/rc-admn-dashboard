@@ -116,11 +116,11 @@ export default function Dashboard() {
 
       {/* Stat row */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
-        <MiniStat icon={<Users className="h-4 w-4 text-primary-foreground" />} label="Users" value={data?.totalUsers ?? 0} color="bg-primary" />
-        <MiniStat icon={<PhoneCall className="h-4 w-4 text-primary-foreground" />} label="Check-ins Active" value={data?.checkinsEnabled ?? 0} color="bg-secondary" />
-        <MiniStat icon={<AlertTriangle className="h-4 w-4 text-primary-foreground" />} label="Active Alerts" value={data?.activeAlertCount ?? 0} color="bg-destructive" />
-        <MiniStat icon={<Radio className="h-4 w-4 text-primary-foreground" />} label="Sensors" value={data?.totalSensors ?? 0} color="bg-accent" />
-        <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label="Caregivers" value={data?.caregiversLinked ?? 0} color="bg-secondary" />
+        <MiniStat icon={<Users className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.users")} value={data?.totalUsers ?? 0} color="bg-primary" />
+        <MiniStat icon={<PhoneCall className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.checkinsActive")} value={data?.checkinsEnabled ?? 0} color="bg-secondary" />
+        <MiniStat icon={<AlertTriangle className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.activeAlerts")} value={data?.activeAlertCount ?? 0} color="bg-destructive" />
+        <MiniStat icon={<Radio className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.sensors")} value={data?.totalSensors ?? 0} color="bg-accent" />
+        <MiniStat icon={<Heart className="h-4 w-4 text-primary-foreground" />} label={t("dashboard.caregivers")} value={data?.caregiversLinked ?? 0} color="bg-secondary" />
       </div>
 
       {/* Priority Alerts + At-Risk Users */}
