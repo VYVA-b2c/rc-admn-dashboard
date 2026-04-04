@@ -137,7 +137,7 @@ export default function UsersList() {
             <SelectValue placeholder="All Cities" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Cities</SelectItem>
+            <SelectItem value="all">{t("usersList.allCities")}</SelectItem>
             {cities.map((city) => (
               <SelectItem key={city} value={city}>{city}</SelectItem>
             ))}
