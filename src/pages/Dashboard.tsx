@@ -181,7 +181,7 @@ export default function Dashboard() {
           className="gap-1.5"
         >
           <Flame className="h-3.5 w-3.5" />
-          Heatmap
+          {t("dashboard.heatmap")}
         </Button>
         {hasActiveFilters && (
           <Button variant="ghost" size="sm" onClick={clearFilters} className="text-muted-foreground">
