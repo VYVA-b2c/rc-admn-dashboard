@@ -233,7 +233,7 @@ export default function UsersList() {
                     <div className="rounded-lg bg-muted/50 p-2.5 text-center">
                       <Activity className="h-4 w-4 mx-auto text-vyva-teal mb-1" />
                       <p className="text-xs font-medium text-foreground">{user.sensors.total}</p>
-                      <p className="text-[10px] text-muted-foreground">Sensors</p>
+                      <p className="text-[10px] text-muted-foreground">{t("sidebar.sensors")}</p>
                     </div>
                   </div>
 
