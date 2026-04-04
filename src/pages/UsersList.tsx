@@ -21,6 +21,7 @@ export default function UsersList() {
   const [statusFilter, setStatusFilter] = useState("all");
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
+  const { t } = useLanguage();
 
   const users = gisData?.gisUsers ?? [];
 
