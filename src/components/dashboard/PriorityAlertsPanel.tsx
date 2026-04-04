@@ -100,6 +100,7 @@ interface Props {
 }
 
 export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
+  const { t } = useLanguage();
   return (
     <Card>
       <CardHeader className="pb-2">
