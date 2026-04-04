@@ -107,7 +107,7 @@ export function PriorityAlertsPanel({ alerts, onAlertClick }: Props) {
         <div className="flex items-center justify-between">
           <CardTitle className="font-display text-base flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-destructive" />
-            Priority Alerts
+            {t("alerts.priorityAlerts")}
           </CardTitle>
           <SeveritySummary alerts={alerts} />
         </div>
