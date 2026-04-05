@@ -102,12 +102,14 @@ export default function MedicationAdherence() {
       let taken = 0, missed = 0, unconfirmed = 0;
       medications.forEach((med) => {
         const key = `${med.name}||${med.dosage}`;
-        const { status } = getDayStatus(key, dayName);
-        if (status === "taken") taken++;
-        else if (status === "missed") missed++;
-        else if (status === "unconfirmed") unconfirmed++;
+        const entries = entryMap[key]?.[dayName] || [];
+        entries.forEach((e) => {
+          if (e.status === "taken") taken++;
+          else if (e.status === "missed") missed++;
+          else if (e.status === "unconfirmed") unconfirmed++;
+        });
       });
-      return { taken, missed, unconfirmed, total: medications.length };
+      return { taken, missed, unconfirmed };
     });
   }, [medications, entryMap]);
 
