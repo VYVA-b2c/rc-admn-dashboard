@@ -6,7 +6,7 @@ const translations: Record<Language, Record<string, string>> = {
     "sidebar.dashboard": "Dashboard",
     "sidebar.users": "Users",
     "sidebar.emergencyContacts": "Emergency Contacts",
-    "sidebar.checkinMonitoring": "Check-In Monitoring",
+    "sidebar.checkinMonitoring": "Scheduled Calls",
     "sidebar.sensors": "Sensors",
     "sidebar.inviteAdmin": "Create User",
     "sidebar.settings": "Settings",
@@ -129,7 +129,7 @@ const translations: Record<Language, Record<string, string>> = {
     "emergency.noContactsMatch": "No contacts match your search.",
 
     // Check-in Monitoring
-    "checkin.title": "Check-In Monitoring",
+    "checkin.title": "Scheduled Calls",
     "checkin.totalScheduled": "Total Scheduled",
     "checkin.activeCheckins": "Active Check-ins",
     "checkin.inactiveCheckins": "Inactive Check-ins",
@@ -139,7 +139,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkin.searchPlaceholder": "Search by name, phone, city...",
     "checkin.userName": "User Name",
     "checkin.phone": "Phone",
-    "checkin.city": "City",
+    "checkin.Type": "Type",
     "checkin.status": "Status",
     "checkin.frequency": "Frequency",
     "checkin.preferredTime": "Preferred Time",

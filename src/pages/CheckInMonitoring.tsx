@@ -107,7 +107,7 @@ export default function CheckInMonitoring() {
             <TableRow className="bg-muted/50">
               <TableHead>{t("checkin.userName")}</TableHead>
               <TableHead>{t("checkin.phone")}</TableHead>
-              <TableHead>{t("checkin.city")}</TableHead>
+              <TableHead>{t("checkin.Type")}</TableHead>
               <TableHead>{t("checkin.status")}</TableHead>
               <TableHead>{t("checkin.frequency")}</TableHead>
               <TableHead>{t("checkin.preferredTime")}</TableHead>
