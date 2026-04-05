@@ -18,7 +18,7 @@ interface Checkin {
   user_id: number;
   userName: string;
   userPhone?: string;
-  city?: string;
+  type?: string;
   is_active: boolean;
   frequency_days: number;
   preferred_time?: string | null;
@@ -60,7 +60,7 @@ export default function CheckInMonitoring() {
     if (search) {
       const s = search.toLowerCase();
       list = list.filter(
-        (c) => c.userName.toLowerCase().includes(s) || c.city?.toLowerCase().includes(s) || c.userPhone?.toLowerCase().includes(s)
+        (c) => c.userName.toLowerCase().includes(s) || c.type?.toLowerCase().includes(s) || c.userPhone?.toLowerCase().includes(s)
       );
     }
     return list;
@@ -133,7 +133,7 @@ export default function CheckInMonitoring() {
                 <TableRow key={c.id} className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => navigate(`/users/${c.user_id}`)}>
                   <TableCell className="font-medium">{c.userName}</TableCell>
                   <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
-                  <TableCell>{c.city || "—"}</TableCell>
+                  <TableCell>{c.type || "—"}</TableCell>
                   <TableCell>
                     <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
                       {c.is_active ? t("checkin.active") : t("checkin.inactive")}
