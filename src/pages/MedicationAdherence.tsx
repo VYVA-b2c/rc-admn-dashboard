@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { apiFetch } from "@/lib/apiClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,25 +41,18 @@ export default function MedicationAdherence() {
   const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
   const isPresent = weekOffset === 0;
 
-  const { data: user } = useQuery({
-    queryKey: ["vyva-user-name", id],
-    queryFn: async () => {
-      const { data } = await supabase.from("vyva_users").select("first_name, last_name").eq("id", id!).single();
-      return data;
-    },
-    enabled: !!id,
-  });
-
   const { data: schedule, isLoading } = useQuery({
     queryKey: ["med-weekly-schedule", id, format(weekStart, "yyyy-MM-dd"), isPresent],
     queryFn: async () => {
-      const params = new URLSearchParams({
-        user_id: id!,
-        date_start: format(weekStart, "yyyy-MM-dd"),
-        date_end: format(weekEnd, "yyyy-MM-dd"),
-        is_present: String(isPresent),
+      return apiFetch<WeeklyScheduleResponse>("/api/v1/medications/weekly-schedule", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: Number(id),
+          date_start: format(weekStart, "yyyy-MM-dd"),
+          date_end: format(weekEnd, "yyyy-MM-dd"),
+          is_present: isPresent,
+        }),
       });
-      return apiFetch<WeeklyScheduleResponse>(`/api/v1/medications/weekly-schedule?${params}`);
     },
     enabled: !!id,
   });
@@ -139,11 +131,6 @@ export default function MedicationAdherence() {
           <h1 className="font-display text-2xl font-bold text-foreground">
             Medication Adherence
           </h1>
-          {user && (
-            <p className="text-sm text-muted-foreground">
-              {user.first_name} {user.last_name}
-            </p>
-          )}
         </div>
       </div>
 
@@ -209,7 +196,7 @@ export default function MedicationAdherence() {
                           <p className="text-sm font-medium text-foreground">{med.name}</p>
                           {med.dosage && <p className="text-[10px] text-muted-foreground">{med.dosage}</p>}
                         </td>
-                        {DAY_NAMES.map((dayName, i) => {
+                        {DAY_NAMES.map((dayName) => {
                           const { status, entries } = getDayStatus(medKey, dayName);
                           const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.upcoming;
                           const Icon = cfg.icon;
