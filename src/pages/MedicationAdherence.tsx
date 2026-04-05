@@ -205,19 +205,28 @@ export default function MedicationAdherence() {
 
                           return (
                             <td key={dayName} className="py-2 px-1 text-center">
-                              <div className={`mx-auto w-full max-w-[80px] rounded-lg border p-2 ${cfg.bg}`}>
-                                <Icon className={`mx-auto h-4 w-4 ${cfg.color}`} />
-                                {entries.length > 0 && (
-                                  <p className={`text-[10px] font-semibold mt-1 ${cfg.color}`}>
-                                    {takenCount}/{totalScheduled}
-                                  </p>
-                                )}
-                                {entries[0]?.time && (
-                                  <p className="text-[9px] text-muted-foreground mt-0.5">
-                                    {entries[0].time}
-                                  </p>
-                                )}
-                              </div>
+                              {entries.length === 0 ? (
+                                <div className={`mx-auto w-full max-w-[80px] rounded-lg border p-2 ${cfg.bg}`}>
+                                  <Icon className={`mx-auto h-4 w-4 ${cfg.color}`} />
+                                </div>
+                              ) : (
+                                <div className="flex flex-col gap-1 items-center">
+                                  {entries.map((entry, idx) => {
+                                    const eCfg = STATUS_CONFIG[entry.status] || STATUS_CONFIG.upcoming;
+                                    const EIcon = eCfg.icon;
+                                    return (
+                                      <div key={idx} className={`w-full max-w-[80px] rounded-lg border px-2 py-1.5 ${eCfg.bg}`}>
+                                        <div className="flex items-center justify-center gap-1">
+                                          <EIcon className={`h-3.5 w-3.5 ${eCfg.color}`} />
+                                          {entry.time && (
+                                            <span className="text-[9px] text-muted-foreground">{entry.time}</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </td>
                           );
                         })}
