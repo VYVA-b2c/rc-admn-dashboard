@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
+import { BASE_URL } from "@/lib/apiClient";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 
@@ -38,26 +38,32 @@ export function EditUserDialog({ open, onOpenChange, user }: EditUserDialogProps
       return;
     }
     setSaving(true);
-    const { error } = await supabase.from("vyva_users").update({
-      first_name: form.first_name.trim(),
-      last_name: form.last_name.trim(),
-      phone: form.phone.trim() || null,
-      date_of_birth: form.date_of_birth || null,
-      gender: form.gender || null,
-      language: form.language || null,
-      city: form.city.trim() || null,
-      street: form.street.trim() || null,
-      house_number: form.house_number.trim() || null,
-      post_code: form.post_code.trim() || null,
-      emergency_notes: form.emergency_notes.trim() || null,
-    }).eq("id", user.id);
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/users/${user.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
+        body: JSON.stringify({
+          first_name: form.first_name.trim(),
+          last_name: form.last_name.trim(),
+          phone: form.phone.trim() || null,
+          date_of_birth: form.date_of_birth || null,
+          gender: form.gender || null,
+          language: form.language || null,
+          city: form.city.trim() || null,
+          street: form.street.trim() || null,
+          house_number: form.house_number.trim() || null,
+          post_code: form.post_code.trim() || null,
+          emergency_notes: form.emergency_notes.trim() || null,
+        }),
+      });
+      if (!res.ok) throw new Error(`Error ${res.status}: ${res.statusText}`);
       toast({ title: "User updated" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", user.id] });
       onOpenChange(false);
+    } catch (err: any) {
+      toast({ title: "Error saving", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
     }
   };
 
