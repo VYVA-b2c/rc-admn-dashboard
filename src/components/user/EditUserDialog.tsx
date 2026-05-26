@@ -58,7 +58,7 @@ export function EditUserDialog({ open, onOpenChange, user }: EditUserDialogProps
       });
       if (!res.ok) throw new Error(`Error ${res.status}: ${res.statusText}`);
       toast({ title: "User updated" });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", user.id] });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", String(user.id)] });
       onOpenChange(false);
     } catch (err: any) {
       toast({ title: "Error saving", description: err.message, variant: "destructive" });
