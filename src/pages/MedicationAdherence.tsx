@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/apiClient";
@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, ChevronLeft, ChevronRight, Pill, Check, X, Clock, Calendar } from "lucide-react";
-import { startOfWeek, endOfWeek, addWeeks, format, eachDayOfInterval, isSameDay } from "date-fns";
+import { startOfWeek, endOfWeek, addWeeks, format, eachDayOfInterval, isSameDay, isBefore, startOfDay } from "date-fns";
 
 type ScheduleEntry = {
   medication_name: string;
@@ -20,6 +20,8 @@ type ScheduleEntry = {
 type WeeklyScheduleResponse = {
   schedule: Record<string, ScheduleEntry[]>;
 };
+
+type ScheduleStatus = ScheduleEntry["status"];
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -40,6 +42,7 @@ export default function MedicationAdherence() {
   const weekEnd = endOfWeek(addWeeks(today, weekOffset), { weekStartsOn: 1 });
   const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
   const isPresent = weekOffset === 0;
+  const todayStart = startOfDay(today);
 
   const { data: schedule, isLoading } = useQuery({
     queryKey: ["med-weekly-schedule", id, format(weekStart, "yyyy-MM-dd"), isPresent],
@@ -87,31 +90,43 @@ export default function MedicationAdherence() {
     return map;
   }, [schedule]);
 
-  const getDayStatus = (medKey: string, dayName: string): { status: string; entries: ScheduleEntry[] } => {
+  const getEffectiveStatus = useCallback((status: ScheduleStatus, day: Date): ScheduleStatus => {
+    if (status === "upcoming" && isBefore(startOfDay(day), todayStart)) {
+      return "unconfirmed";
+    }
+    return status;
+  }, [todayStart]);
+
+  const getDayStatus = (medKey: string, dayName: string, day: Date): { status: ScheduleStatus; entries: ScheduleEntry[] } => {
     const entries = entryMap[medKey]?.[dayName] || [];
-    if (entries.length === 0) return { status: "upcoming", entries: [] };
-    if (entries.some((e) => e.status === "missed")) return { status: "missed", entries };
-    if (entries.some((e) => e.status === "taken")) return { status: "taken", entries };
-    if (entries.some((e) => e.status === "unconfirmed")) return { status: "unconfirmed", entries };
+    if (entries.length === 0) {
+      return { status: isBefore(startOfDay(day), todayStart) ? "unconfirmed" : "upcoming", entries: [] };
+    }
+
+    const statuses = entries.map((entry) => getEffectiveStatus(entry.status, day));
+    if (statuses.includes("missed")) return { status: "missed", entries };
+    if (statuses.includes("taken")) return { status: "taken", entries };
+    if (statuses.includes("unconfirmed")) return { status: "unconfirmed", entries };
     return { status: "upcoming", entries };
   };
 
   // Summary counts per day
   const daySummary = useMemo(() => {
-    return DAY_NAMES.map((dayName) => {
+    return DAY_NAMES.map((dayName, dayIndex) => {
       let taken = 0, missed = 0, unconfirmed = 0;
       medications.forEach((med) => {
         const key = `${med.name}||${med.dosage}`;
         const entries = entryMap[key]?.[dayName] || [];
         entries.forEach((e) => {
-          if (e.status === "taken") taken++;
-          else if (e.status === "missed") missed++;
-          else if (e.status === "unconfirmed") unconfirmed++;
+          const status = getEffectiveStatus(e.status, weekDays[dayIndex]);
+          if (status === "taken") taken++;
+          else if (status === "missed") missed++;
+          else if (status === "unconfirmed") unconfirmed++;
         });
       });
       return { taken, missed, unconfirmed };
     });
-  }, [medications, entryMap]);
+  }, [medications, entryMap, weekDays, getEffectiveStatus]);
 
   if (isLoading) {
     return (
@@ -198,12 +213,11 @@ export default function MedicationAdherence() {
                           <p className="text-sm font-medium text-foreground">{med.name}</p>
                           {med.dosage && <p className="text-[10px] text-muted-foreground">{med.dosage}</p>}
                         </td>
-                        {DAY_NAMES.map((dayName) => {
-                          const { status, entries } = getDayStatus(medKey, dayName);
+                        {DAY_NAMES.map((dayName, dayIndex) => {
+                          const day = weekDays[dayIndex];
+                          const { status, entries } = getDayStatus(medKey, dayName, day);
                           const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.upcoming;
                           const Icon = cfg.icon;
-                          const takenCount = entries.filter((e) => e.status === "taken").length;
-                          const totalScheduled = entries.length || 1;
 
                           return (
                             <td key={dayName} className="py-2 px-1 text-center">
@@ -214,7 +228,8 @@ export default function MedicationAdherence() {
                               ) : (
                                 <div className="flex flex-col gap-1 items-center">
                                   {entries.map((entry, idx) => {
-                                    const eCfg = STATUS_CONFIG[entry.status] || STATUS_CONFIG.upcoming;
+                                    const entryStatus = getEffectiveStatus(entry.status, day);
+                                    const eCfg = STATUS_CONFIG[entryStatus] || STATUS_CONFIG.upcoming;
                                     const EIcon = eCfg.icon;
                                     return (
                                       <div key={idx} className={`w-full max-w-[80px] rounded-lg border px-2 py-1.5 ${eCfg.bg}`}>
