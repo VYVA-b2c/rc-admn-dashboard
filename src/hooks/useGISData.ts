@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { computeRiskScore } from "@/lib/riskScore";
 import { apiFetch } from "@/lib/apiClient";
+import { supabase } from "@/integrations/supabase/client";
 
 export interface GISUser {
   id: string;
@@ -34,20 +34,90 @@ export interface ActiveAlert {
   phone: string | null;
 }
 
-const SEVERITY_WEIGHT: Record<string, number> = {
-  critical: 4,
-  high: 3,
-  warning: 3,
-  medium: 2,
-  low: 1,
-};
+export interface GISOffice {
+  id: string;
+  name: string;
+  office_type: string | null;
+  address: string | null;
+  city: string | null;
+  post_code: string | null;
+  phone: string | null;
+  coords: [number, number];
+}
+
+export interface GISFieldStaff {
+  id: string;
+  full_name: string;
+  role: string | null;
+  team: string | null;
+  phone: string | null;
+  status: string;
+  capacity: number;
+  open_cases: number;
+  last_seen_at: string | null;
+  coords: [number, number] | null;
+}
+
+async function fetchOperationalOffices(): Promise<GISOffice[]> {
+  const { data, error } = await supabase
+    .from("operational_offices")
+    .select("id,name,office_type,address,city,post_code,phone,latitude,longitude")
+    .eq("active", true)
+    .order("name");
+
+  if (error) {
+    console.warn("Operational offices unavailable:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((office) => ({
+    id: office.id,
+    name: office.name,
+    office_type: office.office_type,
+    address: office.address,
+    city: office.city,
+    post_code: office.post_code,
+    phone: office.phone,
+    coords: [Number(office.latitude), Number(office.longitude)],
+  }));
+}
+
+async function fetchFieldStaff(): Promise<GISFieldStaff[]> {
+  const { data, error } = await supabase
+    .from("field_staff")
+    .select("id,full_name,role,team,phone,status,capacity,open_cases,last_known_latitude,last_known_longitude,last_seen_at")
+    .eq("active", true)
+    .order("full_name");
+
+  if (error) {
+    console.warn("Field staff unavailable:", error.message);
+    return [];
+  }
+
+  return (data ?? []).map((staff) => ({
+    id: staff.id,
+    full_name: staff.full_name,
+    role: staff.role,
+    team: staff.team,
+    phone: staff.phone,
+    status: staff.status,
+    capacity: staff.capacity,
+    open_cases: staff.open_cases,
+    last_seen_at: staff.last_seen_at,
+    coords:
+      staff.last_known_latitude !== null && staff.last_known_longitude !== null
+        ? [Number(staff.last_known_latitude), Number(staff.last_known_longitude)]
+        : null,
+  }));
+}
 
 export function useGISData() {
   return useQuery({
     queryKey: ["gis-data"],
     refetchInterval: 30000,
     queryFn: async () => {
-      const res = await apiFetch<{
+      const [res, offices, fieldStaff] = await Promise.all([
+        apiFetch<{
         totalUsers: number;
         checkinsEnabled: number;
         activeAlertCount: number;
@@ -57,7 +127,10 @@ export function useGISData() {
         gisUsers: GISUser[];
         activeAlerts: ActiveAlert[];
         cityDistribution: { city: string; count: number }[];
-      }>("/api/v1/user-dashboard/users");
+        }>("/api/v1/user-dashboard/users"),
+        fetchOperationalOffices(),
+        fetchFieldStaff(),
+      ]);
 
       const gisUsers = res.gisUsers.map((u) => ({
         ...u,
@@ -74,6 +147,8 @@ export function useGISData() {
         totalSensors: res.totalSensors,
         caregiversLinked: res.caregiversLinked,
         gisUsers,
+        offices,
+        fieldStaff,
         activeAlerts: res.activeAlerts || [],
         cityDistribution: res.cityDistribution || [],
       };

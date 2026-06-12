@@ -14,6 +14,113 @@ export type Database = {
   }
   public: {
     Tables: {
+      field_staff: {
+        Row: {
+          active: boolean
+          base_office_id: string | null
+          capacity: number
+          created_at: string
+          full_name: string
+          id: string
+          last_known_latitude: number | null
+          last_known_longitude: number | null
+          last_seen_at: string | null
+          open_cases: number
+          phone: string | null
+          role: string | null
+          status: string
+          team: string | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          base_office_id?: string | null
+          capacity?: number
+          created_at?: string
+          full_name: string
+          id?: string
+          last_known_latitude?: number | null
+          last_known_longitude?: number | null
+          last_seen_at?: string | null
+          open_cases?: number
+          phone?: string | null
+          role?: string | null
+          status?: string
+          team?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          base_office_id?: string | null
+          capacity?: number
+          created_at?: string
+          full_name?: string
+          id?: string
+          last_known_latitude?: number | null
+          last_known_longitude?: number | null
+          last_seen_at?: string | null
+          open_cases?: number
+          phone?: string | null
+          role?: string | null
+          status?: string
+          team?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "field_staff_base_office_id_fkey"
+            columns: ["base_office_id"]
+            isOneToOne: false
+            referencedRelation: "operational_offices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      operational_offices: {
+        Row: {
+          active: boolean
+          address: string | null
+          city: string | null
+          created_at: string
+          id: string
+          latitude: number
+          longitude: number
+          name: string
+          office_type: string | null
+          phone: string | null
+          post_code: string | null
+          updated_at: string
+        }
+        Insert: {
+          active?: boolean
+          address?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          latitude: number
+          longitude: number
+          name: string
+          office_type?: string | null
+          phone?: string | null
+          post_code?: string | null
+          updated_at?: string
+        }
+        Update: {
+          active?: boolean
+          address?: string | null
+          city?: string | null
+          created_at?: string
+          id?: string
+          latitude?: number
+          longitude?: number
+          name?: string
+          office_type?: string | null
+          phone?: string | null
+          post_code?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
