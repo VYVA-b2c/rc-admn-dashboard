@@ -1,7 +1,6 @@
 import { ReactNode } from "react";
 import { Circle } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
-import { LanguageSelector } from "@/components/LanguageSelector";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -36,7 +35,6 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
                 <Circle className="h-2 w-2 fill-[hsl(142,71%,45%)] text-[hsl(142,71%,45%)]" />
                 {t("layout.systemStatus")}
               </div>
-              <LanguageSelector />
               <div className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary max-[420px]:hidden">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">
                   {initials(user?.email)}

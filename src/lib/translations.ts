@@ -664,6 +664,8 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Settings
     "settings.title": "Settings",
+    "settings.language": "Language",
+    "settings.languageDescription": "Choose the console language for this browser.",
     "settings.changePassword": "Change Password",
     "settings.signedInAs": "Update your account password. You are signed in as",
     "settings.newPassword": "New Password",
@@ -1362,6 +1364,8 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Settings
     "settings.title": "Einstellungen",
+    "settings.language": "Sprache",
+    "settings.languageDescription": "Wählen Sie die Konsolensprache für diesen Browser.",
     "settings.changePassword": "Passwort ändern",
     "settings.signedInAs": "Aktualisieren Sie Ihr Kontopasswort. Sie sind angemeldet als",
     "settings.newPassword": "Neues Passwort",
@@ -1887,6 +1891,19 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.timeline.checkinsConfigured": "Check-ins configurados",
     "profile.timeline.medicationAdded": "Medicación añadida: {item}",
     "profile.timeline.alert": "Alerta registrada",
+
+    // Settings
+    "settings.title": "Configuración",
+    "settings.language": "Idioma",
+    "settings.languageDescription": "Elige el idioma de la consola para este navegador.",
+    "settings.changePassword": "Cambiar contraseña",
+    "settings.signedInAs": "Actualiza la contraseña de tu cuenta. Has iniciado sesión como",
+    "settings.newPassword": "Nueva contraseña",
+    "settings.confirmNewPassword": "Confirmar nueva contraseña",
+    "settings.atLeast6": "Al menos 6 caracteres",
+    "settings.reenterPassword": "Vuelve a introducir la nueva contraseña",
+    "settings.updating": "Actualizando...",
+    "settings.updatePassword": "Actualizar contraseña",
 
     // Prepare Call
     "callPrep.title": "Preparar llamada — {name}",

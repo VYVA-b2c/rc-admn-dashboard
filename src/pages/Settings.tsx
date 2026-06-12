@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { LanguageSelector } from "@/components/LanguageSelector";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Lock } from "lucide-react";
+import { Languages, Lock } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
 
 export default function Settings() {
@@ -40,6 +41,19 @@ export default function Settings() {
     <div className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">{t("settings.title")}</h1>
       <div className="grid gap-6 max-w-lg">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Languages className="h-5 w-5" />
+              {t("settings.language")}
+            </CardTitle>
+            <CardDescription>{t("settings.languageDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <LanguageSelector />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

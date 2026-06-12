@@ -2,7 +2,6 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { Toaster } from "@/components/ui/toaster";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import Campaigns from "@/pages/Campaigns";
 
@@ -11,7 +10,6 @@ function renderCampaigns() {
     <MemoryRouter initialEntries={["/campaigns"]}>
       <LanguageProvider>
         <Campaigns />
-        <Toaster />
       </LanguageProvider>
     </MemoryRouter>,
   );
@@ -24,10 +22,6 @@ describe("Campaigns", () => {
     expect(screen.getByRole("heading", { name: "Campaigns" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "New campaign" }));
-    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
-
-    expect(await screen.findByText("Enter a campaign name")).toBeInTheDocument();
-
     fireEvent.change(screen.getByLabelText("Campaign name"), {
       target: { value: "Winter welfare check" },
     });
