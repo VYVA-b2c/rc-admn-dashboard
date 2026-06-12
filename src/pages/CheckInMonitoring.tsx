@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -49,6 +49,40 @@ type UserDashboardResponse = {
   }>;
 };
 
+type ScheduledCallApiItem = Partial<ScheduledCall> & {
+  name?: string | null;
+  phone?: string | null;
+  user_name?: string;
+  user_phone?: string;
+  preferredTime?: string | null;
+  active?: boolean;
+  enabled?: boolean;
+  frequency?: number | string | null;
+  vyva_user_id?: number | string;
+  user?: {
+    id?: number | string;
+    first_name?: string | null;
+    last_name?: string | null;
+    name?: string | null;
+    phone?: string | null;
+    city?: string | null;
+  } | null;
+  vyva_users?: {
+    id?: number | string;
+    first_name?: string | null;
+    last_name?: string | null;
+    phone?: string | null;
+    city?: string | null;
+  } | null;
+};
+
+type ScheduledCallsResponse =
+  | ScheduledCallApiItem[]
+  | {
+      checkins?: ScheduledCallApiItem[];
+      data?: ScheduledCallApiItem[];
+    };
+
 function callToPayload(call: ScheduledCall, overrides: Partial<ScheduledCallPayload> = {}): ScheduledCallPayload {
   return {
     user_id: String(call.user_id),
@@ -58,6 +92,58 @@ function callToPayload(call: ScheduledCall, overrides: Partial<ScheduledCallPayl
     preferred_time: call.preferred_time || null,
     ...overrides,
   };
+}
+
+function pickString(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "string" && item.trim().length > 0);
+  return typeof value === "string" ? value : undefined;
+}
+
+function pickId(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "string" || typeof item === "number");
+  return value === undefined ? "" : value;
+}
+
+function fullName(firstName?: string | null, lastName?: string | null) {
+  return [firstName, lastName].filter(Boolean).join(" ").trim();
+}
+
+function normalizeScheduledCall(raw: ScheduledCallApiItem): ScheduledCall {
+  const nestedUser = raw.user ?? raw.vyva_users;
+  const userId = pickId(raw.user_id, raw.vyva_user_id, nestedUser?.id);
+  const name =
+    pickString(
+      raw.userName,
+      raw.user_name,
+      raw.name,
+      nestedUser?.name,
+      fullName(nestedUser?.first_name, nestedUser?.last_name),
+    ) ?? String(userId || "Unknown");
+  const frequency = Number(raw.frequency_days ?? raw.frequency ?? 1);
+
+  return {
+    id: pickId(raw.id),
+    user_id: userId,
+    userName: name,
+    userPhone: pickString(raw.userPhone, raw.user_phone, raw.phone, nestedUser?.phone),
+    city: pickString(raw.city, nestedUser?.city) ?? null,
+    type: raw.type || "scheduled_call",
+    is_active:
+      typeof raw.is_active === "boolean"
+        ? raw.is_active
+        : typeof raw.active === "boolean"
+          ? raw.active
+          : typeof raw.enabled === "boolean"
+            ? raw.enabled
+            : true,
+    frequency_days: Number.isInteger(frequency) && frequency > 0 ? frequency : 1,
+    preferred_time: raw.preferred_time ?? raw.preferredTime ?? null,
+  };
+}
+
+function normalizeScheduledCalls(response: ScheduledCallsResponse): ScheduledCall[] {
+  const list = Array.isArray(response) ? response : response.checkins ?? response.data ?? [];
+  return list.map(normalizeScheduledCall);
 }
 
 function typeLabel(type: string | undefined, t: (key: string) => string) {
@@ -80,22 +166,35 @@ export default function CheckInMonitoring() {
   const { isAdmin } = useAdminRole();
   const canEdit = isAdmin && !authBypassEnabled;
 
-  const { data: checkinsData, isLoading } = useQuery({
+  const {
+    data: checkinsData,
+    error: checkinsError,
+    isError,
+    isLoading,
+  } = useQuery({
     queryKey: ["checkin-monitoring"],
     queryFn: async (): Promise<ScheduledCall[]> => {
       try {
-        return await apiFetch<ScheduledCall[]>("/api/v1/checkins-dashboard/checkins");
+        const response = await apiFetch<ScheduledCallsResponse>("/api/v1/checkins-dashboard/checkins");
+        return normalizeScheduledCalls(response);
       } catch (error) {
-        if (!authBypassEnabled) {
-          console.warn("Check-in API unavailable:", error instanceof Error ? error.message : error);
-        }
-        return [];
+        if (authBypassEnabled) return [];
+        throw error;
       }
     },
     retry: false,
   });
 
   const checkins = useMemo(() => checkinsData ?? [], [checkinsData]);
+
+  useEffect(() => {
+    if (!isError) return;
+    toast({
+      title: t("checkin.loadFailed"),
+      description: checkinsError instanceof Error ? checkinsError.message : undefined,
+      variant: "destructive",
+    });
+  }, [checkinsError, isError, t]);
 
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ["scheduled-call-users"],
@@ -202,7 +301,7 @@ export default function CheckInMonitoring() {
       const s = search.toLowerCase();
       list = list.filter(
         (c) =>
-          c.userName.toLowerCase().includes(s) ||
+          c.userName?.toLowerCase().includes(s) ||
           c.type?.toLowerCase().includes(s) ||
           c.userPhone?.toLowerCase().includes(s) ||
           c.city?.toLowerCase().includes(s),
@@ -297,6 +396,12 @@ export default function CheckInMonitoring() {
                   ))}
                 </TableRow>
               ))
+            ) : isError ? (
+              <TableRow>
+                <TableCell colSpan={actionColSpan} className="py-12 text-center text-destructive">
+                  {t("checkin.loadFailed")}
+                </TableCell>
+              </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={actionColSpan} className="py-12 text-center text-muted-foreground">
@@ -304,57 +409,69 @@ export default function CheckInMonitoring() {
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((c) => (
-                <TableRow key={c.id} className="cursor-pointer transition-colors hover:bg-muted/50" onClick={() => navigate(`/users/${c.user_id}`)}>
-                  <TableCell className="font-medium">{c.userName}</TableCell>
-                  <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
-                  <TableCell>{typeLabel(c.type, t)}</TableCell>
-                  <TableCell>
-                    <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
-                      {c.is_active ? t("checkin.active") : t("checkin.inactive")}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{formatFrequency(c.frequency_days)}</TableCell>
-                  <TableCell>{c.preferred_time || "—"}</TableCell>
-                  {canEdit && (
-                    <TableCell onClick={(event) => event.stopPropagation()}>
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("checkin.edit")}
-                          aria-label={`${t("checkin.edit")} ${c.userName}`}
-                          className="h-8 w-8 rounded-xl"
-                          onClick={() => openEditDialog(c)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={c.is_active ? t("checkin.disable") : t("checkin.enable")}
-                          aria-label={`${c.is_active ? t("checkin.disable") : t("checkin.enable")} ${c.userName}`}
-                          className="h-8 w-8 rounded-xl"
-                          disabled={toggleMutation.isPending}
-                          onClick={() => toggleMutation.mutate(c)}
-                        >
-                          {c.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          title={t("checkin.delete")}
-                          aria-label={`${t("checkin.delete")} ${c.userName}`}
-                          className="h-8 w-8 rounded-xl text-destructive hover:text-destructive"
-                          onClick={() => setDeleteTarget(c)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+              filtered.map((c) => {
+                const canWriteRow = Boolean(c.id);
+
+                return (
+                  <TableRow
+                    key={String(c.id || `${c.user_id}-${c.type}-${c.preferred_time}`)}
+                    className={c.user_id ? "cursor-pointer transition-colors hover:bg-muted/50" : "transition-colors"}
+                    onClick={() => {
+                      if (c.user_id) navigate(`/users/${c.user_id}`);
+                    }}
+                  >
+                    <TableCell className="font-medium">{c.userName}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
+                    <TableCell>{typeLabel(c.type, t)}</TableCell>
+                    <TableCell>
+                      <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
+                        {c.is_active ? t("checkin.active") : t("checkin.inactive")}
+                      </Badge>
                     </TableCell>
-                  )}
-                </TableRow>
-              ))
+                    <TableCell>{formatFrequency(c.frequency_days)}</TableCell>
+                    <TableCell>{c.preferred_time || "—"}</TableCell>
+                    {canEdit && (
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("checkin.edit")}
+                            aria-label={`${t("checkin.edit")} ${c.userName}`}
+                            className="h-8 w-8 rounded-xl"
+                            disabled={!canWriteRow}
+                            onClick={() => openEditDialog(c)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={c.is_active ? t("checkin.disable") : t("checkin.enable")}
+                            aria-label={`${c.is_active ? t("checkin.disable") : t("checkin.enable")} ${c.userName}`}
+                            className="h-8 w-8 rounded-xl"
+                            disabled={!canWriteRow || toggleMutation.isPending}
+                            onClick={() => toggleMutation.mutate(c)}
+                          >
+                            {c.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("checkin.delete")}
+                            aria-label={`${t("checkin.delete")} ${c.userName}`}
+                            className="h-8 w-8 rounded-xl text-destructive hover:text-destructive"
+                            disabled={!canWriteRow}
+                            onClick={() => setDeleteTarget(c)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>
