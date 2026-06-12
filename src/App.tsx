@@ -44,6 +44,16 @@ const App = () => (
               }
             />
             <Route
+              path="/risk-queue"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <Dashboard />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
               path="/users"
               element={
                 <ProtectedRoute>
@@ -89,6 +99,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <CheckInMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/alerts"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <Sensors />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

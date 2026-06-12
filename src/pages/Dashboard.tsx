@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { useLocation } from "react-router-dom";
 import {
   AlertTriangle,
   Building2,
@@ -196,6 +197,7 @@ function actionLabelKey(action: QueueTask["action"]) {
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
   const { language, t } = useLanguage();
+  const location = useLocation();
   const [interventionUser, setInterventionUser] = useState<GISUser | null>(null);
   const [interventionOpen, setInterventionOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -308,6 +310,16 @@ export default function Dashboard() {
 
   const hasActiveFilters = activeFilter !== "all" || searchQuery.trim();
 
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      if (location.pathname === "/risk-queue") {
+        document.getElementById("risk-queue")?.scrollIntoView({ block: "start" });
+      } else if (location.pathname === "/") {
+        window.scrollTo({ top: 0 });
+      }
+    });
+  }, [location.pathname]);
+
   return (
     <div className="mx-auto max-w-[1520px] space-y-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -396,7 +408,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <Card className="overflow-hidden border-border bg-white shadow-sm">
+      <Card id="risk-queue" className="scroll-mt-5 overflow-hidden border-border bg-white shadow-sm">
         <CardContent className="p-0">
           <div className="relative">
             <div className="absolute left-4 top-4 z-[5] flex max-w-[calc(100%-2rem)] flex-wrap gap-2">

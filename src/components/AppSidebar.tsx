@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 type NavItem = {
   titleKey: string;
   url?: string;
+  activeUrls?: string[];
   icon: ComponentType<{ className?: string }>;
   badge?: string;
 };
@@ -49,8 +50,8 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     items: [
       { titleKey: "sidebar.today", url: "/", icon: Home },
       { titleKey: "sidebar.people", url: "/users", icon: Users },
-      { titleKey: "sidebar.riskQueue", url: "/sensors", icon: AlertTriangle, badge: "18" },
-      { titleKey: "sidebar.alerts", url: "/sensors", icon: Bell },
+      { titleKey: "sidebar.riskQueue", url: "/risk-queue", icon: AlertTriangle, badge: "18" },
+      { titleKey: "sidebar.alerts", url: "/alerts", activeUrls: ["/alerts", "/sensors"], icon: Bell },
     ],
   },
   {
@@ -98,11 +99,10 @@ function SidebarItem({ item, collapsed }: { item: NavItem; collapsed: boolean })
   const location = useLocation();
   const { t } = useLanguage();
   const Icon = item.icon;
-  const isActive = item.url === "/"
-    ? location.pathname === "/"
-    : item.url
-      ? location.pathname.startsWith(item.url)
-      : false;
+  const activeUrls = item.activeUrls ?? (item.url ? [item.url] : []);
+  const isActive = activeUrls.some((url) =>
+    url === "/" ? location.pathname === "/" : location.pathname === url || location.pathname.startsWith(`${url}/`),
+  );
 
   const baseClass =
     "flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors";
