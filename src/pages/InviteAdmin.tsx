@@ -11,6 +11,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { UserPlus, Eye, EyeOff } from "lucide-react";
+import { authBypassEnabled } from "@/lib/authMode";
+
+type AdminUserRow = {
+  id: string;
+  role: string;
+  profiles?: {
+    full_name?: string | null;
+    email?: string | null;
+  } | null;
+};
 
 export default function InviteAdmin() {
   const { t } = useLanguage();
@@ -23,6 +33,7 @@ export default function InviteAdmin() {
   const { data: admins, refetch } = useQuery({
     queryKey: ["admin-users"],
     queryFn: async () => {
+      if (authBypassEnabled) return [];
       const { data, error } = await supabase
         .from("user_roles")
         .select("*, profiles(full_name, email)")
@@ -30,10 +41,17 @@ export default function InviteAdmin() {
       if (error) throw error;
       return data || [];
     },
+    enabled: !authBypassEnabled,
+    placeholderData: [],
+    retry: false,
   });
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (authBypassEnabled) {
+      toast.info("Team access is disabled in preview mode.");
+      return;
+    }
     if (!email || !password) return;
     if (password.length < 6) { toast.error(t("invite.passwordTooShort")); return; }
     setLoading(true);
@@ -54,8 +72,10 @@ export default function InviteAdmin() {
       setEmail("");
       setPassword("");
       refetch();
-    } catch (err: any) {
-      toast.error(t("invite.createFailed"), { description: err.message });
+    } catch (err) {
+      toast.error(t("invite.createFailed"), {
+        description: err instanceof Error ? err.message : undefined,
+      });
     }
     setLoading(false);
   };
@@ -70,14 +90,24 @@ export default function InviteAdmin() {
             <UserPlus className="h-5 w-5 text-primary" />
             {t("invite.createNewUser")}
           </CardTitle>
-          <CardDescription>{t("invite.description")}</CardDescription>
+          <CardDescription>
+            {authBypassEnabled ? "Team access is disabled in preview mode." : t("invite.description")}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="create-email">{t("invite.email")}</Label>
-                <Input id="create-email" type="email" placeholder="user@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                <Input
+                  id="create-email"
+                  type="email"
+                  placeholder="user@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  disabled={authBypassEnabled}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="create-password">{t("invite.tempPassword")}</Label>
@@ -91,8 +121,15 @@ export default function InviteAdmin() {
                     minLength={6}
                     required
                     className="pr-10"
+                    disabled={authBypassEnabled}
                   />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" tabIndex={-1}>
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+                    tabIndex={-1}
+                    disabled={authBypassEnabled}
+                  >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
@@ -101,7 +138,7 @@ export default function InviteAdmin() {
             <div className="flex gap-3 items-end">
               <div className="w-48 space-y-1.5">
                 <Label>{t("invite.role")}</Label>
-                <Select value={role} onValueChange={setRole}>
+                <Select value={role} onValueChange={setRole} disabled={authBypassEnabled}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">{t("invite.admin")}</SelectItem>
@@ -110,7 +147,7 @@ export default function InviteAdmin() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" disabled={loading || authBypassEnabled}>
                 {loading ? t("invite.creating") : t("invite.createUser")}
               </Button>
             </div>
@@ -139,7 +176,7 @@ export default function InviteAdmin() {
                   </TableCell>
                 </TableRow>
               ) : (
-                admins?.map((admin: any) => (
+                (admins as AdminUserRow[]).map((admin) => (
                   <TableRow key={admin.id}>
                     <TableCell className="font-medium">{admin.profiles?.full_name || "—"}</TableCell>
                     <TableCell className="text-muted-foreground">{admin.profiles?.email || "—"}</TableCell>

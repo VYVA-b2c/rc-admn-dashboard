@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Lock } from "lucide-react";
+import { authBypassEnabled } from "@/lib/authMode";
 
 export default function Settings() {
   const { user, updatePassword } = useAuth();
@@ -17,6 +18,10 @@ export default function Settings() {
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (authBypassEnabled) {
+      toast.info("Password changes are disabled in preview mode.");
+      return;
+    }
     if (newPassword !== confirmPassword) { toast.error(t("reset.passwordsMismatch")); return; }
     if (newPassword.length < 6) { toast.error(t("reset.passwordTooShort")); return; }
     setLoading(true);
@@ -42,8 +47,14 @@ export default function Settings() {
               {t("settings.changePassword")}
             </CardTitle>
             <CardDescription>
-              {t("settings.signedInAs")}{" "}
-              <span className="font-medium text-foreground">{user?.email}</span>.
+              {authBypassEnabled ? (
+                "Password changes are disabled in preview mode."
+              ) : (
+                <>
+                  {t("settings.signedInAs")}{" "}
+                  <span className="font-medium text-foreground">{user?.email}</span>.
+                </>
+              )}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -58,6 +69,7 @@ export default function Settings() {
                   placeholder={t("settings.atLeast6")}
                   required
                   minLength={6}
+                  disabled={authBypassEnabled}
                 />
               </div>
               <div className="space-y-2">
@@ -70,9 +82,10 @@ export default function Settings() {
                   placeholder={t("settings.reenterPassword")}
                   required
                   minLength={6}
+                  disabled={authBypassEnabled}
                 />
               </div>
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" disabled={loading || authBypassEnabled}>
                 {loading ? t("settings.updating") : t("settings.updatePassword")}
               </Button>
             </form>

@@ -6,7 +6,18 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Phone } from "lucide-react";
-import { BASE_URL } from "@/lib/apiClient";
+import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
+
+type EmergencyContact = {
+  id?: string;
+  user_id?: string;
+  user_name: string;
+  user_phone?: string;
+  caregiver_name?: string;
+  caregiver_phone?: string;
+  city?: string;
+};
 
 export default function EmergencyContacts() {
   const [search, setSearch] = useState("");
@@ -15,12 +26,18 @@ export default function EmergencyContacts() {
 
   const { data: contacts, isLoading } = useQuery({
     queryKey: ["emergency-contacts"],
-    queryFn: async () => {
-      const res = await fetch(`${BASE_URL}/api/v1/caretaker-dashboard/caretakers`);
-      if (!res.ok) throw new Error("Failed to fetch contacts");
-      const data = await res.json();
-      return data.caretakers;
+    queryFn: async (): Promise<EmergencyContact[]> => {
+      try {
+        const data = await apiFetch<{ caretakers?: EmergencyContact[] }>("/api/v1/caretaker-dashboard/caretakers");
+        return data.caretakers ?? [];
+      } catch (error) {
+        if (!authBypassEnabled) {
+          console.warn("Emergency contacts API unavailable:", error instanceof Error ? error.message : error);
+        }
+        return [];
+      }
     },
+    retry: false,
   });
 
   const filtered = (contacts || []).filter((c) => {

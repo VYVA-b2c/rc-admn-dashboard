@@ -1,5 +1,5 @@
 import { ReactNode } from "react";
-import { ChevronDown, Circle } from "lucide-react";
+import { Circle } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -37,13 +37,12 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
                 {t("layout.systemStatus")}
               </div>
               <LanguageSelector />
-              <button className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
+              <div className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">
                   {initials(user?.email)}
                 </span>
                 <span className="hidden sm:inline">{t("layout.operatorName")}</span>
-                <ChevronDown className="hidden h-4 w-4 sm:block" />
-              </button>
+              </div>
             </div>
           </header>
           <main className="flex-1 overflow-auto px-4 py-5 md:px-6 lg:px-8">{children}</main>

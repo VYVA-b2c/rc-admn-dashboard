@@ -9,7 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/StatCard";
 import { Search, PhoneCall, CheckCircle, XCircle, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BASE_URL } from "@/lib/apiClient";
+import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
 
 type FilterTab = "all" | "active" | "inactive";
 
@@ -33,10 +34,16 @@ export default function CheckInMonitoring() {
   const { data: checkins, isLoading } = useQuery({
     queryKey: ["checkin-monitoring"],
     queryFn: async (): Promise<Checkin[]> => {
-      const res = await fetch(`${BASE_URL}/api/v1/checkins-dashboard/checkins`);
-      if (!res.ok) throw new Error("Failed to fetch check-ins");
-      return res.json();
+      try {
+        return await apiFetch<Checkin[]>("/api/v1/checkins-dashboard/checkins");
+      } catch (error) {
+        if (!authBypassEnabled) {
+          console.warn("Check-in API unavailable:", error instanceof Error ? error.message : error);
+        }
+        return [];
+      }
     },
+    retry: false,
   });
 
   const stats = useMemo(() => {

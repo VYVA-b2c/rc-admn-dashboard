@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/apiClient";
 import { supabase } from "@/integrations/supabase/client";
+import { authBypassEnabled } from "@/lib/authMode";
 
 export interface GISUser {
   id: string;
@@ -58,6 +59,41 @@ export interface GISFieldStaff {
   coords: [number, number] | null;
 }
 
+type DashboardGISResponse = {
+  totalUsers: number;
+  checkinsEnabled: number;
+  activeAlertCount: number;
+  criticalAlertCount: number;
+  totalSensors: number;
+  caregiversLinked: number;
+  gisUsers: GISUser[];
+  activeAlerts: ActiveAlert[];
+  cityDistribution: { city: string; count: number }[];
+};
+
+const emptyDashboardData: DashboardGISResponse = {
+  totalUsers: 0,
+  checkinsEnabled: 0,
+  activeAlertCount: 0,
+  criticalAlertCount: 0,
+  totalSensors: 0,
+  caregiversLinked: 0,
+  gisUsers: [],
+  activeAlerts: [],
+  cityDistribution: [],
+};
+
+async function fetchDashboardGISData(): Promise<DashboardGISResponse> {
+  try {
+    return await apiFetch<DashboardGISResponse>("/api/v1/user-dashboard/users");
+  } catch (error) {
+    if (!authBypassEnabled) {
+      console.warn("Dashboard API unavailable:", error instanceof Error ? error.message : error);
+    }
+    return emptyDashboardData;
+  }
+}
+
 async function fetchOperationalOffices(): Promise<GISOffice[]> {
   const { data, error } = await supabase
     .from("operational_offices")
@@ -66,7 +102,7 @@ async function fetchOperationalOffices(): Promise<GISOffice[]> {
     .order("name");
 
   if (error) {
-    console.warn("Operational offices unavailable:", error.message);
+    if (!authBypassEnabled) console.warn("Operational offices unavailable:", error.message);
     return [];
   }
 
@@ -90,7 +126,7 @@ async function fetchFieldStaff(): Promise<GISFieldStaff[]> {
     .order("full_name");
 
   if (error) {
-    console.warn("Field staff unavailable:", error.message);
+    if (!authBypassEnabled) console.warn("Field staff unavailable:", error.message);
     return [];
   }
 
@@ -114,20 +150,11 @@ async function fetchFieldStaff(): Promise<GISFieldStaff[]> {
 export function useGISData() {
   return useQuery({
     queryKey: ["gis-data"],
-    refetchInterval: 30000,
+    refetchInterval: authBypassEnabled ? false : 30000,
+    retry: false,
     queryFn: async () => {
       const [res, offices, fieldStaff] = await Promise.all([
-        apiFetch<{
-        totalUsers: number;
-        checkinsEnabled: number;
-        activeAlertCount: number;
-        criticalAlertCount: number;
-        totalSensors: number;
-        caregiversLinked: number;
-        gisUsers: GISUser[];
-        activeAlerts: ActiveAlert[];
-        cityDistribution: { city: string; count: number }[];
-        }>("/api/v1/user-dashboard/users"),
+        fetchDashboardGISData(),
         fetchOperationalOffices(),
         fetchFieldStaff(),
       ]);

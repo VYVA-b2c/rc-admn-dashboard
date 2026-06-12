@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { authBypassEnabled } from "@/lib/authMode";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -180,15 +181,17 @@ export function AppSidebar() {
             <p className="text-[11px] text-muted-foreground">{t("sidebar.operator")}</p>
           </div>
         )}
-        <Button
-          variant="ghost"
-          size={collapsed ? "icon" : "sm"}
-          onClick={signOut}
-          className="w-full justify-start rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-        >
-          <LogOut className="h-4 w-4" />
-          {!collapsed && <span className="ml-2">{t("sidebar.signOut")}</span>}
-        </Button>
+        {!authBypassEnabled && (
+          <Button
+            variant="ghost"
+            size={collapsed ? "icon" : "sm"}
+            onClick={signOut}
+            className="w-full justify-start rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <LogOut className="h-4 w-4" />
+            {!collapsed && <span className="ml-2">{t("sidebar.signOut")}</span>}
+          </Button>
+        )}
       </SidebarFooter>
     </Sidebar>
   );

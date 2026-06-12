@@ -517,7 +517,11 @@ export default function Dashboard() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 rounded-xl text-muted-foreground"
-                          onClick={(event) => event.stopPropagation()}
+                          aria-label={`${t("queue.action.review")} ${task.person}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (task.user) handleUserClick(task.user);
+                          }}
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
