@@ -7,14 +7,23 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signInWithMagicLink: (email: string) => Promise<{ error: Error | null }>;
-  signInWithOAuth: (provider: "google" | "azure") => Promise<{ error: Error | null }>;
+  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null }>;
+  signInWithOAuth: (provider: "google" | "azure", redirectPath?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updatePassword: (password: string) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+function safeRedirectPath(path = "/") {
+  if (!path.startsWith("/") || path.startsWith("//")) return "/";
+  return path;
+}
+
+function authRedirectUrl(path?: string) {
+  return `${window.location.origin}${safeRedirectPath(path)}`;
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -57,22 +66,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error as Error | null };
   };
 
-  const signInWithMagicLink = async (email: string) => {
+  const signInWithMagicLink = async (email: string, redirectPath?: string) => {
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/`,
+        emailRedirectTo: authRedirectUrl(redirectPath),
         shouldCreateUser: false,
       },
     });
     return { error: error as Error | null };
   };
 
-  const signInWithOAuth = async (provider: "google" | "azure") => {
+  const signInWithOAuth = async (provider: "google" | "azure", redirectPath?: string) => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: authRedirectUrl(redirectPath),
         scopes: provider === "azure" ? "email openid profile" : undefined,
       },
     });

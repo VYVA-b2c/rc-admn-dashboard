@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { Building2, Chrome, Mail } from "lucide-react";
 import drkLogo from "@/assets/drk-logo.svg";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,15 +12,22 @@ import { toast } from "sonner";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { authBypassEnabled } from "@/lib/authMode";
 
+function safeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/";
+  return value;
+}
+
 export default function Login() {
   const { session, signInWithMagicLink, signInWithOAuth } = useAuth();
   const { t } = useLanguage();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<"google" | "azure" | null>(null);
   const rateLimitUntil = useRef(0);
+  const nextPath = safeNextPath(searchParams.get("next"));
 
-  if (session || authBypassEnabled) return <Navigate to="/" replace />;
+  if (session || authBypassEnabled) return <Navigate to={nextPath} replace />;
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,7 +41,7 @@ export default function Login() {
     }
 
     setLoading(true);
-    const { error } = await signInWithMagicLink(email.trim());
+    const { error } = await signInWithMagicLink(email.trim(), nextPath);
     if (error) {
       const msg = error.message?.toLowerCase() ?? "";
       if (msg.includes("rate") || msg.includes("429")) {
@@ -51,7 +58,7 @@ export default function Login() {
 
   const handleOAuth = async (provider: "google" | "azure") => {
     setOauthLoading(provider);
-    const { error } = await signInWithOAuth(provider);
+    const { error } = await signInWithOAuth(provider, nextPath);
     if (error) {
       toast.error(t("login.oauthFailed"), { description: error.message });
       setOauthLoading(null);
