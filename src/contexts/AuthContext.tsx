@@ -7,6 +7,8 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signInWithMagicLink: (email: string) => Promise<{ error: Error | null }>;
+  signInWithOAuth: (provider: "google" | "azure") => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updatePassword: (password: string) => Promise<{ error: Error | null }>;
@@ -55,6 +57,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error as Error | null };
   };
 
+  const signInWithMagicLink = async (email: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: `${window.location.origin}/`,
+        shouldCreateUser: false,
+      },
+    });
+    return { error: error as Error | null };
+  };
+
+  const signInWithOAuth = async (provider: "google" | "azure") => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/`,
+        scopes: provider === "azure" ? "email openid profile" : undefined,
+      },
+    });
+    return { error: error as Error | null };
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut({ scope: "local" });
     setSession(null);
@@ -74,7 +98,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ session, user, loading, signIn, signOut, resetPassword, updatePassword }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        user,
+        loading,
+        signIn,
+        signInWithMagicLink,
+        signInWithOAuth,
+        signOut,
+        resetPassword,
+        updatePassword,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
