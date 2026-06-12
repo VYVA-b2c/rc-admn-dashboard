@@ -5,14 +5,13 @@ import {
   Download,
   HeartPulse,
   Link2,
-  Megaphone,
   PhoneCall,
-  Pill,
   Plus,
   Users,
   Wrench,
   type LucideIcon,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -71,6 +70,7 @@ function accentClasses(accent: Accent) {
 
 export default function Reports() {
   const { t } = useLanguage();
+  const navigate = useNavigate();
 
   const handleAction = (descriptionKey: string) => {
     toast({
@@ -110,7 +110,7 @@ export default function Reports() {
           <Button
             type="button"
             className="h-10 rounded-full px-4 text-sm font-bold"
-            onClick={() => handleAction("reports.action.campaignLocal")}
+            onClick={() => navigate("/campaigns?create=1")}
           >
             <Plus className="mr-2 h-4 w-4" />
             {t("reports.newCampaign")}
@@ -191,7 +191,7 @@ export default function Reports() {
           <button
             type="button"
             className="text-left text-sm font-bold text-primary"
-            onClick={() => handleAction("reports.action.campaignLocal")}
+            onClick={() => navigate("/campaigns")}
           >
             {t("reports.campaign.name")}
           </button>
