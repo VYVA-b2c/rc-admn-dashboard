@@ -1,9 +1,14 @@
 import { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { authBypassEnabled } from "@/lib/authMode";
 
 export function ProtectedRoute({ children }: { children: ReactNode }) {
   const { session, loading } = useAuth();
+
+  if (authBypassEnabled) {
+    return <>{children}</>;
+  }
 
   if (loading) {
     return (

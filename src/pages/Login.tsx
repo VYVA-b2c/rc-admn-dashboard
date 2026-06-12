@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { authBypassEnabled } from "@/lib/authMode";
 
 export default function Login() {
   const { session, signInWithMagicLink, signInWithOAuth } = useAuth();
@@ -19,7 +20,7 @@ export default function Login() {
   const [oauthLoading, setOauthLoading] = useState<"google" | "azure" | null>(null);
   const rateLimitUntil = useRef(0);
 
-  if (session) return <Navigate to="/" replace />;
+  if (session || authBypassEnabled) return <Navigate to="/" replace />;
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
