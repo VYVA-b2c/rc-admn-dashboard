@@ -68,7 +68,7 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     items: [
       { titleKey: "sidebar.campaigns", icon: Megaphone },
       { titleKey: "sidebar.services", url: "/emergency-contacts", icon: Wrench },
-      { titleKey: "sidebar.reports", icon: LineChart },
+      { titleKey: "sidebar.reports", url: "/reports", icon: LineChart },
       { titleKey: "sidebar.teamAccess", url: "/invite", icon: UserPlus },
       { titleKey: "sidebar.settings", url: "/settings", icon: Settings },
     ],

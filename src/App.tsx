@@ -12,6 +12,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import Dashboard from "@/pages/Dashboard";
 import PrepareCall from "@/pages/PrepareCall";
 import RiskQueue from "@/pages/RiskQueue";
+import Reports from "@/pages/Reports";
 import UsersList from "@/pages/UsersList";
 import UserProfile from "@/pages/UserProfile";
 import InviteAdmin from "@/pages/InviteAdmin";
@@ -151,6 +152,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <Settings />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <Reports />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

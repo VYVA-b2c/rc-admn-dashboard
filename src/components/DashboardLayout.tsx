@@ -26,7 +26,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
           <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-border bg-white/95 px-4 backdrop-blur md:px-6">
             <SidebarTrigger className="h-9 w-9 rounded-xl text-muted-foreground" />
 
-            <div className="min-w-0">
+            <div className="min-w-0 max-[420px]:hidden">
               <p className="text-sm font-bold text-foreground">{t("layout.product")}</p>
               <p className="hidden text-xs text-muted-foreground sm:block">{t("layout.organization")}</p>
             </div>
@@ -37,7 +37,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
                 {t("layout.systemStatus")}
               </div>
               <LanguageSelector />
-              <div className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary">
+              <div className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary max-[420px]:hidden">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">
                   {initials(user?.email)}
                 </span>
