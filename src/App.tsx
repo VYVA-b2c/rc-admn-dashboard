@@ -10,6 +10,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import Login from "@/pages/Login";
 import ResetPassword from "@/pages/ResetPassword";
 import Dashboard from "@/pages/Dashboard";
+import PrepareCall from "@/pages/PrepareCall";
 import UsersList from "@/pages/UsersList";
 import UserProfile from "@/pages/UserProfile";
 import InviteAdmin from "@/pages/InviteAdmin";
@@ -49,6 +50,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <Dashboard />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/risk-queue/:id/prepare-call"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <PrepareCall />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

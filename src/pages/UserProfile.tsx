@@ -359,7 +359,7 @@ export default function UserProfile() {
 
           <div className="mt-6 border-t border-border pt-5">
             <div className="flex flex-wrap gap-2">
-              <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callNow")} onClick={() => handleOperationalAction("profile.action.call")} />
+              <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callNow")} onClick={() => navigate(`/risk-queue/${user.id}/prepare-call`)} />
               <ActionButton icon={MessageCircle} label={t("profile.sendWhatsApp")} onClick={() => handleOperationalAction("profile.action.whatsapp")} />
               <ActionButton icon={Calendar} label={t("profile.createFollowUp")} onClick={() => handleOperationalAction("profile.action.followUp")} />
               <ActionButton icon={Users} label={t("profile.contactCaregiver")} onClick={() => handleOperationalAction("profile.action.caregiver")} />
