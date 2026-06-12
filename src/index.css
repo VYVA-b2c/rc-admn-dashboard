@@ -9,8 +9,8 @@
 
 @layer base {
   :root {
-    --background: 220 20% 97%;
-    --foreground: 225 25% 12%;
+    --background: 224 47% 96%;
+    --foreground: 234 22% 14%;
 
     --card: 0 0% 100%;
     --card-foreground: 225 25% 12%;
@@ -24,8 +24,8 @@
     --secondary: 190 80% 50%;
     --secondary-foreground: 0 0% 100%;
 
-    --muted: 220 15% 93%;
-    --muted-foreground: 220 10% 46%;
+    --muted: 234 35% 95%;
+    --muted-foreground: 232 10% 46%;
 
     --accent: 45 100% 50%;
     --accent-foreground: 0 0% 100%;
@@ -33,19 +33,19 @@
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 220 15% 90%;
-    --input: 220 15% 90%;
+    --border: 232 30% 89%;
+    --input: 232 30% 89%;
     --ring: 252 85% 60%;
 
-    --radius: 0.75rem;
+    --radius: 0.8rem;
 
-    --sidebar-background: 225 25% 12%;
-    --sidebar-foreground: 220 15% 85%;
-    --sidebar-primary: 252 85% 65%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 234 22% 14%;
+    --sidebar-primary: 252 85% 60%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 225 20% 18%;
+    --sidebar-accent: 252 85% 60%;
     --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-border: 225 20% 20%;
+    --sidebar-border: 232 30% 90%;
     --sidebar-ring: 252 85% 60%;
 
     /* Custom VYVA tokens */
@@ -111,7 +111,7 @@
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-family: 'Space Grotesk', sans-serif;
+    font-family: 'Inter', sans-serif;
   }
 }
 
