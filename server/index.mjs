@@ -24,7 +24,7 @@ const isProduction =
 
 const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
-const databaseUrl = process.env.LOVABLE_DATABASE_URL || process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
 
 function sslConfig(connectionString) {
   if (!connectionString) return undefined;
@@ -88,7 +88,7 @@ function datesBetween(start, end) {
 
 function dbUnavailable(res) {
   res.status(503).json({
-    error: "Database is not configured. Add LOVABLE_DATABASE_URL or DATABASE_URL as a Replit secret.",
+    error: "Database is not configured. Add DATABASE_URL through Replit Database or Replit Secrets.",
   });
 }
 
@@ -363,7 +363,11 @@ app.get("/api/health", async (req, res, next) => {
       return;
     }
     if (req.query.deep === "true") await query("SELECT 1");
-    res.json({ ok: true, databaseConfigured: true });
+    res.json({
+      ok: true,
+      mode: "database",
+      databaseConfigured: true,
+    });
   } catch (error) {
     next(error);
   }
