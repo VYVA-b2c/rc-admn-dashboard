@@ -69,7 +69,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
-          <img src={drkLogo} alt="DRK Sachsen" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
+          <img src={drkLogo} alt="Red Cross" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
           <p className="mx-auto mt-1 max-w-xs px-2 text-sm leading-relaxed text-muted-foreground sm:max-w-none sm:text-base">
             {t("login.subtitle")}
           </p>

@@ -79,7 +79,7 @@ const translations: Record<Language, Record<string, string>> = {
     "followup.empty": "No people match this follow-up view.",
 
     // Login
-    "login.subtitle": "DRK Sachsen — Admin Dashboard",
+    "login.subtitle": "VYVA x Red Cross operations console",
     "login.signIn": "Sign In",
     "login.resetPassword": "Reset Password",
     "login.email": "Email",
@@ -129,7 +129,7 @@ const translations: Record<Language, Record<string, string>> = {
     "reset.updateSuccess": "Password updated successfully",
 
     // Dashboard
-    "dashboard.title": "DRK Saxony — GIS Command Center",
+    "dashboard.title": "VYVA x Red Cross operations console",
     "dashboard.users": "Users",
     "dashboard.checkinsActive": "Check-ins Active",
     "dashboard.activeAlerts": "Active Alerts",
@@ -888,7 +888,7 @@ const translations: Record<Language, Record<string, string>> = {
     "followup.empty": "Keine Personen passen zu dieser Follow-up-Ansicht.",
 
     // Login
-    "login.subtitle": "DRK Sachsen — Admin-Dashboard",
+    "login.subtitle": "VYVA x Rotes Kreuz Operationskonsole",
     "login.signIn": "Anmelden",
     "login.resetPassword": "Passwort zurücksetzen",
     "login.email": "E-Mail",
@@ -938,7 +938,7 @@ const translations: Record<Language, Record<string, string>> = {
     "reset.updateSuccess": "Passwort erfolgreich aktualisiert",
 
     // Dashboard
-    "dashboard.title": "DRK Sachsen — GIS-Kommandozentrale",
+    "dashboard.title": "VYVA x Rotes Kreuz Operationskonsole",
     "dashboard.users": "Benutzer",
     "dashboard.checkinsActive": "Check-ins Aktiv",
     "dashboard.activeAlerts": "Aktive Alarme",
