@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock,
+  Code2,
+  FileUp,
   MapPin,
   MessageCircle,
   PhoneCall,
@@ -18,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EditUserDialog } from "@/components/user/EditUserDialog";
+import { UserApiIntakeDialog } from "@/components/user/UserApiIntakeDialog";
+import { UserCsvImportDialog } from "@/components/user/UserCsvImportDialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -154,6 +158,8 @@ export default function UsersList() {
   const [cityFilter, setCityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
   const [addUserOpen, setAddUserOpen] = useState(false);
+  const [csvImportOpen, setCsvImportOpen] = useState(false);
+  const [apiIntakeOpen, setApiIntakeOpen] = useState(false);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
   const { isAdmin } = useAdminRole();
@@ -231,10 +237,30 @@ export default function UsersList() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {canManageUsers && (
-            <Button type="button" className="h-10 rounded-full px-4 text-sm font-semibold" onClick={() => setAddUserOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              {t("usersList.addUser")}
-            </Button>
+            <>
+              <Button type="button" className="h-10 rounded-full px-4 text-sm font-semibold" onClick={() => setAddUserOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                {t("usersList.addOneByOne")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-full border-border bg-white px-4 text-sm font-semibold text-foreground"
+                onClick={() => setCsvImportOpen(true)}
+              >
+                <FileUp className="mr-2 h-4 w-4" />
+                {t("usersList.uploadCsv")}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-full border-border bg-white px-4 text-sm font-semibold text-foreground"
+                onClick={() => setApiIntakeOpen(true)}
+              >
+                <Code2 className="mr-2 h-4 w-4" />
+                {t("usersList.apiIntake")}
+              </Button>
+            </>
           )}
           <div className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-2 text-xs font-semibold text-muted-foreground shadow-sm">
             <Users className="h-4 w-4 text-primary" />
@@ -421,6 +447,8 @@ export default function UsersList() {
           onSaved={(savedUser) => navigate(`/users/${savedUser.id}`)}
         />
       )}
+      {csvImportOpen && <UserCsvImportDialog open={csvImportOpen} onOpenChange={setCsvImportOpen} />}
+      {apiIntakeOpen && <UserApiIntakeDialog open={apiIntakeOpen} onOpenChange={setApiIntakeOpen} />}
     </div>
   );
 }
