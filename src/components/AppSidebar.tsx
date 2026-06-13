@@ -58,9 +58,9 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     labelKey: "sidebar.group.followup",
     items: [
       { titleKey: "sidebar.checkins", url: "/checkin-monitoring", icon: CalendarCheck },
-      { titleKey: "sidebar.medication", icon: Pill },
-      { titleKey: "sidebar.wellbeing", icon: Heart },
-      { titleKey: "sidebar.symptoms", icon: Activity },
+      { titleKey: "sidebar.medication", url: "/medication", icon: Pill },
+      { titleKey: "sidebar.wellbeing", url: "/wellbeing", icon: Heart },
+      { titleKey: "sidebar.symptoms", url: "/symptoms", icon: Activity },
     ],
   },
   {

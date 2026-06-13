@@ -22,6 +22,9 @@ import CheckInMonitoring from "@/pages/CheckInMonitoring";
 import Sensors from "@/pages/Sensors";
 import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
+import MedicationMonitoring from "@/pages/MedicationMonitoring";
+import WellbeingMonitoring from "@/pages/WellbeingMonitoring";
+import SymptomsMonitoring from "@/pages/SymptomsMonitoring";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -113,6 +116,36 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <CheckInMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/medication"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <MedicationMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/wellbeing"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <WellbeingMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/symptoms"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <SymptomsMonitoring />
                   </DashboardLayout>
                 </ProtectedRoute>
               }
