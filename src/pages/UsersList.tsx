@@ -8,6 +8,7 @@ import {
   MapPin,
   MessageCircle,
   PhoneCall,
+  Plus,
   Search,
   UserRound,
   Users,
@@ -16,11 +17,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { EditUserDialog } from "@/components/user/EditUserDialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAdminRole } from "@/hooks/useAdminRole";
 import { useGISData } from "@/hooks/useGISData";
 import { authBypassEnabled } from "@/lib/authMode";
 import {
@@ -150,8 +153,10 @@ export default function UsersList() {
   const [search, setSearch] = useState("");
   const [cityFilter, setCityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
+  const [addUserOpen, setAddUserOpen] = useState(false);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
+  const { isAdmin } = useAdminRole();
   const { t } = useLanguage();
 
   const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
@@ -194,6 +199,7 @@ export default function UsersList() {
   const urgentCases = queueRows.filter((user) => user.status === "urgent").length;
   const reviewCases = queueRows.filter((user) => user.status === "review").length;
   const checkinEnabled = sourceUsers.filter((user) => user.checkinEnabled).length;
+  const canManageUsers = isAdmin && !authBypassEnabled;
 
   if (isLoading) {
     return (
@@ -223,9 +229,17 @@ export default function UsersList() {
           </div>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{t("usersList.operationalSubtitle")}</p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-2 text-xs font-semibold text-muted-foreground shadow-sm">
-          <Users className="h-4 w-4 text-primary" />
-          {filteredRows.length} {t("usersList.peopleShown")}
+        <div className="flex flex-wrap items-center gap-2">
+          {canManageUsers && (
+            <Button type="button" className="h-10 rounded-full px-4 text-sm font-semibold" onClick={() => setAddUserOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              {t("usersList.addUser")}
+            </Button>
+          )}
+          <div className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-2 text-xs font-semibold text-muted-foreground shadow-sm">
+            <Users className="h-4 w-4 text-primary" />
+            {filteredRows.length} {t("usersList.peopleShown")}
+          </div>
         </div>
       </div>
 
@@ -398,6 +412,15 @@ export default function UsersList() {
           )}
         </CardContent>
       </Card>
+
+      {addUserOpen && (
+        <EditUserDialog
+          open={addUserOpen}
+          onOpenChange={setAddUserOpen}
+          user={null}
+          onSaved={(savedUser) => navigate(`/users/${savedUser.id}`)}
+        />
+      )}
     </div>
   );
 }

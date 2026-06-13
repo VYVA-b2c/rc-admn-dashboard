@@ -33,6 +33,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAdminRole } from "@/hooks/useAdminRole";
 import { toast } from "@/hooks/use-toast";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
@@ -139,6 +140,7 @@ export default function UserProfile() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { t } = useLanguage();
+  const { isAdmin } = useAdminRole();
   const copy = (key: string, values: Record<string, string | number | undefined> = {}) => interpolate(t(key), values);
 
   const [editUserOpen, setEditUserOpen] = useState(false);
@@ -293,7 +295,7 @@ export default function UserProfile() {
     return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 6);
   })();
 
-  const showAdminControls = !isPreviewDemo;
+  const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
 
   return (
     <div className="space-y-5">

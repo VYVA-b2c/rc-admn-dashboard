@@ -589,6 +589,129 @@ async function loadUserInfo(userId) {
   };
 }
 
+function nullIfBlank(value) {
+  if (value === undefined || value === null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
+function normalizeUserPayload(payload, creating = false) {
+  const firstName = nullIfBlank(payload?.first_name);
+  const lastName = nullIfBlank(payload?.last_name);
+  const dateOfBirth = nullIfBlank(payload?.date_of_birth);
+  const language = nullIfBlank(payload?.language) || "de";
+
+  if (!firstName) return { error: "first_name is required" };
+  if (!lastName) return { error: "last_name is required" };
+  if (dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) return { error: "date_of_birth must be YYYY-MM-DD" };
+  if (!["en", "de", "es"].includes(language)) return { error: "language must be en, de, or es" };
+
+  return {
+    value: {
+      first_name: firstName,
+      last_name: lastName,
+      phone: nullIfBlank(payload?.phone),
+      city: nullIfBlank(payload?.city),
+      street: nullIfBlank(payload?.street),
+      house_number: nullIfBlank(payload?.house_number),
+      post_code: nullIfBlank(payload?.post_code),
+      country: nullIfBlank(payload?.country) || (creating ? "Germany" : null),
+      timezone: nullIfBlank(payload?.timezone) || (creating ? "Europe/Berlin" : null),
+      date_of_birth: dateOfBirth,
+      gender: nullIfBlank(payload?.gender),
+      language,
+      emergency_notes: nullIfBlank(payload?.emergency_notes),
+    },
+  };
+}
+
+async function createDashboardUser(payload) {
+  const user = normalizeUserPayload(payload, true);
+  if (user.error) return user;
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_users (
+        first_name,
+        last_name,
+        phone,
+        city,
+        street,
+        house_number,
+        post_code,
+        country,
+        timezone,
+        date_of_birth,
+        gender,
+        language,
+        emergency_notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *, id::text
+    `,
+    [
+      user.value.first_name,
+      user.value.last_name,
+      user.value.phone,
+      user.value.city,
+      user.value.street,
+      user.value.house_number,
+      user.value.post_code,
+      user.value.country,
+      user.value.timezone,
+      user.value.date_of_birth,
+      user.value.gender,
+      user.value.language,
+      user.value.emergency_notes,
+    ],
+  );
+
+  return { value: result.rows[0] };
+}
+
+async function updateDashboardUser(userId, payload) {
+  const user = normalizeUserPayload(payload);
+  if (user.error) return user;
+
+  const result = await query(
+    `
+      UPDATE public.vyva_users
+      SET
+        first_name = $2,
+        last_name = $3,
+        phone = $4,
+        city = $5,
+        street = $6,
+        house_number = $7,
+        post_code = $8,
+        date_of_birth = $9,
+        gender = $10,
+        language = $11,
+        emergency_notes = $12,
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *, id::text
+    `,
+    [
+      userId,
+      user.value.first_name,
+      user.value.last_name,
+      user.value.phone,
+      user.value.city,
+      user.value.street,
+      user.value.house_number,
+      user.value.post_code,
+      user.value.date_of_birth,
+      user.value.gender,
+      user.value.language,
+      user.value.emergency_notes,
+    ],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: result.rows[0] };
+}
+
 app.get("/api/health", async (req, res, next) => {
   try {
     if (!pool) {
@@ -610,6 +733,16 @@ app.get("/api/v1/user-dashboard/users", asyncRoute(async (_req, res) => {
   res.json(await loadDashboardUsers());
 }));
 
+app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
+  const result = await createDashboardUser(req.body);
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.status(201).json({ user: result.value });
+}));
+
 app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
   const userId = String(req.query.user_id || "");
   if (!userId) {
@@ -623,6 +756,23 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
   }
   res.json(data);
 }));
+
+async function updateUserRoute(req, res) {
+  const result = await updateDashboardUser(req.params.id, req.body);
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  if (result.notFound) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.json({ user: result.value });
+}
+
+app.patch("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
+app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 
 app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (_req, res) => {
   res.json({ campaigns: await loadCampaigns() });
