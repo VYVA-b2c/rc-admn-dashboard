@@ -1,19 +1,15 @@
 modules = ["nodejs-20"]
 hidden = [".config", "node_modules", "dist"]
 
-run = "npm run dev -- --host 0.0.0.0 --port 8080"
+run = "npm run dev"
 
 [nix]
 channel = "stable-24_05"
 
 [deployment]
-deploymentTarget = "static"
-publicDir = "dist"
+deploymentTarget = "autoscale"
 build = ["sh", "-c", "npm ci && npm run build"]
-
-[[deployment.rewrites]]
-from = "/*"
-to = "/index.html"
+run = ["sh", "-c", "npm run start"]
 
 [agent]
 expertMode = true

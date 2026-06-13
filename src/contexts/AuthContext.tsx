@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
 
 interface AuthContextType {
   session: Session | null;
@@ -40,6 +40,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(s?.user ?? null);
     };
 
+    if (!supabaseConfigured) {
+      applySession(null);
+      setLoading(false);
+      return;
+    }
+
     // Listen first, then restore
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
       console.log("[Auth] onAuthStateChange:", event);
@@ -62,11 +68,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = async (email: string, password: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error as Error | null };
   };
 
   const signInWithMagicLink = async (email: string, redirectPath?: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
@@ -78,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signInWithOAuth = async (provider: "google" | "azure", redirectPath?: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
@@ -89,12 +98,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut({ scope: "local" });
+    if (supabaseConfigured) await supabase.auth.signOut({ scope: "local" });
     setSession(null);
     setUser(null);
   };
 
   const resetPassword = async (email: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
     });
@@ -102,6 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const updatePassword = async (password: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.updateUser({ password });
     return { error: error as Error | null };
   };

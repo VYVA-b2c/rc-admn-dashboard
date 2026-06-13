@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { apiFetch } from "@/lib/apiClient";
-import { supabase } from "@/integrations/supabase/client";
 import { authBypassEnabled } from "@/lib/authMode";
 
 export interface GISUser {
@@ -95,56 +94,21 @@ async function fetchDashboardGISData(): Promise<DashboardGISResponse> {
 }
 
 async function fetchOperationalOffices(): Promise<GISOffice[]> {
-  const { data, error } = await supabase
-    .from("operational_offices")
-    .select("id,name,office_type,address,city,post_code,phone,latitude,longitude")
-    .eq("active", true)
-    .order("name");
-
-  if (error) {
-    if (!authBypassEnabled) console.warn("Operational offices unavailable:", error.message);
+  try {
+    return await apiFetch<GISOffice[]>("/api/v1/operational/offices");
+  } catch (error) {
+    if (!authBypassEnabled) console.warn("Operational offices unavailable:", error instanceof Error ? error.message : error);
     return [];
   }
-
-  return (data ?? []).map((office) => ({
-    id: office.id,
-    name: office.name,
-    office_type: office.office_type,
-    address: office.address,
-    city: office.city,
-    post_code: office.post_code,
-    phone: office.phone,
-    coords: [Number(office.latitude), Number(office.longitude)],
-  }));
 }
 
 async function fetchFieldStaff(): Promise<GISFieldStaff[]> {
-  const { data, error } = await supabase
-    .from("field_staff")
-    .select("id,full_name,role,team,phone,status,capacity,open_cases,last_known_latitude,last_known_longitude,last_seen_at")
-    .eq("active", true)
-    .order("full_name");
-
-  if (error) {
-    if (!authBypassEnabled) console.warn("Field staff unavailable:", error.message);
+  try {
+    return await apiFetch<GISFieldStaff[]>("/api/v1/operational/field-staff");
+  } catch (error) {
+    if (!authBypassEnabled) console.warn("Field staff unavailable:", error instanceof Error ? error.message : error);
     return [];
   }
-
-  return (data ?? []).map((staff) => ({
-    id: staff.id,
-    full_name: staff.full_name,
-    role: staff.role,
-    team: staff.team,
-    phone: staff.phone,
-    status: staff.status,
-    capacity: staff.capacity,
-    open_cases: staff.open_cases,
-    last_seen_at: staff.last_seen_at,
-    coords:
-      staff.last_known_latitude !== null && staff.last_known_longitude !== null
-        ? [Number(staff.last_known_latitude), Number(staff.last_known_longitude)]
-        : null,
-  }));
 }
 
 export function useGISData() {
