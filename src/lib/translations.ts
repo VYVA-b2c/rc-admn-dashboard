@@ -664,6 +664,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Settings
     "settings.title": "Settings",
+    "settings.backToConsole": "Back to console",
     "settings.language": "Language",
     "settings.languageDescription": "Choose the console language for this browser.",
     "settings.changePassword": "Change Password",
@@ -1365,6 +1366,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Settings
     "settings.title": "Einstellungen",
+    "settings.backToConsole": "Zurück zur Konsole",
     "settings.language": "Sprache",
     "settings.languageDescription": "Wählen Sie die Konsolensprache für diesen Browser.",
     "settings.changePassword": "Passwort ändern",
@@ -1896,6 +1898,7 @@ const translations: Record<Language, Record<string, string>> = {
 
     // Settings
     "settings.title": "Configuración",
+    "settings.backToConsole": "Volver a la consola",
     "settings.language": "Idioma",
     "settings.languageDescription": "Elige el idioma de la consola para este navegador.",
     "settings.changePassword": "Cambiar contraseña",

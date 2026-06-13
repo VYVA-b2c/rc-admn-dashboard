@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { LanguageSelector } from "@/components/LanguageSelector";
@@ -7,12 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Languages, Lock } from "lucide-react";
+import { ArrowLeft, Languages, Lock } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
 
 export default function Settings() {
   const { user, updatePassword } = useAuth();
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -39,7 +41,19 @@ export default function Settings() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold tracking-tight">{t("settings.title")}</h1>
+      <div className="space-y-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => navigate("/")}
+          className="-ml-2 w-fit rounded-xl text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          {t("settings.backToConsole")}
+        </Button>
+        <h1 className="text-2xl font-bold tracking-tight">{t("settings.title")}</h1>
+      </div>
       <div className="grid gap-6 max-w-lg">
         <Card>
           <CardHeader>
