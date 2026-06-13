@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -189,11 +189,16 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{t(isEditing ? "userForm.editTitle" : "userForm.addTitle")}</DialogTitle>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-hidden rounded-[1.75rem] border-border bg-[#f7f9ff] p-0 shadow-2xl">
+        <DialogHeader className="border-b border-border bg-white px-7 py-6 pr-12 text-left">
+          <DialogTitle className="text-2xl font-bold tracking-tight text-foreground">
+            {t(isEditing ? "userForm.editTitle" : "userForm.addTitle")}
+          </DialogTitle>
+          <DialogDescription className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+            {t(isEditing ? "userForm.editDescription" : "userForm.addDescription")}
+          </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <div className="grid max-h-[calc(85vh-11rem)] gap-5 overflow-y-auto px-7 py-5">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="user-first-name">{t("userForm.firstName")}</Label>
@@ -245,16 +250,37 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
                 value={form.gender || "unspecified"}
                 onValueChange={(value) => update("gender", value === "unspecified" ? "" : value)}
               >
-                <SelectTrigger>
+                <SelectTrigger className={`${form.gender ? "text-foreground" : "text-muted-foreground"} h-12 rounded-xl bg-white px-4`}>
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="unspecified">{t("userForm.unspecified")}</SelectItem>
-                  <SelectItem value="female">{t("userForm.genderFemale")}</SelectItem>
-                  <SelectItem value="male">{t("userForm.genderMale")}</SelectItem>
-                  <SelectItem value="other">{t("userForm.genderOther")}</SelectItem>
+                <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+                  <SelectItem
+                    value="unspecified"
+                    className="rounded-xl py-2.5 focus:bg-primary/10 focus:text-primary data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary"
+                  >
+                    {t("userForm.unspecified")}
+                  </SelectItem>
+                  <SelectItem
+                    value="female"
+                    className="rounded-xl py-2.5 focus:bg-primary/10 focus:text-primary data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary"
+                  >
+                    {t("userForm.genderFemale")}
+                  </SelectItem>
+                  <SelectItem
+                    value="male"
+                    className="rounded-xl py-2.5 focus:bg-primary/10 focus:text-primary data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary"
+                  >
+                    {t("userForm.genderMale")}
+                  </SelectItem>
+                  <SelectItem
+                    value="other"
+                    className="rounded-xl py-2.5 focus:bg-primary/10 focus:text-primary data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary"
+                  >
+                    {t("userForm.genderOther")}
+                  </SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">{t("userForm.genderHelp")}</p>
             </div>
             <div className="space-y-1.5">
               <Label>{t("userForm.language")}</Label>
@@ -419,7 +445,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
             </div>
           )}
         </div>
-        <DialogFooter>
+        <DialogFooter className="border-t border-border bg-white px-7 py-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("userForm.cancel")}
           </Button>
