@@ -9,10 +9,10 @@ import {
   LogOut,
   Megaphone,
   Pill,
+  PhoneCall,
   Settings,
   UserPlus,
   Users,
-  Wrench,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { useLocation } from "react-router-dom";
@@ -67,7 +67,7 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     labelKey: "sidebar.group.management",
     items: [
       { titleKey: "sidebar.campaigns", url: "/campaigns", icon: Megaphone },
-      { titleKey: "sidebar.services", url: "/emergency-contacts", icon: Wrench },
+      { titleKey: "sidebar.services", url: "/emergency-contacts", icon: PhoneCall },
       { titleKey: "sidebar.reports", url: "/reports", icon: LineChart },
       { titleKey: "sidebar.teamAccess", url: "/invite", icon: UserPlus },
       { titleKey: "sidebar.settings", url: "/settings", icon: Settings },
