@@ -62,7 +62,7 @@ export default function Settings() {
             </CardTitle>
             <CardDescription>
               {authBypassEnabled ? (
-                "Password changes are disabled in preview mode."
+                t("settings.previewPasswordDisabled")
               ) : (
                 <>
                   {t("settings.signedInAs")}{" "}
@@ -83,7 +83,7 @@ export default function Settings() {
                   placeholder={t("settings.atLeast6")}
                   required
                   minLength={6}
-                  disabled={authBypassEnabled}
+                  disabled={loading}
                 />
               </div>
               <div className="space-y-2">
@@ -96,10 +96,10 @@ export default function Settings() {
                   placeholder={t("settings.reenterPassword")}
                   required
                   minLength={6}
-                  disabled={authBypassEnabled}
+                  disabled={loading}
                 />
               </div>
-              <Button type="submit" disabled={loading || authBypassEnabled}>
+              <Button type="submit" disabled={loading}>
                 {loading ? t("settings.updating") : t("settings.updatePassword")}
               </Button>
             </form>
