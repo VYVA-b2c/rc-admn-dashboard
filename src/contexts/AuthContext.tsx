@@ -1,13 +1,14 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
+import type { Language } from "@/lib/translations";
 
 interface AuthContextType {
   session: Session | null;
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null }>;
+  signInWithMagicLink: (email: string, redirectPath?: string, emailLanguage?: Language) => Promise<{ error: Error | null }>;
   signInWithOAuth: (provider: "google" | "azure", redirectPath?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
@@ -73,13 +74,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error as Error | null };
   };
 
-  const signInWithMagicLink = async (email: string, redirectPath?: string) => {
+  const signInWithMagicLink = async (email: string, redirectPath?: string, emailLanguage: Language = "en") => {
     if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
         emailRedirectTo: authRedirectUrl(redirectPath),
         shouldCreateUser: false,
+        data: {
+          language: emailLanguage,
+          email_language: emailLanguage,
+        },
       },
     });
     return { error: error as Error | null };

@@ -19,7 +19,7 @@ function safeNextPath(value: string | null) {
 
 export default function Login() {
   const { session, signInWithMagicLink, signInWithOAuth } = useAuth();
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -41,7 +41,7 @@ export default function Login() {
     }
 
     setLoading(true);
-    const { error } = await signInWithMagicLink(email.trim(), nextPath);
+    const { error } = await signInWithMagicLink(email.trim(), nextPath, language);
     if (error) {
       const msg = error.message?.toLowerCase() ?? "";
       if (msg.includes("rate") || msg.includes("429")) {

@@ -14,6 +14,22 @@ Required template variable:
 {{ .ConfirmationURL }}
 ```
 
+The template also reads the language preference from:
+
+```html
+{{ .Data.language }}
+```
+
+The app sends this value when requesting a magic link. It uses the language
+selected in Settings, or the browser language when no setting exists. Supported
+values are `en`, `de`, and `es`; the template falls back to English.
+
+Recommended subject:
+
+```text
+{{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Accede a VYVA{{ else }}Sign in to VYVA{{ end }}
+```
+
 ## Sender settings
 
 To remove Lovable from the sender, configure the auth email sender in the hosted
