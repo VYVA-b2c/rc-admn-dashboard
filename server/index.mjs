@@ -629,44 +629,101 @@ async function createDashboardUser(payload) {
   const user = normalizeUserPayload(payload, true);
   if (user.error) return user;
 
-  const result = await query(
-    `
-      INSERT INTO public.vyva_users (
-        first_name,
-        last_name,
-        phone,
-        city,
-        street,
-        house_number,
-        post_code,
-        country,
-        timezone,
-        date_of_birth,
-        gender,
-        language,
-        emergency_notes
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING *, id::text
-    `,
-    [
-      user.value.first_name,
-      user.value.last_name,
-      user.value.phone,
-      user.value.city,
-      user.value.street,
-      user.value.house_number,
-      user.value.post_code,
-      user.value.country,
-      user.value.timezone,
-      user.value.date_of_birth,
-      user.value.gender,
-      user.value.language,
-      user.value.emergency_notes,
-    ],
-  );
+  const caregiverSource = objectValue(payload?.caregiver);
+  const medicationSource = objectValue(payload?.medication);
+  const checkinSource = objectValue(firstValue(payload?.checkin, payload?.checkins));
 
-  return { value: result.rows[0] };
+  const caregiver = hasMeaningfulPayloadValue(caregiverSource) ? normalizeCaregiverPayload(caregiverSource) : null;
+  if (caregiver?.error) return caregiver;
+
+  const medication = hasMeaningfulPayloadValue(medicationSource) ? normalizeMedicationPayload(medicationSource) : null;
+  if (medication?.error) return medication;
+
+  const checkin = hasMeaningfulPayloadValue(checkinSource) ? normalizeServicePayload(checkinSource) : null;
+  if (checkin?.error) return checkin;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `
+        INSERT INTO public.vyva_users (
+          first_name,
+          last_name,
+          phone,
+          city,
+          street,
+          house_number,
+          post_code,
+          country,
+          timezone,
+          date_of_birth,
+          gender,
+          language,
+          emergency_notes
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        RETURNING *, id::text
+      `,
+      [
+        user.value.first_name,
+        user.value.last_name,
+        user.value.phone,
+        user.value.city,
+        user.value.street,
+        user.value.house_number,
+        user.value.post_code,
+        user.value.country,
+        user.value.timezone,
+        user.value.date_of_birth,
+        user.value.gender,
+        user.value.language,
+        user.value.emergency_notes,
+      ],
+    );
+    const createdUser = result.rows[0];
+
+    if (caregiver) {
+      await client.query(
+        "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
+        [createdUser.id, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
+      );
+    }
+
+    if (medication) {
+      await client.query(
+        `
+          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          createdUser.id,
+          medication.value.medication_name,
+          medication.value.purpose,
+          medication.value.dosage,
+          medication.value.schedule_times,
+        ],
+      );
+    }
+
+    if (checkin) {
+      await client.query(
+        `
+          INSERT INTO public.vyva_user_checkins (vyva_user_id, enabled, frequency, preferred_time)
+          VALUES ($1, $2, $3, $4)
+        `,
+        [createdUser.id, checkin.value.enabled, checkin.value.frequency, checkin.value.preferred_time],
+      );
+    }
+
+    await client.query("COMMIT");
+    return { value: createdUser };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function updateDashboardUser(userId, payload) {
@@ -936,6 +993,14 @@ function firstValue(...values) {
 
 function objectValue(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function hasMeaningfulPayloadValue(value) {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.some(hasMeaningfulPayloadValue);
+  if (typeof value === "object") return Object.values(value).some(hasMeaningfulPayloadValue);
+  if (typeof value === "boolean") return value;
+  return String(value).trim() !== "";
 }
 
 function normalizeLanguage(value) {

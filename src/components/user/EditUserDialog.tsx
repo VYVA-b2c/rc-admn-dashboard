@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
@@ -46,8 +47,21 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
     post_code: String(user?.post_code ?? ""),
     emergency_notes: String(user?.emergency_notes ?? ""),
   });
+  const [onboarding, setOnboarding] = useState({
+    caregiver_name: "",
+    caregiver_phone: "",
+    checkin_enabled: false,
+    checkin_frequency_days: "7",
+    checkin_preferred_time: "09:00",
+    medication_name: "",
+    medication_dosage: "",
+    medication_purpose: "",
+    medication_schedule_times: "",
+  });
 
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const updateOnboarding = (key: keyof typeof onboarding, value: string | boolean) =>
+    setOnboarding((current) => ({ ...current, [key]: value }));
 
   const handleSave = async () => {
     if (!form.first_name.trim() || !form.last_name.trim()) {
@@ -60,9 +74,34 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
       return;
     }
 
+    if (!isEditing) {
+      const hasMedicationDetail = [
+        onboarding.medication_dosage,
+        onboarding.medication_purpose,
+        onboarding.medication_schedule_times,
+      ].some((value) => value.trim());
+
+      if (hasMedicationDetail && !onboarding.medication_name.trim()) {
+        toast({ title: t("userForm.validation.medicationName"), variant: "destructive" });
+        return;
+      }
+
+      if (onboarding.checkin_enabled) {
+        const frequency = Number(onboarding.checkin_frequency_days);
+        if (!Number.isInteger(frequency) || frequency <= 0) {
+          toast({ title: t("userForm.validation.frequency"), variant: "destructive" });
+          return;
+        }
+        if (onboarding.checkin_preferred_time && !/^\d{2}:\d{2}$/.test(onboarding.checkin_preferred_time)) {
+          toast({ title: t("userForm.validation.preferredTime"), variant: "destructive" });
+          return;
+        }
+      }
+    }
+
     setSaving(true);
     try {
-      const payload = {
+      const payload: Record<string, unknown> = {
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         phone: form.phone.trim() || null,
@@ -75,6 +114,35 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
         post_code: form.post_code.trim() || null,
         emergency_notes: form.emergency_notes.trim() || null,
       };
+
+      if (!isEditing) {
+        if (onboarding.caregiver_name.trim() || onboarding.caregiver_phone.trim()) {
+          payload.caregiver = {
+            caretaker_name: onboarding.caregiver_name.trim() || null,
+            caretaker_phone: onboarding.caregiver_phone.trim() || null,
+          };
+        }
+
+        if (onboarding.checkin_enabled) {
+          payload.checkin = {
+            enabled: true,
+            frequency_days: Number(onboarding.checkin_frequency_days),
+            preferred_time: onboarding.checkin_preferred_time || null,
+          };
+        }
+
+        if (onboarding.medication_name.trim()) {
+          payload.medication = {
+            medication_name: onboarding.medication_name.trim(),
+            dosage: onboarding.medication_dosage.trim() || null,
+            purpose: onboarding.medication_purpose.trim() || null,
+            schedule_times: onboarding.medication_schedule_times
+              .split(",")
+              .map((time) => time.trim())
+              .filter(Boolean),
+          };
+        }
+      }
 
       const response = await apiFetch<SavedUserResponse>(
         isEditing ? `/api/v1/user-dashboard/users/${user!.id}` : "/api/v1/user-dashboard/users",
@@ -212,13 +280,121 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
               rows={3}
             />
           </div>
+
+          {!isEditing && (
+            <div className="space-y-4 rounded-2xl border border-border bg-muted/20 p-4">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">{t("userForm.onboardingTitle")}</h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("userForm.onboardingDescription")}</p>
+              </div>
+
+              <div className="rounded-xl border border-border bg-white p-3">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("userForm.caregiverTitle")}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-caregiver-name">{t("userForm.caregiverName")}</Label>
+                    <Input
+                      id="user-caregiver-name"
+                      value={onboarding.caregiver_name}
+                      onChange={(event) => updateOnboarding("caregiver_name", event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-caregiver-phone">{t("userForm.caregiverPhone")}</Label>
+                    <Input
+                      id="user-caregiver-phone"
+                      value={onboarding.caregiver_phone}
+                      onChange={(event) => updateOnboarding("caregiver_phone", event.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-white p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("userForm.checkinTitle")}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{t("userForm.checkinDescription")}</p>
+                  </div>
+                  <Switch
+                    checked={onboarding.checkin_enabled}
+                    onCheckedChange={(checked) => updateOnboarding("checkin_enabled", checked)}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-checkin-frequency">{t("userForm.frequencyDays")}</Label>
+                    <Input
+                      id="user-checkin-frequency"
+                      type="number"
+                      min={1}
+                      value={onboarding.checkin_frequency_days}
+                      onChange={(event) => updateOnboarding("checkin_frequency_days", event.target.value)}
+                      disabled={!onboarding.checkin_enabled}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-checkin-time">{t("userForm.preferredTime")}</Label>
+                    <Input
+                      id="user-checkin-time"
+                      type="time"
+                      value={onboarding.checkin_preferred_time}
+                      onChange={(event) => updateOnboarding("checkin_preferred_time", event.target.value)}
+                      disabled={!onboarding.checkin_enabled}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border bg-white p-3">
+                <p className="mb-3 text-xs font-bold uppercase tracking-wide text-muted-foreground">{t("userForm.medicationTitle")}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-medication-name">{t("userForm.medicationName")}</Label>
+                    <Input
+                      id="user-medication-name"
+                      value={onboarding.medication_name}
+                      onChange={(event) => updateOnboarding("medication_name", event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-medication-dosage">{t("userForm.medicationDosage")}</Label>
+                    <Input
+                      id="user-medication-dosage"
+                      value={onboarding.medication_dosage}
+                      onChange={(event) => updateOnboarding("medication_dosage", event.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-medication-purpose">{t("userForm.medicationPurpose")}</Label>
+                    <Input
+                      id="user-medication-purpose"
+                      value={onboarding.medication_purpose}
+                      onChange={(event) => updateOnboarding("medication_purpose", event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="user-medication-times">{t("userForm.medicationTimes")}</Label>
+                    <Input
+                      id="user-medication-times"
+                      value={onboarding.medication_schedule_times}
+                      onChange={(event) => updateOnboarding("medication_schedule_times", event.target.value)}
+                      placeholder={t("userForm.medicationTimesPlaceholder")}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("userForm.cancel")}
           </Button>
           <Button onClick={handleSave} disabled={saving}>
-            {saving ? t("userForm.saving") : t("userForm.save")}
+            {saving ? t("userForm.saving") : t(isEditing ? "userForm.save" : "userForm.createButton")}
           </Button>
         </DialogFooter>
       </DialogContent>
