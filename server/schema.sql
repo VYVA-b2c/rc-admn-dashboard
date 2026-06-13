@@ -202,12 +202,144 @@ CREATE TABLE IF NOT EXISTS public.field_staff (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS public.campaigns (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug TEXT UNIQUE,
+  name TEXT,
+  name_key TEXT,
+  objective TEXT,
+  objective_key TEXT,
+  audience TEXT,
+  audience_key TEXT,
+  due_key TEXT NOT NULL DEFAULT 'campaigns.due.draft',
+  city TEXT,
+  owner TEXT,
+  type TEXT NOT NULL DEFAULT 'safety' CHECK (type IN ('safety', 'wellbeing', 'medication', 'service')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('active', 'draft', 'scheduled', 'completed')),
+  channel TEXT NOT NULL DEFAULT 'phone' CHECK (channel IN ('phone', 'whatsapp', 'mixed')),
+  target_total INTEGER NOT NULL DEFAULT 0,
+  contacted_count INTEGER NOT NULL DEFAULT 0,
+  confirmed_count INTEGER NOT NULL DEFAULT 0,
+  follow_up_count INTEGER NOT NULL DEFAULT 0,
+  tone TEXT NOT NULL DEFAULT 'purple' CHECK (tone IN ('purple', 'orange', 'green', 'red')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.campaign_targets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id UUID NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
+  vyva_user_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'contacted', 'confirmed', 'followUp')),
+  reason_key TEXT,
+  action TEXT NOT NULL DEFAULT 'profile' CHECK (action IN ('profile', 'prepareCall')),
+  owner TEXT,
+  channel TEXT NOT NULL DEFAULT 'phone' CHECK (channel IN ('phone', 'whatsapp', 'app')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(campaign_id, vyva_user_id)
+);
+
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS target_total INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS contacted_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS confirmed_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_vyva_user_checkins_user ON public.vyva_user_checkins(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_user_medications_user ON public.vyva_user_medications(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_user_caregivers_user ON public.vyva_user_caregivers(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_user_sensors_user ON public.vyva_user_sensors(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_sensor_alerts_user ON public.vyva_sensor_alerts(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_medication_logs_user_date ON public.vyva_medication_logs(vyva_user_id, scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON public.campaign_targets(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_targets_user ON public.campaign_targets(vyva_user_id);
+
+INSERT INTO public.campaigns (
+  slug,
+  name_key,
+  objective_key,
+  audience_key,
+  due_key,
+  city,
+  owner,
+  type,
+  status,
+  channel,
+  target_total,
+  contacted_count,
+  confirmed_count,
+  follow_up_count,
+  tone
+) VALUES
+  (
+    'heatwave',
+    'campaigns.demo.heatwave.name',
+    'campaigns.demo.heatwave.objective',
+    'campaigns.demo.heatwave.audience',
+    'campaigns.due.today',
+    'Madrid',
+    'Ana Novak',
+    'safety',
+    'active',
+    'phone',
+    420,
+    420,
+    314,
+    58,
+    'orange'
+  ),
+  (
+    'medication',
+    'campaigns.demo.medication.name',
+    'campaigns.demo.medication.objective',
+    'campaigns.demo.medication.audience',
+    'campaigns.due.tomorrow',
+    'Madrid',
+    'Team North',
+    'medication',
+    'scheduled',
+    'mixed',
+    86,
+    18,
+    11,
+    9,
+    'purple'
+  ),
+  (
+    'isolation',
+    'campaigns.demo.isolation.name',
+    'campaigns.demo.isolation.objective',
+    'campaigns.demo.isolation.audience',
+    'campaigns.due.friday',
+    'Dresden',
+    'Team East',
+    'wellbeing',
+    'draft',
+    'phone',
+    64,
+    0,
+    0,
+    0,
+    'green'
+  ),
+  (
+    'post-discharge',
+    'campaigns.demo.postDischarge.name',
+    'campaigns.demo.postDischarge.objective',
+    'campaigns.demo.postDischarge.audience',
+    'campaigns.due.completed',
+    'Leipzig',
+    'Services desk',
+    'service',
+    'completed',
+    'whatsapp',
+    52,
+    52,
+    47,
+    3,
+    'red'
+  )
+ON CONFLICT (slug) DO NOTHING;
 
 DROP TRIGGER IF EXISTS update_profiles_updated_at ON public.profiles;
 CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
@@ -241,3 +373,9 @@ CREATE TRIGGER update_operational_offices_updated_at BEFORE UPDATE ON public.ope
 
 DROP TRIGGER IF EXISTS update_field_staff_updated_at ON public.field_staff;
 CREATE TRIGGER update_field_staff_updated_at BEFORE UPDATE ON public.field_staff FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_campaigns_updated_at ON public.campaigns;
+CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON public.campaigns FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_campaign_targets_updated_at ON public.campaign_targets;
+CREATE TRIGGER update_campaign_targets_updated_at BEFORE UPDATE ON public.campaign_targets FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();

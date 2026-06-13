@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -9,6 +10,7 @@ import {
   CopyPlus,
   Download,
   Megaphone,
+  Pencil,
   PhoneCall,
   Plus,
   Search,
@@ -36,6 +38,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiClient";
 import {
   demoOperationalUsers,
   type OperationalChannel,
@@ -51,6 +54,7 @@ type CampaignTargetStatus = "pending" | "contacted" | "confirmed" | "followUp";
 
 type Campaign = {
   id: string;
+  slug?: string;
   name?: string;
   nameKey?: string;
   objective?: string;
@@ -68,10 +72,12 @@ type Campaign = {
   confirmed: number;
   followUp: number;
   tone: "purple" | "orange" | "green" | "red";
+  targets?: CampaignTarget[];
 };
 
 type FormState = {
   name: string;
+  status: CampaignStatus;
   type: CampaignType;
   audience: string;
   city: string;
@@ -89,6 +95,18 @@ type CampaignTarget = {
   score: number;
   status: CampaignTargetStatus;
   user: OperationalQueueUser;
+};
+
+type CampaignPayload = {
+  audience: string;
+  channel: CampaignChannel;
+  city: string;
+  dueKey: string;
+  name: string;
+  objective: string;
+  owner: string;
+  status: CampaignStatus;
+  type: CampaignType;
 };
 
 const initialCampaigns: Campaign[] = [
@@ -282,6 +300,7 @@ function campaignTargets(campaign: Campaign): CampaignTarget[] {
 
 const defaultForm: FormState = {
   name: "",
+  status: "draft",
   type: "safety",
   audience: "",
   city: "Madrid",
@@ -292,12 +311,14 @@ const defaultForm: FormState = {
 export default function Campaigns() {
   const { t } = useLanguage();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaigns);
+  const [localCampaigns, setLocalCampaigns] = useState<Campaign[]>(initialCampaigns);
   const [selectedId, setSelectedId] = useState(initialCampaigns[0].id);
   const [statusFilter, setStatusFilter] = useState<CampaignStatus | "all">("all");
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(defaultForm);
   const formRef = useRef<HTMLFormElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -305,11 +326,60 @@ export default function Campaigns() {
   const audienceRef = useRef<HTMLInputElement>(null);
   const objectiveRef = useRef<HTMLTextAreaElement>(null);
 
+  const { data: campaignData } = useQuery({
+    queryKey: ["campaigns-dashboard", "campaigns"],
+    queryFn: async (): Promise<{ campaigns: Campaign[] } | null> => {
+      try {
+        return await apiFetch<{ campaigns: Campaign[] }>("/api/v1/campaigns-dashboard/campaigns", { timeoutMs: 1500 });
+      } catch (error) {
+        console.warn("Campaigns API unavailable:", error instanceof Error ? error.message : error);
+        return null;
+      }
+    },
+    retry: false,
+  });
+
+  const createCampaignMutation = useMutation({
+    mutationFn: (payload: CampaignPayload) =>
+      apiFetch<{ campaign: Campaign }>("/api/v1/campaigns-dashboard/campaigns", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        timeoutMs: 1500,
+      }),
+    onSuccess: (data) => {
+      if (data.campaign?.id) setSelectedId(data.campaign.id);
+      queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard", "campaigns"] });
+    },
+  });
+
+  const updateCampaignMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: CampaignPayload }) =>
+      apiFetch<{ campaign: Campaign }>(`/api/v1/campaigns-dashboard/campaigns/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+        timeoutMs: 1500,
+      }),
+    onSuccess: (data) => {
+      if (data.campaign?.id) setSelectedId(data.campaign.id);
+      queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard", "campaigns"] });
+    },
+  });
+
+  const campaigns = campaignData?.campaigns?.length ? campaignData.campaigns : localCampaigns;
+  const savingCampaign = createCampaignMutation.isPending || updateCampaignMutation.isPending;
+
   useEffect(() => {
     if (searchParams.get("create") !== "1") return;
     setDialogOpen(true);
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (campaigns.length === 0) return;
+    if (!campaigns.some((campaign) => campaign.id === selectedId)) {
+      setSelectedId(campaigns[0].id);
+    }
+  }, [campaigns, selectedId]);
 
   const stats = useMemo(() => {
     return {
@@ -342,12 +412,28 @@ export default function Campaigns() {
 
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
   const selectedTargets = useMemo(
-    () => (selectedCampaign ? campaignTargets(selectedCampaign) : []),
+    () => (selectedCampaign?.targets?.length ? selectedCampaign.targets : selectedCampaign ? campaignTargets(selectedCampaign) : []),
     [selectedCampaign],
   );
 
   const openCreateDialog = () => {
+    setEditingId(null);
     setForm(defaultForm);
+    setDialogOpen(true);
+  };
+
+  const openEditDialog = () => {
+    if (!selectedCampaign) return;
+    setEditingId(selectedCampaign.id);
+    setForm({
+      name: itemText(selectedCampaign, "name", t),
+      status: selectedCampaign.status,
+      type: selectedCampaign.type,
+      audience: itemText(selectedCampaign, "audience", t),
+      city: selectedCampaign.city || "Madrid",
+      channel: selectedCampaign.channel,
+      objective: itemText(selectedCampaign, "objective", t),
+    });
     setDialogOpen(true);
   };
 
@@ -355,7 +441,7 @@ export default function Campaigns() {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const handleCreate = () => {
+  const handleSubmitCampaign = async () => {
     const name = (nameRef.current?.value ?? form.name).trim();
     const audience = (audienceRef.current?.value ?? form.audience).trim();
     const city = (cityRef.current?.value ?? form.city).trim();
@@ -366,31 +452,63 @@ export default function Campaigns() {
       return;
     }
 
-    const campaign: Campaign = {
-      id: `local-${Date.now()}`,
+    const payload: CampaignPayload = {
+      audience,
+      channel: form.channel,
+      city: city || "Madrid",
+      dueKey: editingId && selectedCampaign ? selectedCampaign.dueKey : "campaigns.due.draft",
       name,
       objective: objective || t("campaigns.defaultObjective"),
-      audience: audience || t("campaigns.defaultAudience"),
-      dueKey: "campaigns.due.draft",
-      city: city || "Madrid",
       owner: t("layout.operatorName"),
+      status: form.status,
       type: form.type,
-      status: "draft",
-      channel: form.channel,
-      total: 0,
-      contacted: 0,
-      confirmed: 0,
-      followUp: 0,
-      tone: "purple",
     };
 
-    setCampaigns((current) => [campaign, ...current]);
-    setSelectedId(campaign.id);
-    setDialogOpen(false);
-    toast({
-      title: t("campaigns.action.ready"),
-      description: t("campaigns.action.createdLocal"),
-    });
+    try {
+      if (editingId) {
+        await updateCampaignMutation.mutateAsync({ id: editingId, payload });
+      } else {
+        await createCampaignMutation.mutateAsync(payload);
+      }
+      setDialogOpen(false);
+      setEditingId(null);
+      toast({
+        title: t("campaigns.action.ready"),
+        description: t(editingId ? "campaigns.action.updatedSaved" : "campaigns.action.createdSaved"),
+      });
+    } catch (error) {
+      const fallbackCampaign: Campaign = {
+        id: editingId || `local-${Date.now()}`,
+        name,
+        objective: payload.objective,
+        audience: audience || t("campaigns.defaultAudience"),
+        dueKey: payload.dueKey,
+        city: payload.city,
+        owner: payload.owner,
+        type: payload.type,
+        status: payload.status,
+        channel: payload.channel,
+        total: selectedCampaign?.total ?? 0,
+        contacted: selectedCampaign?.contacted ?? 0,
+        confirmed: selectedCampaign?.confirmed ?? 0,
+        followUp: selectedCampaign?.followUp ?? 0,
+        tone: selectedCampaign?.tone ?? "purple",
+      };
+
+      setLocalCampaigns((current) =>
+        editingId
+          ? current.map((campaign) => (campaign.id === editingId ? fallbackCampaign : campaign))
+          : [fallbackCampaign, ...current],
+      );
+      setSelectedId(fallbackCampaign.id);
+      setDialogOpen(false);
+      setEditingId(null);
+      console.warn("Campaign save API unavailable:", error instanceof Error ? error.message : error);
+      toast({
+        title: t("campaigns.action.ready"),
+        description: t(editingId ? "campaigns.action.updatedLocal" : "campaigns.action.createdLocal"),
+      });
+    }
   };
 
   const handleLocalAction = (descriptionKey: string) => {
@@ -585,7 +703,15 @@ export default function Campaigns() {
                   <Send className="mr-2 h-4 w-4" />
                   {t("campaigns.action.start")}
                 </Button>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <Button
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={openEditDialog}
+                  >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    {t("campaigns.action.edit")}
+                  </Button>
                   <Button
                     variant="outline"
                     className="rounded-xl"
@@ -758,11 +884,19 @@ export default function Campaigns() {
         </Card>
       </section>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) setEditingId(null);
+        }}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{t("campaigns.form.title")}</DialogTitle>
-            <DialogDescription>{t("campaigns.form.description")}</DialogDescription>
+            <DialogTitle>{t(editingId ? "campaigns.form.editTitle" : "campaigns.form.title")}</DialogTitle>
+            <DialogDescription>
+              {t(editingId ? "campaigns.form.editDescription" : "campaigns.form.description")}
+            </DialogDescription>
           </DialogHeader>
 
           <form
@@ -770,7 +904,7 @@ export default function Campaigns() {
             className="grid gap-4 py-2"
             onSubmit={(event) => {
               event.preventDefault();
-              handleCreate();
+              handleSubmitCampaign();
             }}
           >
             <div className="space-y-2">
@@ -786,6 +920,21 @@ export default function Campaigns() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label>{t("campaigns.form.status")}</Label>
+                <Select value={form.status} onValueChange={(value) => updateForm("status", value as CampaignStatus)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="draft">{t("campaigns.status.draft")}</SelectItem>
+                    <SelectItem value="scheduled">{t("campaigns.status.scheduled")}</SelectItem>
+                    <SelectItem value="active">{t("campaigns.status.active")}</SelectItem>
+                    <SelectItem value="completed">{t("campaigns.status.completed")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               <div className="space-y-2">
                 <Label>{t("campaigns.form.type")}</Label>
                 <Select value={form.type} onValueChange={(value) => updateForm("type", value as CampaignType)}>
@@ -855,8 +1004,8 @@ export default function Campaigns() {
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                 {t("campaigns.form.cancel")}
               </Button>
-              <Button type="button" onClick={handleCreate}>
-                {t("campaigns.form.create")}
+              <Button type="button" onClick={handleSubmitCampaign} disabled={savingCampaign}>
+                {t(editingId ? "campaigns.form.save" : "campaigns.form.create")}
               </Button>
             </DialogFooter>
           </form>

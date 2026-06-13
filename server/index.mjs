@@ -281,6 +281,231 @@ async function loadDashboardUsers() {
   };
 }
 
+function campaignTone(type, status) {
+  if (type === "medication") return "purple";
+  if (type === "wellbeing") return "green";
+  if (type === "service") return "red";
+  if (status === "active") return "orange";
+  return "purple";
+}
+
+function targetRiskStatus(user) {
+  if (Number(user.criticalAlerts || 0) > 0 || Number(user.riskScore || 0) >= 80) return "urgent";
+  if (
+    Number(user.activeAlerts || 0) > 0 ||
+    Number(user.missedMeds7d || 0) > 0 ||
+    Number(user.offlineSensors || 0) > 0 ||
+    !user.checkinEnabled
+  ) {
+    return "review";
+  }
+  return "stable";
+}
+
+function targetReasonKey(campaign, user) {
+  if (campaign.type === "medication") {
+    return Number(user.missedMeds7d || 0) > 0 ? "campaigns.targets.reason.medication" : "campaigns.targets.reason.monitor";
+  }
+  if (campaign.type === "wellbeing") {
+    if (!user.checkinEnabled) return "campaigns.targets.reason.noResponse";
+    return "campaigns.targets.reason.isolation";
+  }
+  if (campaign.type === "service") return "campaigns.targets.reason.service";
+  if (Number(user.criticalAlerts || 0) > 0) return "campaigns.targets.reason.safetyCritical";
+  if (Number(user.activeAlerts || 0) > 0) return "campaigns.targets.reason.safetyReview";
+  return "campaigns.targets.reason.safetyCheck";
+}
+
+function targetStatusForCampaign(campaign, user, index) {
+  const riskStatus = targetRiskStatus(user);
+  if (riskStatus === "urgent") return "followUp";
+  if (campaign.status === "draft") return "pending";
+  if (campaign.status === "scheduled") return index === 0 ? "contacted" : "pending";
+  if (campaign.status === "completed") return index % 3 === 0 ? "followUp" : "confirmed";
+  if (riskStatus === "review") return "followUp";
+  return "confirmed";
+}
+
+function campaignTargetCandidates(campaign, users) {
+  const matches = users.filter((user) => {
+    if (campaign.type === "medication") return Number(user.missedMeds7d || 0) > 0;
+    if (campaign.type === "wellbeing") return !user.checkinEnabled || targetRiskStatus(user) !== "stable";
+    if (campaign.type === "service") return user.city === campaign.city || targetRiskStatus(user) !== "stable";
+    return user.city === campaign.city || Number(user.criticalAlerts || 0) > 0 || Number(user.activeAlerts || 0) > 0;
+  });
+  return (matches.length ? matches : users)
+    .slice()
+    .sort((a, b) => Number(b.riskScore || 0) - Number(a.riskScore || 0))
+    .slice(0, 20);
+}
+
+async function ensureCampaignTargets(campaigns, dashboardUsers) {
+  if (!campaigns.length || !dashboardUsers.length) return;
+
+  const counts = await query(
+    `
+      SELECT campaign_id::text, COUNT(*)::int AS count
+      FROM public.campaign_targets
+      WHERE campaign_id = ANY($1::uuid[])
+      GROUP BY campaign_id
+    `,
+    [campaigns.map((campaign) => campaign.id)],
+  );
+  const countMap = new Map(counts.rows.map((row) => [row.campaign_id, Number(row.count || 0)]));
+
+  for (const campaign of campaigns) {
+    if ((countMap.get(campaign.id) || 0) > 0) continue;
+    const candidates = campaignTargetCandidates(campaign, dashboardUsers);
+    for (const [index, user] of candidates.entries()) {
+      const status = targetStatusForCampaign(campaign, user, index);
+      const riskStatus = targetRiskStatus(user);
+      await query(
+        `
+          INSERT INTO public.campaign_targets (
+            campaign_id,
+            vyva_user_id,
+            status,
+            reason_key,
+            action,
+            owner,
+            channel
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (campaign_id, vyva_user_id) DO NOTHING
+        `,
+        [
+          campaign.id,
+          user.id,
+          status,
+          targetReasonKey(campaign, user),
+          status === "followUp" || riskStatus === "urgent" ? "prepareCall" : "profile",
+          campaign.owner || null,
+          campaign.channel === "whatsapp" ? "whatsapp" : "phone",
+        ],
+      );
+    }
+  }
+}
+
+function normalizeCampaign(row, targets = []) {
+  const hasTargets = targets.length > 0;
+  return {
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    nameKey: row.name_key,
+    objective: row.objective,
+    objectiveKey: row.objective_key,
+    audience: row.audience,
+    audienceKey: row.audience_key,
+    dueKey: row.due_key || "campaigns.due.draft",
+    city: row.city || "",
+    owner: row.owner || "",
+    type: row.type,
+    status: row.status,
+    channel: row.channel,
+    total: hasTargets ? targets.length : Number(row.target_total || 0),
+    contacted: hasTargets
+      ? targets.filter((target) => ["contacted", "confirmed", "followUp"].includes(target.status)).length
+      : Number(row.contacted_count || 0),
+    confirmed: hasTargets ? targets.filter((target) => target.status === "confirmed").length : Number(row.confirmed_count || 0),
+    followUp: hasTargets ? targets.filter((target) => target.status === "followUp").length : Number(row.follow_up_count || 0),
+    tone: row.tone || campaignTone(row.type, row.status),
+    targets,
+  };
+}
+
+async function loadCampaigns() {
+  const campaignResult = await query(`
+    SELECT
+      id::text,
+      slug,
+      name,
+      name_key,
+      objective,
+      objective_key,
+      audience,
+      audience_key,
+      due_key,
+      city,
+      owner,
+      type,
+      status,
+      channel,
+      target_total,
+      contacted_count,
+      confirmed_count,
+      follow_up_count,
+      tone
+    FROM public.campaigns
+    ORDER BY
+      CASE status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
+      created_at DESC
+  `);
+  const campaigns = campaignResult.rows;
+  const dashboardData = await loadDashboardUsers();
+  const usersById = new Map(dashboardData.gisUsers.map((user) => [user.id, user]));
+
+  await ensureCampaignTargets(campaigns, dashboardData.gisUsers);
+
+  const targetRows = campaigns.length
+    ? await query(
+        `
+          SELECT
+            id::text,
+            campaign_id::text,
+            vyva_user_id::text,
+            status,
+            reason_key,
+            action,
+            owner,
+            channel
+          FROM public.campaign_targets
+          WHERE campaign_id = ANY($1::uuid[])
+          ORDER BY
+            CASE status WHEN 'followUp' THEN 0 WHEN 'pending' THEN 1 WHEN 'contacted' THEN 2 ELSE 3 END,
+            created_at ASC
+        `,
+        [campaigns.map((campaign) => campaign.id)],
+      )
+    : { rows: [] };
+
+  const targetsByCampaign = new Map();
+  for (const target of targetRows.rows) {
+    const user = usersById.get(target.vyva_user_id);
+    if (!user) continue;
+    const bucket = targetsByCampaign.get(target.campaign_id) || [];
+    bucket.push({
+      id: target.id,
+      user_id: target.vyva_user_id,
+      user,
+      status: target.status,
+      reasonKey: target.reason_key || "campaigns.targets.reason.monitor",
+      action: target.action,
+      owner: target.owner,
+      channel: target.channel,
+      city: user.city || "",
+      riskStatus: targetRiskStatus(user),
+      score: Number(user.riskScore || 0),
+    });
+    targetsByCampaign.set(target.campaign_id, bucket);
+  }
+
+  return campaigns.map((campaign) => normalizeCampaign(campaign, targetsByCampaign.get(campaign.id) || []));
+}
+
+function validateCampaignPayload(payload) {
+  const name = String(payload?.name || "").trim();
+  const type = String(payload?.type || "safety");
+  const channel = String(payload?.channel || "phone");
+  const status = String(payload?.status || "draft");
+  if (!name) return "name is required";
+  if (!["safety", "wellbeing", "medication", "service"].includes(type)) return "type is invalid";
+  if (!["phone", "whatsapp", "mixed"].includes(channel)) return "channel is invalid";
+  if (!["active", "draft", "scheduled", "completed"].includes(status)) return "status is invalid";
+  return null;
+}
+
 function normalizeCheckin(row) {
   return {
     id: row.id,
@@ -397,6 +622,102 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
     return;
   }
   res.json(data);
+}));
+
+app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (_req, res) => {
+  res.json({ campaigns: await loadCampaigns() });
+}));
+
+app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) => {
+  const validationError = validateCampaignPayload(req.body);
+  if (validationError) {
+    res.status(400).json({ error: validationError });
+    return;
+  }
+
+  const type = String(req.body.type || "safety");
+  const status = String(req.body.status || "draft");
+  const result = await query(
+    `
+      INSERT INTO public.campaigns (
+        name,
+        objective,
+        audience,
+        due_key,
+        city,
+        owner,
+        type,
+        status,
+        channel,
+        tone
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING id::text
+    `,
+    [
+      String(req.body.name || "").trim(),
+      String(req.body.objective || "").trim() || null,
+      String(req.body.audience || "").trim() || null,
+      String(req.body.dueKey || "campaigns.due.draft"),
+      String(req.body.city || "").trim() || null,
+      String(req.body.owner || "Ana Novak").trim(),
+      type,
+      status,
+      String(req.body.channel || "phone"),
+      campaignTone(type, status),
+    ],
+  );
+
+  const campaigns = await loadCampaigns();
+  res.status(201).json({ campaign: campaigns.find((campaign) => campaign.id === result.rows[0]?.id) || null });
+}));
+
+app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, res) => {
+  const validationError = validateCampaignPayload(req.body);
+  if (validationError) {
+    res.status(400).json({ error: validationError });
+    return;
+  }
+
+  const type = String(req.body.type || "safety");
+  const status = String(req.body.status || "draft");
+  await query(
+    `
+      UPDATE public.campaigns
+      SET
+        name = $2,
+        name_key = NULL,
+        objective = $3,
+        objective_key = NULL,
+        audience = $4,
+        audience_key = NULL,
+        due_key = $5,
+        city = $6,
+        owner = $7,
+        type = $8,
+        status = $9,
+        channel = $10,
+        tone = $11
+      WHERE id = $1
+    `,
+    [
+      req.params.id,
+      String(req.body.name || "").trim(),
+      String(req.body.objective || "").trim() || null,
+      String(req.body.audience || "").trim() || null,
+      String(req.body.dueKey || "campaigns.due.draft"),
+      String(req.body.city || "").trim() || null,
+      String(req.body.owner || "Ana Novak").trim(),
+      type,
+      status,
+      String(req.body.channel || "phone"),
+      campaignTone(type, status),
+    ],
+  );
+
+  await query("DELETE FROM public.campaign_targets WHERE campaign_id = $1", [req.params.id]);
+  const campaigns = await loadCampaigns();
+  res.json({ campaign: campaigns.find((campaign) => campaign.id === req.params.id) || null });
 }));
 
 app.get("/api/v1/operational/offices", asyncRoute(async (_req, res) => {

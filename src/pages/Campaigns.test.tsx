@@ -1,21 +1,40 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import Campaigns from "@/pages/Campaigns";
 
 function renderCampaigns() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+
   return render(
-    <MemoryRouter initialEntries={["/campaigns"]}>
-      <LanguageProvider>
-        <Campaigns />
-      </LanguageProvider>
-    </MemoryRouter>,
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/campaigns"]}>
+        <LanguageProvider>
+          <Campaigns />
+        </LanguageProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
 describe("Campaigns", () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
   it("creates a local campaign draft and filters the campaign queue", async () => {
     renderCampaigns();
 
