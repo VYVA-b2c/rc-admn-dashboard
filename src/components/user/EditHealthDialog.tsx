@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { X } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/apiClient";
+import type { OperationalHealth } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 
@@ -13,7 +14,7 @@ interface EditHealthDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
-  health: any;
+  health: OperationalHealth;
 }
 
 export function EditHealthDialog({ open, onOpenChange, vyvaUserId, health }: EditHealthDialogProps) {
@@ -38,17 +39,26 @@ export function EditHealthDialog({ open, onOpenChange, vyvaUserId, health }: Edi
 
   const handleSave = async () => {
     setSaving(true);
-    const { error } = await supabase.from("vyva_user_health").update({
-      health_conditions: conditions.length ? conditions : null,
-      mobility_needs: mobility.length ? mobility : null,
-    }).eq("vyva_user_id", vyvaUserId);
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      await apiFetch(`/api/v1/user-dashboard/health/${vyvaUserId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          health_conditions: conditions,
+          mobility_needs: mobility,
+        }),
+      });
+
       toast({ title: "Health info updated" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
+    } catch (error) {
+      toast({
+        title: "Error saving",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 

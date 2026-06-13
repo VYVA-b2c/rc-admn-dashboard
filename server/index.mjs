@@ -712,6 +712,224 @@ async function updateDashboardUser(userId, payload) {
   return { value: result.rows[0] };
 }
 
+function normalizeMedicationPayload(payload, creating = false) {
+  const medicationName = nullIfBlank(firstValue(payload?.medication_name, payload?.medicationName, payload?.name));
+  if (!medicationName) return { error: "medication_name is required" };
+
+  return {
+    value: {
+      vyva_user_id: nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)),
+      medication_name: medicationName,
+      purpose: nullIfBlank(firstValue(payload?.purpose, payload?.reason)),
+      dosage: nullIfBlank(payload?.dosage),
+      schedule_times: normalizeStringArray(firstValue(payload?.schedule_times, payload?.scheduleTimes, payload?.times)),
+    },
+    error: creating && !nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)) ? "vyva_user_id is required" : null,
+  };
+}
+
+async function createMedication(payload) {
+  const medication = normalizeMedicationPayload(payload, true);
+  if (medication.error) return medication;
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [
+      medication.value.vyva_user_id,
+      medication.value.medication_name,
+      medication.value.purpose,
+      medication.value.dosage,
+      medication.value.schedule_times,
+    ],
+  );
+
+  return { value: result.rows[0] };
+}
+
+async function updateMedication(medicationId, payload) {
+  const medication = normalizeMedicationPayload(payload);
+  if (medication.error) return medication;
+
+  const result = await query(
+    `
+      UPDATE public.vyva_user_medications
+      SET medication_name = $2, purpose = $3, dosage = $4, schedule_times = $5, updated_at = now()
+      WHERE id = $1
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [
+      medicationId,
+      medication.value.medication_name,
+      medication.value.purpose,
+      medication.value.dosage,
+      medication.value.schedule_times,
+    ],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: result.rows[0] };
+}
+
+async function deleteMedication(medicationId) {
+  const result = await query("DELETE FROM public.vyva_user_medications WHERE id = $1 RETURNING id::text", [medicationId]);
+  return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
+}
+
+function normalizeCaregiverPayload(payload, creating = false) {
+  const name = nullIfBlank(firstValue(payload?.caretaker_name, payload?.caregiver_name, payload?.name, payload?.full_name, payload?.fullName));
+  const phone = nullIfBlank(firstValue(payload?.caretaker_phone, payload?.caregiver_phone, payload?.phone, payload?.phone_number, payload?.phoneNumber));
+  if (!name && !phone) return { error: "caretaker_name or caretaker_phone is required" };
+
+  return {
+    value: {
+      vyva_user_id: nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)),
+      caretaker_name: name,
+      caretaker_phone: phone,
+    },
+    error: creating && !nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)) ? "vyva_user_id is required" : null,
+  };
+}
+
+async function createCaregiver(payload) {
+  const caregiver = normalizeCaregiverPayload(payload, true);
+  if (caregiver.error) return caregiver;
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone)
+      VALUES ($1, $2, $3)
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [caregiver.value.vyva_user_id, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
+  );
+
+  return { value: result.rows[0] };
+}
+
+async function updateCaregiver(caregiverId, payload) {
+  const caregiver = normalizeCaregiverPayload(payload);
+  if (caregiver.error) return caregiver;
+
+  const result = await query(
+    `
+      UPDATE public.vyva_user_caregivers
+      SET caretaker_name = $2, caretaker_phone = $3, updated_at = now()
+      WHERE id = $1
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [caregiverId, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: result.rows[0] };
+}
+
+async function deleteCaregiver(caregiverId) {
+  const result = await query("DELETE FROM public.vyva_user_caregivers WHERE id = $1 RETURNING id::text", [caregiverId]);
+  return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
+}
+
+function normalizeHealthPayload(payload) {
+  return {
+    value: {
+      health_conditions: normalizeStringArray(firstValue(payload?.health_conditions, payload?.healthConditions, payload?.conditions)),
+      mobility_needs: normalizeStringArray(firstValue(payload?.mobility_needs, payload?.mobilityNeeds, payload?.mobility)),
+    },
+  };
+}
+
+async function upsertHealth(userId, payload) {
+  const health = normalizeHealthPayload(payload);
+  const existing = await query("SELECT id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]);
+
+  if (existing.rows[0]) {
+    const result = await query(
+      `
+        UPDATE public.vyva_user_health
+        SET health_conditions = $2, mobility_needs = $3, updated_at = now()
+        WHERE id = $1
+        RETURNING *, id::text, vyva_user_id::text
+      `,
+      [existing.rows[0].id, health.value.health_conditions, health.value.mobility_needs],
+    );
+    return { value: result.rows[0] };
+  }
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_health (vyva_user_id, health_conditions, mobility_needs)
+      VALUES ($1, $2, $3)
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [userId, health.value.health_conditions, health.value.mobility_needs],
+  );
+  return { value: result.rows[0] };
+}
+
+function normalizeServicePayload(payload) {
+  const preferredTime = nullIfBlank(firstValue(payload?.preferred_time, payload?.preferredTime, payload?.time));
+  if (preferredTime && !/^\d{2}:\d{2}$/.test(preferredTime)) return { error: "preferred_time must be HH:mm" };
+
+  return {
+    value: {
+      enabled: optionalBooleanValue(payload?.enabled, payload?.is_active, payload?.active) ?? false,
+      frequency: nullIfBlank(firstValue(payload?.frequency, payload?.frequency_days, payload?.frequencyDays)),
+      preferred_time: preferredTime,
+    },
+  };
+}
+
+async function updateCheckinConfig(checkinId, payload) {
+  const config = normalizeServicePayload(payload);
+  if (config.error) return config;
+
+  const result = await query(
+    `
+      UPDATE public.vyva_user_checkins
+      SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
+      WHERE id = $1
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [checkinId, config.value.enabled, config.value.frequency, config.value.preferred_time],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: result.rows[0] };
+}
+
+async function upsertBrainCoachConfig(userId, payload) {
+  const config = normalizeServicePayload(payload);
+  if (config.error) return config;
+
+  const existing = await query("SELECT id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId]);
+  if (existing.rows[0]) {
+    const result = await query(
+      `
+        UPDATE public.vyva_user_brain_coach
+        SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
+        WHERE id = $1
+        RETURNING *, id::text, vyva_user_id::text
+      `,
+      [existing.rows[0].id, config.value.enabled, config.value.frequency, config.value.preferred_time],
+    );
+    return { value: result.rows[0] };
+  }
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_brain_coach (vyva_user_id, enabled, frequency, preferred_time)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [userId, config.value.enabled, config.value.frequency, config.value.preferred_time],
+  );
+  return { value: result.rows[0] };
+}
+
 function firstValue(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
 }
@@ -1114,6 +1332,54 @@ async function updateUserRoute(req, res) {
 
 app.patch("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
+
+function sendWriteResult(res, result, okStatus = 200) {
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  if (result.notFound) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.status(okStatus).json(result.value);
+}
+
+app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await createMedication(req.body), 201);
+}));
+
+app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await updateMedication(req.params.med_id, req.body));
+}));
+
+app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await deleteMedication(req.params.med_id));
+}));
+
+app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await createCaregiver(req.body), 201);
+}));
+
+app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await updateCaregiver(req.params.caregiver_id, req.body));
+}));
+
+app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await deleteCaregiver(req.params.caregiver_id));
+}));
+
+app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await upsertHealth(req.params.user_id, req.body));
+}));
+
+app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await updateCheckinConfig(req.params.checkin_id, req.body));
+}));
+
+app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body));
+}));
 
 async function phoneRegistrationRoute(req, res) {
   if (!onboardingAuthorized(req)) {

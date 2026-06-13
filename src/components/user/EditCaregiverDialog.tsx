@@ -3,7 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/apiClient";
+import type { OperationalCaregiver } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 
@@ -11,7 +12,7 @@ interface EditCaregiverDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
-  caregiver?: any;
+  caregiver?: OperationalCaregiver | null;
 }
 
 export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver }: EditCaregiverDialogProps) {
@@ -29,24 +30,30 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
       toast({ title: "Caregiver name is required", variant: "destructive" });
       return;
     }
-    setSaving(true);
     const payload = {
+      vyva_user_id: vyvaUserId,
       caretaker_name: form.caretaker_name.trim(),
       caretaker_phone: form.caretaker_phone.trim() || null,
     };
-    let error;
-    if (caregiver) {
-      ({ error } = await supabase.from("vyva_user_caregivers").update(payload).eq("id", caregiver.id));
-    } else {
-      ({ error } = await supabase.from("vyva_user_caregivers").insert({ ...payload, vyva_user_id: vyvaUserId }));
-    }
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving", description: error.message, variant: "destructive" });
-    } else {
+
+    setSaving(true);
+    try {
+      await apiFetch(caregiver ? `/api/v1/user-dashboard/caregivers/${caregiver.id}` : "/api/v1/user-dashboard/caregivers", {
+        method: caregiver ? "PUT" : "POST",
+        body: JSON.stringify(payload),
+      });
+
       toast({ title: caregiver ? "Caregiver updated" : "Caregiver added" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
+    } catch (error) {
+      toast({
+        title: "Error saving",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 

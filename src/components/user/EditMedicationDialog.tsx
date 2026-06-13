@@ -3,7 +3,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/apiClient";
+import type { OperationalMedication } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 
@@ -11,7 +12,7 @@ interface EditMedicationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
-  medication?: any; // null = create mode
+  medication?: OperationalMedication | null;
 }
 
 export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medication }: EditMedicationDialogProps) {
@@ -31,28 +32,33 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
       toast({ title: "Medication name is required", variant: "destructive" });
       return;
     }
-    setSaving(true);
     const times = form.schedule_times.split(",").map(t => t.trim()).filter(Boolean);
     const payload = {
+      vyva_user_id: vyvaUserId,
       medication_name: form.medication_name.trim(),
       dosage: form.dosage.trim() || null,
       purpose: form.purpose.trim() || null,
       schedule_times: times.length ? times : null,
     };
 
-    let error;
-    if (medication) {
-      ({ error } = await supabase.from("vyva_user_medications").update(payload).eq("id", medication.id));
-    } else {
-      ({ error } = await supabase.from("vyva_user_medications").insert({ ...payload, vyva_user_id: vyvaUserId }));
-    }
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving", description: error.message, variant: "destructive" });
-    } else {
+    setSaving(true);
+    try {
+      await apiFetch(medication ? `/api/v1/user-dashboard/medications/${medication.id}` : "/api/v1/user-dashboard/medications", {
+        method: medication ? "PUT" : "POST",
+        body: JSON.stringify(payload),
+      });
+
       toast({ title: medication ? "Medication updated" : "Medication added" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
+    } catch (error) {
+      toast({
+        title: "Error saving",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 

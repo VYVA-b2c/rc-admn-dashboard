@@ -41,7 +41,7 @@ import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
 import { EditSensorDialog } from "@/components/user/EditSensorDialog";
 import { EditServiceDialog } from "@/components/user/EditServiceDialog";
 import { EditUserDialog } from "@/components/user/EditUserDialog";
-import { apiFetch, BASE_URL } from "@/lib/apiClient";
+import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import {
   getDemoProfileById,
@@ -175,11 +175,9 @@ export default function UserProfile() {
     }
 
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/medications/${medId}`, {
+      await apiFetch(`/api/v1/user-dashboard/medications/${medId}`, {
         method: "DELETE",
       });
-
-      if (!res.ok) throw new Error("Failed");
 
       toast({ title: t("profile.medicationDeleted") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
@@ -195,11 +193,9 @@ export default function UserProfile() {
     }
 
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/caregivers/${caregiverId}`, {
+      await apiFetch(`/api/v1/user-dashboard/caregivers/${caregiverId}`, {
         method: "DELETE",
       });
-
-      if (!res.ok) throw new Error("Failed");
 
       toast({ title: t("profile.caregiverDeleted") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
@@ -688,8 +684,8 @@ export default function UserProfile() {
       {editHealthOpen && health && <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />}
       {editMedOpen && <EditMedicationDialog open={editMedOpen} onOpenChange={setEditMedOpen} vyvaUserId={user.id} medication={editMedTarget} />}
       {editCaregiverOpen && <EditCaregiverDialog open={editCaregiverOpen} onOpenChange={setEditCaregiverOpen} vyvaUserId={user.id} caregiver={editCaregiverTarget} />}
-      {editCheckinOpen && checkins && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" table="vyva_user_checkins" />}
-      {editBrainOpen && brainCoach && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" table="vyva_user_brain_coach" />}
+      {editCheckinOpen && checkins && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
+      {editBrainOpen && brainCoach && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
       {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
     </div>
   );

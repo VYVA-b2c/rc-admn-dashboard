@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/apiClient";
+import type { OperationalService } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 
@@ -13,12 +14,12 @@ interface EditServiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
-  service: any;
+  service: OperationalService;
   serviceName: "Check-in" | "Brain Coach";
-  table: "vyva_user_checkins" | "vyva_user_brain_coach";
+  serviceType: "checkin" | "brainCoach";
 }
 
-export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, serviceName, table }: EditServiceDialogProps) {
+export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, serviceName, serviceType }: EditServiceDialogProps) {
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -28,19 +29,38 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
   });
 
   const handleSave = async () => {
+    if (serviceType === "checkin" && !service.id) {
+      toast({ title: "Check-in settings are not available", variant: "destructive" });
+      return;
+    }
+
+    const path =
+      serviceType === "checkin"
+        ? `/api/v1/user-dashboard/checkins/${service.id}`
+        : `/api/v1/user-dashboard/brain-coach/${vyvaUserId}`;
+
     setSaving(true);
-    const { error } = await supabase.from(table).update({
-      enabled: form.enabled,
-      frequency: form.frequency || null,
-      preferred_time: form.preferred_time || null,
-    }).eq("vyva_user_id", vyvaUserId);
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      await apiFetch(path, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: form.enabled,
+          frequency: form.frequency || null,
+          preferred_time: form.preferred_time || null,
+        }),
+      });
+
       toast({ title: `${serviceName} settings updated` });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
+    } catch (error) {
+      toast({
+        title: "Error saving",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 
