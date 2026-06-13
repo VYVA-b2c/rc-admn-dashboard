@@ -10,6 +10,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
+const schemaPath = path.join(rootDir, "server", "schema.sql");
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -112,6 +113,13 @@ async function optionalRows(text, params = []) {
     }
     throw error;
   }
+}
+
+async function initializeDatabase() {
+  if (!pool) return;
+  const schema = fs.readFileSync(schemaPath, "utf8");
+  await pool.query(schema);
+  console.log("Database schema is ready.");
 }
 
 function asyncRoute(handler) {
@@ -597,8 +605,10 @@ if (isProduction) {
   app.use(vite.middlewares);
 }
 
+await initializeDatabase();
+
 app.listen(port, host, () => {
   const mode = isProduction ? "production" : "development";
-  const dbState = pool ? "configured" : "missing LOVABLE_DATABASE_URL/DATABASE_URL";
+  const dbState = pool ? "configured" : "missing DATABASE_URL";
   console.log(`RC admin server running in ${mode} on http://${host}:${port} with database ${dbState}`);
 });
