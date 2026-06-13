@@ -48,6 +48,7 @@ export interface OperationalProfileUser extends ProfileRecord {
 
 export interface OperationalConsent extends ProfileRecord {
   id?: string;
+  caretaker_consent?: boolean;
   consent_given?: boolean;
   created_at?: string;
 }

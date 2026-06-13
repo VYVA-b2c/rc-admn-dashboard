@@ -625,22 +625,220 @@ function normalizeUserPayload(payload, creating = false) {
   };
 }
 
+function hasOwnPayloadKey(payload, key) {
+  return Boolean(payload) && Object.prototype.hasOwnProperty.call(payload, key);
+}
+
+function normalizeConsentPayload(payload) {
+  return {
+    value: {
+      consent_given: optionalBooleanValue(payload?.consent_given, payload?.consentGiven, payload?.user_consent, payload?.userConsent) ?? false,
+      caretaker_consent: optionalBooleanValue(payload?.caretaker_consent, payload?.caretakerConsent, payload?.caregiver_consent, payload?.caregiverConsent) ?? false,
+    },
+  };
+}
+
+function normalizeCaregiverArrayPayload(value) {
+  if (!Array.isArray(value)) return { value: null };
+
+  const caregivers = [];
+  for (const item of value.map(objectValue)) {
+    if (!hasMeaningfulPayloadValue(item)) continue;
+    const caregiver = normalizeCaregiverPayload(item);
+    if (caregiver.error) return caregiver;
+    caregivers.push(caregiver.value);
+  }
+
+  return { value: caregivers };
+}
+
+function normalizeMedicationArrayPayload(value) {
+  if (!Array.isArray(value)) return { value: null };
+
+  const medications = [];
+  for (const item of value.map(objectValue)) {
+    if (!hasMeaningfulPayloadValue(item)) continue;
+    const medication = normalizeMedicationPayload(item);
+    if (medication.error) return medication;
+    medications.push(medication.value);
+  }
+
+  return { value: medications };
+}
+
+function normalizeCareProfilePayload(payload, creating = false) {
+  const healthPresent = hasOwnPayloadKey(payload, "health");
+  const consentPresent = hasOwnPayloadKey(payload, "consent");
+  const caregiversPresent = Array.isArray(payload?.caregivers);
+  const medicationsPresent = Array.isArray(payload?.medications);
+  const checkinsPresent = hasOwnPayloadKey(payload, "checkins") || hasOwnPayloadKey(payload, "checkin");
+  const brainCoachPresent = hasOwnPayloadKey(payload, "brainCoach") || hasOwnPayloadKey(payload, "brain_coach");
+
+  const caregiverSource = objectValue(payload?.caregiver);
+  const medicationSource = objectValue(payload?.medication);
+
+  const caregivers = normalizeCaregiverArrayPayload(payload?.caregivers);
+  if (caregivers.error) return caregivers;
+
+  const medications = normalizeMedicationArrayPayload(payload?.medications);
+  if (medications.error) return medications;
+
+  const legacyCaregiver = !caregiversPresent && hasMeaningfulPayloadValue(caregiverSource)
+    ? normalizeCaregiverPayload(caregiverSource)
+    : null;
+  if (legacyCaregiver?.error) return legacyCaregiver;
+
+  const legacyMedication = !medicationsPresent && hasMeaningfulPayloadValue(medicationSource)
+    ? normalizeMedicationPayload(medicationSource)
+    : null;
+  if (legacyMedication?.error) return legacyMedication;
+
+  const checkinsSource = objectValue(firstValue(payload?.checkins, payload?.checkin));
+  const brainCoachSource = objectValue(firstValue(payload?.brainCoach, payload?.brain_coach));
+
+  const checkins = checkinsPresent ? normalizeServicePayload(checkinsSource) : null;
+  if (checkins?.error) return checkins;
+
+  const brainCoach = brainCoachPresent ? normalizeServicePayload(brainCoachSource) : null;
+  if (brainCoach?.error) return brainCoach;
+
+  return {
+    value: {
+      healthPresent,
+      health: healthPresent ? normalizeHealthPayload(objectValue(payload?.health)).value : null,
+      consentPresent,
+      consent: consentPresent ? normalizeConsentPayload(objectValue(payload?.consent)).value : null,
+      caregiversPresent,
+      caregivers: caregiversPresent ? caregivers.value : legacyCaregiver ? [legacyCaregiver.value] : null,
+      medicationsPresent,
+      medications: medicationsPresent ? medications.value : legacyMedication ? [legacyMedication.value] : null,
+      checkinsPresent,
+      checkins: checkins?.value ?? null,
+      brainCoachPresent,
+      brainCoach: brainCoach?.value ?? null,
+    },
+  };
+}
+
+async function upsertConsentWithClient(client, userId, consent) {
+  const existing = await client.query("SELECT id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId]);
+  if (existing.rows[0]) {
+    await client.query(
+      `
+        UPDATE public.vyva_user_consent
+        SET consent_given = $2, caretaker_consent = $3, updated_at = now()
+        WHERE id = $1
+      `,
+      [existing.rows[0].id, consent.consent_given, consent.caretaker_consent],
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO public.vyva_user_consent (vyva_user_id, consent_given, caretaker_consent)
+      VALUES ($1, $2, $3)
+    `,
+    [userId, consent.consent_given, consent.caretaker_consent],
+  );
+}
+
+async function upsertHealthWithClient(client, userId, health) {
+  const existing = await client.query("SELECT id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]);
+  if (existing.rows[0]) {
+    await client.query(
+      `
+        UPDATE public.vyva_user_health
+        SET health_conditions = $2, mobility_needs = $3, updated_at = now()
+        WHERE id = $1
+      `,
+      [existing.rows[0].id, health.health_conditions, health.mobility_needs],
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO public.vyva_user_health (vyva_user_id, health_conditions, mobility_needs)
+      VALUES ($1, $2, $3)
+    `,
+    [userId, health.health_conditions, health.mobility_needs],
+  );
+}
+
+async function replaceCaregiversWithClient(client, userId, caregivers) {
+  await client.query("DELETE FROM public.vyva_user_caregivers WHERE vyva_user_id = $1", [userId]);
+  for (const caregiver of caregivers) {
+    await client.query(
+      "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
+      [userId, caregiver.caretaker_name, caregiver.caretaker_phone],
+    );
+  }
+}
+
+async function replaceMedicationsWithClient(client, userId, medications) {
+  await client.query("DELETE FROM public.vyva_user_medications WHERE vyva_user_id = $1", [userId]);
+  for (const medication of medications) {
+    await client.query(
+      `
+        INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
+        VALUES ($1, $2, $3, $4, $5)
+      `,
+      [userId, medication.medication_name, medication.purpose, medication.dosage, medication.schedule_times],
+    );
+  }
+}
+
+async function upsertServiceWithClient(client, table, userId, config) {
+  const existing = await client.query(`SELECT id::text FROM public.${table} WHERE vyva_user_id = $1 LIMIT 1`, [userId]);
+  if (existing.rows[0]) {
+    await client.query(
+      `
+        UPDATE public.${table}
+        SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
+        WHERE id = $1
+      `,
+      [existing.rows[0].id, config.enabled, config.frequency, config.preferred_time],
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO public.${table} (vyva_user_id, enabled, frequency, preferred_time)
+      VALUES ($1, $2, $3, $4)
+    `,
+    [userId, config.enabled, config.frequency, config.preferred_time],
+  );
+}
+
+async function syncCareProfileWithClient(client, userId, careProfile) {
+  if (careProfile.healthPresent && (hasMeaningfulPayloadValue(careProfile.health) || careProfile.health)) {
+    await upsertHealthWithClient(client, userId, careProfile.health);
+  }
+  if (careProfile.consentPresent && careProfile.consent) {
+    await upsertConsentWithClient(client, userId, careProfile.consent);
+  }
+  if (careProfile.caregivers) {
+    await replaceCaregiversWithClient(client, userId, careProfile.caregivers);
+  }
+  if (careProfile.medications) {
+    await replaceMedicationsWithClient(client, userId, careProfile.medications);
+  }
+  if (careProfile.checkinsPresent && careProfile.checkins) {
+    await upsertServiceWithClient(client, "vyva_user_checkins", userId, careProfile.checkins);
+  }
+  if (careProfile.brainCoachPresent && careProfile.brainCoach) {
+    await upsertServiceWithClient(client, "vyva_user_brain_coach", userId, careProfile.brainCoach);
+  }
+}
+
 async function createDashboardUser(payload) {
   const user = normalizeUserPayload(payload, true);
   if (user.error) return user;
 
-  const caregiverSource = objectValue(payload?.caregiver);
-  const medicationSource = objectValue(payload?.medication);
-  const checkinSource = objectValue(firstValue(payload?.checkin, payload?.checkins));
-
-  const caregiver = hasMeaningfulPayloadValue(caregiverSource) ? normalizeCaregiverPayload(caregiverSource) : null;
-  if (caregiver?.error) return caregiver;
-
-  const medication = hasMeaningfulPayloadValue(medicationSource) ? normalizeMedicationPayload(medicationSource) : null;
-  if (medication?.error) return medication;
-
-  const checkin = hasMeaningfulPayloadValue(checkinSource) ? normalizeServicePayload(checkinSource) : null;
-  if (checkin?.error) return checkin;
+  const careProfile = normalizeCareProfilePayload(payload, true);
+  if (careProfile.error) return careProfile;
 
   const client = await pool.connect();
   try {
@@ -683,38 +881,7 @@ async function createDashboardUser(payload) {
     );
     const createdUser = result.rows[0];
 
-    if (caregiver) {
-      await client.query(
-        "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
-        [createdUser.id, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
-      );
-    }
-
-    if (medication) {
-      await client.query(
-        `
-          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
-          VALUES ($1, $2, $3, $4, $5)
-        `,
-        [
-          createdUser.id,
-          medication.value.medication_name,
-          medication.value.purpose,
-          medication.value.dosage,
-          medication.value.schedule_times,
-        ],
-      );
-    }
-
-    if (checkin) {
-      await client.query(
-        `
-          INSERT INTO public.vyva_user_checkins (vyva_user_id, enabled, frequency, preferred_time)
-          VALUES ($1, $2, $3, $4)
-        `,
-        [createdUser.id, checkin.value.enabled, checkin.value.frequency, checkin.value.preferred_time],
-      );
-    }
+    await syncCareProfileWithClient(client, createdUser.id, careProfile.value);
 
     await client.query("COMMIT");
     return { value: createdUser };
@@ -730,43 +897,61 @@ async function updateDashboardUser(userId, payload) {
   const user = normalizeUserPayload(payload);
   if (user.error) return user;
 
-  const result = await query(
-    `
-      UPDATE public.vyva_users
-      SET
-        first_name = $2,
-        last_name = $3,
-        phone = $4,
-        city = $5,
-        street = $6,
-        house_number = $7,
-        post_code = $8,
-        date_of_birth = $9,
-        gender = $10,
-        language = $11,
-        emergency_notes = $12,
-        updated_at = now()
-      WHERE id = $1
-      RETURNING *, id::text
-    `,
-    [
-      userId,
-      user.value.first_name,
-      user.value.last_name,
-      user.value.phone,
-      user.value.city,
-      user.value.street,
-      user.value.house_number,
-      user.value.post_code,
-      user.value.date_of_birth,
-      user.value.gender,
-      user.value.language,
-      user.value.emergency_notes,
-    ],
-  );
+  const careProfile = normalizeCareProfilePayload(payload);
+  if (careProfile.error) return careProfile;
 
-  if (!result.rows[0]) return { notFound: true };
-  return { value: result.rows[0] };
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `
+        UPDATE public.vyva_users
+        SET
+          first_name = $2,
+          last_name = $3,
+          phone = $4,
+          city = $5,
+          street = $6,
+          house_number = $7,
+          post_code = $8,
+          date_of_birth = $9,
+          gender = $10,
+          language = $11,
+          emergency_notes = $12,
+          updated_at = now()
+        WHERE id = $1
+        RETURNING *, id::text
+      `,
+      [
+        userId,
+        user.value.first_name,
+        user.value.last_name,
+        user.value.phone,
+        user.value.city,
+        user.value.street,
+        user.value.house_number,
+        user.value.post_code,
+        user.value.date_of_birth,
+        user.value.gender,
+        user.value.language,
+        user.value.emergency_notes,
+      ],
+    );
+
+    if (!result.rows[0]) {
+      await client.query("ROLLBACK");
+      return { notFound: true };
+    }
+
+    await syncCareProfileWithClient(client, userId, careProfile.value);
+    await client.query("COMMIT");
+    return { value: result.rows[0] };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function normalizeMedicationPayload(payload, creating = false) {
