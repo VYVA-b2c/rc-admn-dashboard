@@ -29,6 +29,13 @@ function dateInputValue(value?: string | null) {
   return String(value).slice(0, 10);
 }
 
+function isValidPhoneInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const digits = trimmed.replace(/\D/g, "");
+  return /^\+[1-9][0-9\s().-]{6,24}$/.test(trimmed) && digits.length >= 8 && digits.length <= 15;
+}
+
 export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDialogProps) {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
@@ -74,7 +81,17 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
       return;
     }
 
+    if (!isValidPhoneInput(form.phone)) {
+      toast({ title: t("userForm.validation.phone"), variant: "destructive" });
+      return;
+    }
+
     if (!isEditing) {
+      if (!isValidPhoneInput(onboarding.caregiver_phone)) {
+        toast({ title: t("userForm.validation.caregiverPhone"), variant: "destructive" });
+        return;
+      }
+
       const hasMedicationDetail = [
         onboarding.medication_dosage,
         onboarding.medication_purpose,
@@ -199,7 +216,16 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="user-phone">{t("userForm.phone")}</Label>
-              <Input id="user-phone" value={form.phone} onChange={(event) => update("phone", event.target.value)} />
+              <Input
+                id="user-phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                placeholder={t("userForm.phonePlaceholder")}
+                value={form.phone}
+                onChange={(event) => update("phone", event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">{t("userForm.phoneHelp")}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="user-date-of-birth">{t("userForm.dateOfBirth")}</Label>
@@ -303,6 +329,10 @@ export function EditUserDialog({ open, onOpenChange, onSaved, user }: EditUserDi
                     <Label htmlFor="user-caregiver-phone">{t("userForm.caregiverPhone")}</Label>
                     <Input
                       id="user-caregiver-phone"
+                      type="tel"
+                      inputMode="tel"
+                      autoComplete="tel"
+                      placeholder={t("userForm.phonePlaceholder")}
                       value={onboarding.caregiver_phone}
                       onChange={(event) => updateOnboarding("caregiver_phone", event.target.value)}
                     />

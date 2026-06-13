@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { apiFetch } from "@/lib/apiClient";
 import type { OperationalCaregiver } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,8 +16,16 @@ interface EditCaregiverDialogProps {
   caregiver?: OperationalCaregiver | null;
 }
 
+function isValidPhoneInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const digits = trimmed.replace(/\D/g, "");
+  return /^\+[1-9][0-9\s().-]{6,24}$/.test(trimmed) && digits.length >= 8 && digits.length <= 15;
+}
+
 export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver }: EditCaregiverDialogProps) {
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     caretaker_name: caregiver?.caretaker_name || "",
@@ -28,6 +37,10 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
   const handleSave = async () => {
     if (!form.caretaker_name.trim()) {
       toast({ title: "Caregiver name is required", variant: "destructive" });
+      return;
+    }
+    if (!isValidPhoneInput(form.caretaker_phone)) {
+      toast({ title: t("userForm.validation.caregiverPhone"), variant: "destructive" });
       return;
     }
     const payload = {
@@ -70,7 +83,15 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
           </div>
           <div className="space-y-1.5">
             <Label>Phone</Label>
-            <Input value={form.caretaker_phone} onChange={e => update("caretaker_phone", e.target.value)} />
+            <Input
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder={t("userForm.phonePlaceholder")}
+              value={form.caretaker_phone}
+              onChange={e => update("caretaker_phone", e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">{t("userForm.phoneHelp")}</p>
           </div>
         </div>
         <DialogFooter>
