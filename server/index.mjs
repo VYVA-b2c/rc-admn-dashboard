@@ -1770,10 +1770,14 @@ if (isProduction) {
   app.use(vite.middlewares);
 }
 
-await initializeDatabase();
-
 app.listen(port, host, () => {
   const mode = isProduction ? "production" : "development";
   const dbState = pool ? "configured" : "missing DATABASE_URL";
   console.log(`RC admin server running in ${mode} on http://${host}:${port} with database ${dbState}`);
+
+  if (pool) {
+    initializeDatabase().catch((error) => {
+      console.error("Database schema initialization failed after startup:", error);
+    });
+  }
 });
