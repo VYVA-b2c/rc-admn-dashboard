@@ -251,6 +251,8 @@ CREATE INDEX IF NOT EXISTS idx_vyva_user_caregivers_user ON public.vyva_user_car
 CREATE INDEX IF NOT EXISTS idx_vyva_user_sensors_user ON public.vyva_user_sensors(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_sensor_alerts_user ON public.vyva_sensor_alerts(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_medication_logs_user_date ON public.vyva_medication_logs(vyva_user_id, scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_vyva_users_conversation ON public.vyva_users(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_vyva_users_phone_digits ON public.vyva_users ((regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g')));
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON public.campaign_targets(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_user ON public.campaign_targets(vyva_user_id);
 

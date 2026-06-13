@@ -712,6 +712,347 @@ async function updateDashboardUser(userId, payload) {
   return { value: result.rows[0] };
 }
 
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && String(value).trim() !== "");
+}
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeLanguage(value) {
+  const language = nullIfBlank(value)?.toLowerCase().slice(0, 2);
+  return ["en", "de", "es"].includes(language) ? language : "de";
+}
+
+function normalizeDateValue(value) {
+  const text = nullIfBlank(value);
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function normalizeTimestampValue(value) {
+  const text = nullIfBlank(value);
+  if (!text) return null;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function normalizeInteger(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.round(numeric) : null;
+}
+
+function normalizeStringArray(value) {
+  if (Array.isArray(value)) return value.map(nullIfBlank).filter(Boolean);
+  const text = nullIfBlank(value);
+  return text ? text.split(",").map((item) => item.trim()).filter(Boolean) : [];
+}
+
+function normalizeBooleanValue(value) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  const text = nullIfBlank(value)?.toLowerCase();
+  if (["true", "yes", "y", "1", "consented", "active", "enabled"].includes(text)) return true;
+  if (["false", "no", "n", "0", "declined", "inactive", "disabled"].includes(text)) return false;
+  return false;
+}
+
+function optionalBooleanValue(...values) {
+  const raw = firstValue(...values);
+  return raw === undefined ? undefined : normalizeBooleanValue(raw);
+}
+
+function splitName(fullName) {
+  const text = nullIfBlank(fullName);
+  if (!text) return {};
+  const parts = text.split(/\s+/);
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" ") || "User",
+  };
+}
+
+function phoneDigits(value) {
+  return nullIfBlank(value)?.replace(/\D/g, "") || null;
+}
+
+function onboardingSecret() {
+  return process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_API_KEY || process.env.LOVABLE_API_KEY;
+}
+
+function onboardingAuthorized(req) {
+  const secret = onboardingSecret();
+  if (!secret) return !isProduction;
+
+  const authorization = req.get("authorization") || "";
+  const bearer = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : null;
+  const apiKey = req.get("x-api-key") || req.get("x-webhook-secret") || req.query.token;
+  return [bearer, apiKey].includes(secret);
+}
+
+function normalizePhoneRegistrationPayload(payload = {}) {
+  const source = {
+    ...payload,
+    ...objectValue(payload.user),
+    ...objectValue(payload.registration),
+    ...objectValue(payload.profile),
+  };
+  const fullName = firstValue(source.full_name, source.fullName, source.name, source.display_name, source.displayName);
+  const parsedName = splitName(fullName);
+  const phone = firstValue(
+    source.phone,
+    source.phone_number,
+    source.phoneNumber,
+    source.mobile,
+    source.msisdn,
+    source.whatsapp,
+    source.whatsapp_phone,
+    source.From,
+  );
+  const dateOfBirth = normalizeDateValue(firstValue(source.date_of_birth, source.dateOfBirth, source.dob, source.birthdate));
+  const conversationId = nullIfBlank(firstValue(
+    source.conversation_id,
+    source.conversationId,
+    source.conversationID,
+    source.call_id,
+    source.callId,
+    source.session_id,
+    source.sessionId,
+  ));
+
+  if (!phone && !conversationId) return { error: "phone or conversation_id is required" };
+
+  return {
+    value: {
+      first_name: nullIfBlank(firstValue(source.first_name, source.firstName, source.given_name)) || parsedName.firstName || "Unknown",
+      last_name: nullIfBlank(firstValue(source.last_name, source.lastName, source.family_name, source.surname)) || parsedName.lastName || "User",
+      phone: nullIfBlank(phone),
+      city: nullIfBlank(firstValue(source.city, source.town, source.locality)),
+      street: nullIfBlank(firstValue(source.street, source.address_street, source.addressLine1)),
+      house_number: nullIfBlank(firstValue(source.house_number, source.houseNumber, source.house_no, source.houseNo)),
+      post_code: nullIfBlank(firstValue(source.post_code, source.postCode, source.postal_code, source.zip)),
+      country: nullIfBlank(source.country) || "Germany",
+      timezone: nullIfBlank(source.timezone) || "Europe/Berlin",
+      date_of_birth: dateOfBirth,
+      gender: nullIfBlank(source.gender),
+      language: normalizeLanguage(firstValue(source.language, source.lang, source.locale)),
+      emergency_notes: nullIfBlank(firstValue(source.emergency_notes, source.emergencyNotes, source.notes, source.summary)),
+      conversation_id: conversationId,
+      transcript: nullIfBlank(firstValue(source.transcript, source.call_transcript, source.callTranscript)),
+      call_duration: normalizeInteger(firstValue(source.call_duration, source.callDuration, source.duration, source.duration_seconds)),
+      call_timestamp: normalizeTimestampValue(firstValue(source.call_timestamp, source.callTimestamp, source.created_at, source.createdAt)),
+      consent: firstValue(payload.consent, source.consent),
+      health: firstValue(payload.health, source.health),
+      caregivers: firstValue(payload.caregivers, payload.emergency_contacts, source.caregivers, source.emergency_contacts),
+      medications: firstValue(payload.medications, source.medications),
+      checkins: firstValue(payload.checkins, payload.checkin, source.checkins, source.checkin),
+      brainCoach: firstValue(payload.brainCoach, payload.brain_coach, source.brainCoach, source.brain_coach),
+    },
+  };
+}
+
+async function findOnboardingUser(registration) {
+  const digits = phoneDigits(registration.phone);
+  const result = await query(
+    `
+      SELECT id::text
+      FROM public.vyva_users
+      WHERE
+        ($1::text IS NOT NULL AND conversation_id = $1)
+        OR ($2::text IS NOT NULL AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = $2)
+        OR ($3::text IS NOT NULL AND phone = $3)
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `,
+    [registration.conversation_id, digits, registration.phone],
+  );
+
+  return result.rows[0]?.id || null;
+}
+
+async function upsertPhoneRegistrationUser(registration) {
+  const existingId = await findOnboardingUser(registration);
+  const params = [
+    registration.first_name,
+    registration.last_name,
+    registration.phone,
+    registration.city,
+    registration.street,
+    registration.house_number,
+    registration.post_code,
+    registration.country,
+    registration.timezone,
+    registration.date_of_birth,
+    registration.gender,
+    registration.language,
+    registration.emergency_notes,
+    registration.conversation_id,
+    registration.transcript,
+    registration.call_duration,
+    registration.call_timestamp,
+  ];
+
+  if (!existingId) {
+    const result = await query(
+      `
+        INSERT INTO public.vyva_users (
+          first_name,
+          last_name,
+          phone,
+          city,
+          street,
+          house_number,
+          post_code,
+          country,
+          timezone,
+          date_of_birth,
+          gender,
+          language,
+          emergency_notes,
+          conversation_id,
+          transcript,
+          call_duration,
+          call_timestamp
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        RETURNING *, id::text
+      `,
+      params,
+    );
+    return { user: result.rows[0], created: true };
+  }
+
+  const result = await query(
+    `
+      UPDATE public.vyva_users
+      SET
+        first_name = COALESCE($2, first_name),
+        last_name = COALESCE($3, last_name),
+        phone = COALESCE($4, phone),
+        city = COALESCE($5, city),
+        street = COALESCE($6, street),
+        house_number = COALESCE($7, house_number),
+        post_code = COALESCE($8, post_code),
+        country = COALESCE($9, country),
+        timezone = COALESCE($10, timezone),
+        date_of_birth = COALESCE($11, date_of_birth),
+        gender = COALESCE($12, gender),
+        language = COALESCE($13, language),
+        emergency_notes = COALESCE($14, emergency_notes),
+        conversation_id = COALESCE($15, conversation_id),
+        transcript = COALESCE($16, transcript),
+        call_duration = COALESCE($17, call_duration),
+        call_timestamp = COALESCE($18, call_timestamp),
+        updated_at = now()
+      WHERE id = $1
+      RETURNING *, id::text
+    `,
+    [existingId, ...params],
+  );
+  return { user: result.rows[0], created: false };
+}
+
+async function upsertOneToOneRecord(table, userId, payload, columns) {
+  const source = objectValue(payload);
+  if (!Object.keys(source).length) return;
+
+  const values = columns.map((column) => column.value(source));
+  if (values.every((value) => value === null || value === undefined || (Array.isArray(value) && value.length === 0))) return;
+
+  const existing = await query(`SELECT id::text FROM public.${table} WHERE vyva_user_id = $1 LIMIT 1`, [userId]);
+  const assignments = columns.map((column, index) => `${column.name} = $${index + 2}`).join(", ");
+  if (existing.rows[0]) {
+    await query(
+      `UPDATE public.${table} SET ${assignments}, updated_at = now() WHERE vyva_user_id = $1`,
+      [userId, ...values],
+    );
+    return;
+  }
+
+  await query(
+    `INSERT INTO public.${table} (vyva_user_id, ${columns.map((column) => column.name).join(", ")}) VALUES ($1, ${columns.map((_, index) => `$${index + 2}`).join(", ")})`,
+    [userId, ...values],
+  );
+}
+
+async function syncOnboardingRelatedData(userId, registration) {
+  await upsertOneToOneRecord("vyva_user_consent", userId, registration.consent, [
+    { name: "consent_given", value: (source) => optionalBooleanValue(source.consent_given, source.consentGiven, source.user_consent, source.userConsent) },
+    { name: "caretaker_consent", value: (source) => optionalBooleanValue(source.caretaker_consent, source.caretakerConsent, source.caregiver_consent, source.caregiverConsent) },
+  ]);
+
+  await upsertOneToOneRecord("vyva_user_health", userId, registration.health, [
+    { name: "health_conditions", value: (source) => normalizeStringArray(firstValue(source.health_conditions, source.healthConditions, source.conditions)) },
+    { name: "mobility_needs", value: (source) => normalizeStringArray(firstValue(source.mobility_needs, source.mobilityNeeds, source.mobility)) },
+  ]);
+
+  if (Array.isArray(registration.caregivers)) {
+    await query("DELETE FROM public.vyva_user_caregivers WHERE vyva_user_id = $1", [userId]);
+    for (const caregiver of registration.caregivers.map(objectValue)) {
+      const name = nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.name, caregiver.full_name, caregiver.fullName));
+      const phone = nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber));
+      if (!name && !phone) continue;
+      await query(
+        "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
+        [userId, name, phone],
+      );
+    }
+  }
+
+  if (Array.isArray(registration.medications)) {
+    await query("DELETE FROM public.vyva_user_medications WHERE vyva_user_id = $1", [userId]);
+    for (const medication of registration.medications.map(objectValue)) {
+      const name = nullIfBlank(firstValue(medication.medication_name, medication.name, medication.medicationName));
+      if (!name) continue;
+      await query(
+        `
+          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
+          VALUES ($1, $2, $3, $4, $5)
+        `,
+        [
+          userId,
+          name,
+          nullIfBlank(firstValue(medication.purpose, medication.reason)),
+          nullIfBlank(medication.dosage),
+          normalizeStringArray(firstValue(medication.schedule_times, medication.scheduleTimes, medication.times)),
+        ],
+      );
+    }
+  }
+
+  await upsertOneToOneRecord("vyva_user_checkins", userId, registration.checkins, [
+    { name: "enabled", value: (source) => optionalBooleanValue(source.enabled, source.is_active, source.active) ?? true },
+    { name: "frequency", value: (source) => nullIfBlank(firstValue(source.frequency, source.frequency_days, source.frequencyDays)) },
+    { name: "preferred_time", value: (source) => nullIfBlank(firstValue(source.preferred_time, source.preferredTime, source.time)) },
+  ]);
+
+  await upsertOneToOneRecord("vyva_user_brain_coach", userId, registration.brainCoach, [
+    { name: "enabled", value: (source) => optionalBooleanValue(source.enabled, source.is_active, source.active) ?? true },
+    { name: "frequency", value: (source) => nullIfBlank(firstValue(source.frequency, source.frequency_days, source.frequencyDays)) },
+    { name: "preferred_time", value: (source) => nullIfBlank(firstValue(source.preferred_time, source.preferredTime, source.time)) },
+  ]);
+}
+
+async function ingestPhoneRegistration(payload) {
+  const normalized = normalizePhoneRegistrationPayload(payload);
+  if (normalized.error) return normalized;
+
+  const { user, created } = await upsertPhoneRegistrationUser(normalized.value);
+  await syncOnboardingRelatedData(user.id, normalized.value);
+
+  return {
+    value: {
+      created,
+      user_id: user.id,
+      user,
+    },
+  };
+}
+
 app.get("/api/health", async (req, res, next) => {
   try {
     if (!pool) {
@@ -773,6 +1114,28 @@ async function updateUserRoute(req, res) {
 
 app.patch("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
+
+async function phoneRegistrationRoute(req, res) {
+  if (!onboardingAuthorized(req)) {
+    res.status(401).json({
+      error: onboardingSecret()
+        ? "Unauthorized"
+        : "ONBOARDING_API_KEY is required for phone registration ingestion in production",
+    });
+    return;
+  }
+
+  const result = await ingestPhoneRegistration(req.body);
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  res.status(result.value.created ? 201 : 200).json(result.value);
+}
+
+app.post("/api/v1/onboarding/phone-registration", asyncRoute(phoneRegistrationRoute));
+app.post("/api/v1/webhooks/phone-registration", asyncRoute(phoneRegistrationRoute));
 
 app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (_req, res) => {
   res.json({ campaigns: await loadCampaigns() });
