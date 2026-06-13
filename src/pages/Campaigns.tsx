@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
+  AlertTriangle,
+  ArrowUpRight,
   CalendarDays,
   CheckCircle2,
   ClipboardList,
@@ -34,11 +36,18 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
+import {
+  demoOperationalUsers,
+  type OperationalChannel,
+  type OperationalQueueUser,
+  type OperationalStatus,
+} from "@/lib/operationalDemoData";
 import { cn } from "@/lib/utils";
 
 type CampaignStatus = "active" | "draft" | "scheduled" | "completed";
 type CampaignChannel = "phone" | "whatsapp" | "mixed";
 type CampaignType = "safety" | "wellbeing" | "medication" | "service";
+type CampaignTargetStatus = "pending" | "contacted" | "confirmed" | "followUp";
 
 type Campaign = {
   id: string;
@@ -68,6 +77,18 @@ type FormState = {
   city: string;
   channel: CampaignChannel;
   objective: string;
+};
+
+type CampaignTarget = {
+  action: "profile" | "prepareCall";
+  channel: OperationalChannel;
+  city: string;
+  owner?: string | null;
+  reasonKey: string;
+  riskStatus: OperationalStatus;
+  score: number;
+  status: CampaignTargetStatus;
+  user: OperationalQueueUser;
 };
 
 const initialCampaigns: Campaign[] = [
@@ -143,6 +164,16 @@ const initialCampaigns: Campaign[] = [
 
 const statusFilters: Array<CampaignStatus | "all"> = ["all", "active", "scheduled", "draft", "completed"];
 
+function userName(user: OperationalQueueUser) {
+  return `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown";
+}
+
+function channelKey(channel: OperationalChannel) {
+  if (channel === "whatsapp") return "profile.channel.whatsApp";
+  if (channel === "app") return "profile.channel.app";
+  return "profile.channel.phone";
+}
+
 function itemText(item: Campaign, key: "name" | "objective" | "audience", t: (key: string) => string) {
   const textKey = item[`${key}Key` as keyof Campaign];
   if (typeof textKey === "string") return t(textKey);
@@ -180,6 +211,75 @@ function completion(campaign: Campaign) {
   return Math.round((campaign.contacted / campaign.total) * 100);
 }
 
+function targetStatusClasses(status: CampaignTargetStatus) {
+  switch (status) {
+    case "pending":
+      return "bg-slate-100 text-slate-700 ring-slate-200";
+    case "contacted":
+      return "bg-primary/10 text-primary ring-primary/20";
+    case "confirmed":
+      return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+    case "followUp":
+      return "bg-orange-50 text-orange-700 ring-orange-200";
+  }
+}
+
+function targetReasonKey(campaign: Campaign, user: OperationalQueueUser) {
+  if (campaign.type === "medication") {
+    return (user.missedMeds7d ?? 0) > 0 ? "campaigns.targets.reason.medication" : "campaigns.targets.reason.monitor";
+  }
+
+  if (campaign.type === "wellbeing") {
+    if (user.operationalContext?.noResponse) return "campaigns.targets.reason.noResponse";
+    if (!user.operationalContext?.assignedTo || !(user.checkinEnabled ?? false)) return "campaigns.targets.reason.support";
+    return "campaigns.targets.reason.isolation";
+  }
+
+  if (campaign.type === "service") return "campaigns.targets.reason.service";
+
+  if ((user.criticalAlerts ?? 0) > 0) return "campaigns.targets.reason.safetyCritical";
+  if ((user.activeAlerts ?? 0) > 0) return "campaigns.targets.reason.safetyReview";
+  return "campaigns.targets.reason.safetyCheck";
+}
+
+function targetStatus(campaign: Campaign, user: OperationalQueueUser, index: number): CampaignTargetStatus {
+  const riskStatus = user.operationalContext?.riskStatus;
+  if (riskStatus === "urgent" || (user.criticalAlerts ?? 0) > 0) return "followUp";
+  if (campaign.status === "draft") return "pending";
+  if (campaign.status === "scheduled") return index === 0 ? "contacted" : "pending";
+  if (campaign.status === "completed") return index % 3 === 0 ? "followUp" : "confirmed";
+  if (riskStatus === "review" || (user.activeAlerts ?? 0) > 0 || (user.missedMeds7d ?? 0) > 0) return "followUp";
+  return "confirmed";
+}
+
+function campaignTargets(campaign: Campaign): CampaignTarget[] {
+  const candidates = demoOperationalUsers.filter((user) => {
+    if (campaign.type === "medication") return (user.missedMeds7d ?? 0) > 0;
+    if (campaign.type === "wellbeing") {
+      return Boolean(user.operationalContext?.noResponse) || !user.operationalContext?.assignedTo || !(user.checkinEnabled ?? false);
+    }
+    if (campaign.type === "service") return user.city === campaign.city || user.operationalContext?.riskStatus !== "stable";
+    return user.city === campaign.city || (user.criticalAlerts ?? 0) > 0 || (user.activeAlerts ?? 0) > 0;
+  });
+
+  return (candidates.length ? candidates : demoOperationalUsers).map((user, index) => {
+    const status = targetStatus(campaign, user, index);
+    const riskStatus = user.operationalContext?.riskStatus ?? "stable";
+
+    return {
+      action: status === "followUp" || riskStatus === "urgent" ? "prepareCall" : "profile",
+      channel: user.operationalContext?.preferredChannel ?? "phone",
+      city: user.city ?? "",
+      owner: user.operationalContext?.assignedTo,
+      reasonKey: targetReasonKey(campaign, user),
+      riskStatus,
+      score: user.riskScore ?? 0,
+      status,
+      user,
+    };
+  });
+}
+
 const defaultForm: FormState = {
   name: "",
   type: "safety",
@@ -191,6 +291,7 @@ const defaultForm: FormState = {
 
 export default function Campaigns() {
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [campaigns, setCampaigns] = useState<Campaign[]>(initialCampaigns);
   const [selectedId, setSelectedId] = useState(initialCampaigns[0].id);
@@ -240,6 +341,10 @@ export default function Campaigns() {
   }, [campaigns, search, statusFilter, t]);
 
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedId) ?? campaigns[0];
+  const selectedTargets = useMemo(
+    () => (selectedCampaign ? campaignTargets(selectedCampaign) : []),
+    [selectedCampaign],
+  );
 
   const openCreateDialog = () => {
     setForm(defaultForm);
@@ -503,6 +608,110 @@ export default function Campaigns() {
           </Card>
         )}
       </section>
+
+      {selectedCampaign && (
+        <Card className="rounded-2xl border-border bg-white shadow-sm">
+          <CardContent className="space-y-4 p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="text-lg font-extrabold text-foreground">{t("campaigns.targets.title")}</h2>
+                  <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-bold text-primary">
+                    {t("campaigns.targets.preview")}
+                  </Badge>
+                </div>
+                <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("campaigns.targets.subtitle")}</p>
+              </div>
+              <div className="rounded-full border border-border bg-muted/40 px-3 py-1.5 text-xs font-bold text-muted-foreground">
+                {selectedTargets.length} {t("queue.cases")}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto rounded-xl border">
+              <Table className="min-w-[900px]">
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead className="min-w-[220px]">{t("campaigns.targets.person")}</TableHead>
+                    <TableHead>{t("campaigns.targets.status")}</TableHead>
+                    <TableHead className="min-w-[220px]">{t("campaigns.targets.reason")}</TableHead>
+                    <TableHead>{t("campaigns.targets.channel")}</TableHead>
+                    <TableHead>{t("campaigns.targets.owner")}</TableHead>
+                    <TableHead className="text-right">{t("campaigns.targets.action")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {selectedTargets.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="py-12 text-center text-muted-foreground">
+                        {t("campaigns.targets.empty")}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    selectedTargets.map((target) => {
+                      const name = userName(target.user);
+
+                      return (
+                        <TableRow
+                          key={`${selectedCampaign.id}-${target.user.id}`}
+                          className="cursor-pointer transition-colors hover:bg-primary/5"
+                          onClick={() => navigate(`/users/${target.user.id}`)}
+                        >
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
+                                {name.split(" ").map((part) => part[0]).join("").slice(0, 2)}
+                              </div>
+                              <div>
+                                <p className="font-semibold text-foreground">{name}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {target.city || t("usersList.cityUnknown")} - {t("campaigns.targets.riskScore").replace("{score}", String(target.score))}
+                                </p>
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={cn("rounded-full text-xs ring-1", targetStatusClasses(target.status))}>
+                              {t(`campaigns.targets.status.${target.status}`)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">{t(target.reasonKey)}</p>
+                              <p className="text-xs text-muted-foreground">{t(`profile.status.${target.riskStatus}`)}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">{t(channelKey(target.channel))}</TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {target.owner ?? t("usersList.unassigned")}
+                          </TableCell>
+                          <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={target.action === "prepareCall" ? "default" : "outline"}
+                              className="rounded-full px-4 text-xs font-bold"
+                              onClick={() =>
+                                navigate(target.action === "prepareCall" ? `/risk-queue/${target.user.id}/prepare-call` : `/users/${target.user.id}`)
+                              }
+                            >
+                              {target.action === "prepareCall" ? (
+                                <AlertTriangle className="mr-2 h-4 w-4" />
+                              ) : (
+                                <ArrowUpRight className="mr-2 h-4 w-4" />
+                              )}
+                              {t(target.action === "prepareCall" ? "campaigns.targets.action.prepareCall" : "campaigns.targets.action.openProfile")}
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <section className="grid gap-5 lg:grid-cols-2">
         <Card className="rounded-2xl border-border bg-white shadow-sm">
