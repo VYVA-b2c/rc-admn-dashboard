@@ -49,7 +49,7 @@ export default function InviteAdmin() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (authBypassEnabled) {
-      toast.info("Team access is disabled in preview mode.");
+      toast.info(t("invite.previewDisabled"));
       return;
     }
     if (!email || !password) return;
@@ -82,7 +82,10 @@ export default function InviteAdmin() {
 
   return (
     <div className="space-y-6">
-      <h1 className="font-display text-2xl font-bold text-foreground">{t("invite.title")}</h1>
+      <div className="space-y-1">
+        <h1 className="font-display text-2xl font-bold text-foreground">{t("invite.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("invite.subtitle")}</p>
+      </div>
 
       <Card>
         <CardHeader>
@@ -91,7 +94,7 @@ export default function InviteAdmin() {
             {t("invite.createNewUser")}
           </CardTitle>
           <CardDescription>
-            {authBypassEnabled ? "Team access is disabled in preview mode." : t("invite.description")}
+            {authBypassEnabled ? t("invite.previewDisabled") : t("invite.description")}
           </CardDescription>
         </CardHeader>
         <CardContent>

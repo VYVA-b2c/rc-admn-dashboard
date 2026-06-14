@@ -8,7 +8,7 @@ const translations: Record<Language, Record<string, string>> = {
     "sidebar.emergencyContacts": "Emergency Contacts",
     "sidebar.checkinMonitoring": "Scheduled Calls",
     "sidebar.sensors": "Sensors",
-    "sidebar.inviteAdmin": "Create User",
+    "sidebar.inviteAdmin": "Team access",
     "sidebar.settings": "Settings",
     "sidebar.signOut": "Sign Out",
     "sidebar.navigation": "Navigation",
@@ -76,6 +76,7 @@ const translations: Record<Language, Record<string, string>> = {
     "followup.table.riskScore": "Risk score {score}",
     "followup.action.prepareCall": "Prepare call",
     "followup.action.reviewProfile": "Review profile",
+    "followup.action.viewAdherence": "View adherence",
     "followup.empty": "No people match this follow-up view.",
 
     // Login
@@ -645,6 +646,7 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.backToPeople": "Back to users",
     "profile.unknownPerson": "Unknown user",
     "profile.preferredChannel": "Preferred channel",
+    "profile.phoneNumber": "Phone number",
     "profile.lastContact": "Last contact",
     "profile.assignedTo": "Assigned to",
     "profile.status.urgent": "Urgent",
@@ -765,6 +767,22 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.timeline.checkinsConfigured": "Check-ins configured",
     "profile.timeline.medicationAdded": "Medication added: {item}",
     "profile.timeline.alert": "Alert recorded",
+
+    // Medication Adherence
+    "medAdherence.title": "Medication adherence",
+    "medAdherence.subtitle": "Weekly confirmation calendar for this user's medication plan.",
+    "medAdherence.backToProfile": "Back to profile",
+    "medAdherence.previous": "Previous",
+    "medAdherence.next": "Next",
+    "medAdherence.medication": "Medication",
+    "medAdherence.dailySummary": "Daily summary",
+    "medAdherence.noMedsTitle": "No medications configured",
+    "medAdherence.noMedsDescription": "Add medications from the user profile to start tracking adherence.",
+    "medAdherence.goToProfile": "Go to profile",
+    "medAdherence.status.taken": "Taken",
+    "medAdherence.status.missed": "Missed",
+    "medAdherence.status.unconfirmed": "Unconfirmed",
+    "medAdherence.status.upcoming": "Upcoming",
 
     // Prepare Call
     "callPrep.title": "Prepare call — {name}",
@@ -971,10 +989,12 @@ const translations: Record<Language, Record<string, string>> = {
     "settings.updating": "Updating...",
     "settings.updatePassword": "Update Password",
 
-    // Create User (InviteAdmin)
-    "invite.title": "Create User",
-    "invite.createNewUser": "Create New User",
-    "invite.description": "Create a user with a temporary password. Share the credentials manually.",
+    // Team Access (InviteAdmin)
+    "invite.title": "Team access",
+    "invite.subtitle": "Manage console access for staff members, not client care profiles.",
+    "invite.createNewUser": "Add team member",
+    "invite.description": "Create a console account for an operator, coordinator, or admin. Elder/client profiles are managed under Users.",
+    "invite.previewDisabled": "Team access is disabled in preview mode.",
     "invite.email": "Email",
     "invite.tempPassword": "Temporary Password",
     "invite.min6chars": "Min. 6 characters",
@@ -983,14 +1003,14 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.operator": "Operator",
     "invite.coordinator": "Coordinator",
     "invite.creating": "Creating...",
-    "invite.createUser": "Create User",
-    "invite.currentUsers": "Current Users",
+    "invite.createUser": "Add team member",
+    "invite.currentUsers": "Current team members",
     "invite.name": "Name",
-    "invite.noUsersYet": "No users configured yet.",
-    "invite.userCreated": "User created successfully",
-    "invite.shareCredentials": "Share these credentials with the user",
+    "invite.noUsersYet": "No team members configured yet.",
+    "invite.userCreated": "Team member created successfully",
+    "invite.shareCredentials": "Share these sign-in details with the team member",
     "invite.copyCredentials": "Copy credentials",
-    "invite.createFailed": "Failed to create user",
+    "invite.createFailed": "Failed to create team member",
     "invite.passwordTooShort": "Password must be at least 6 characters",
 
     // Common
@@ -1003,7 +1023,7 @@ const translations: Record<Language, Record<string, string>> = {
     "sidebar.emergencyContacts": "Notfallkontakte",
     "sidebar.checkinMonitoring": "Check-In Überwachung",
     "sidebar.sensors": "Sensoren",
-    "sidebar.inviteAdmin": "Benutzer erstellen",
+    "sidebar.inviteAdmin": "Teamzugang",
     "sidebar.settings": "Einstellungen",
     "sidebar.signOut": "Abmelden",
     "sidebar.navigation": "Navigation",
@@ -1071,6 +1091,7 @@ const translations: Record<Language, Record<string, string>> = {
     "followup.table.riskScore": "Risiko {score}",
     "followup.action.prepareCall": "Anruf vorbereiten",
     "followup.action.reviewProfile": "Profil pruefen",
+    "followup.action.viewAdherence": "Einnahme ansehen",
     "followup.empty": "Keine Personen passen zu dieser Follow-up-Ansicht.",
 
     // Login
@@ -1640,6 +1661,7 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.backToPeople": "Zurueck zu Benutzern",
     "profile.unknownPerson": "Unbekannter Benutzer",
     "profile.preferredChannel": "Bevorzugter Kanal",
+    "profile.phoneNumber": "Telefonnummer",
     "profile.lastContact": "Letzter Kontakt",
     "profile.assignedTo": "Zugewiesen an",
     "profile.status.urgent": "Dringend",
@@ -1760,6 +1782,22 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.timeline.checkinsConfigured": "Check-ins konfiguriert",
     "profile.timeline.medicationAdded": "Medikament hinzugefuegt: {item}",
     "profile.timeline.alert": "Alarm erfasst",
+
+    // Medication Adherence
+    "medAdherence.title": "Medikamenteneinnahme",
+    "medAdherence.subtitle": "Woechentlicher Bestaetigungskalender fuer den Medikationsplan dieses Benutzers.",
+    "medAdherence.backToProfile": "Zurueck zum Profil",
+    "medAdherence.previous": "Zurueck",
+    "medAdherence.next": "Weiter",
+    "medAdherence.medication": "Medikament",
+    "medAdherence.dailySummary": "Tagesuebersicht",
+    "medAdherence.noMedsTitle": "Keine Medikamente konfiguriert",
+    "medAdherence.noMedsDescription": "Fuegen Sie Medikamente im Benutzerprofil hinzu, um die Einnahme zu verfolgen.",
+    "medAdherence.goToProfile": "Zum Profil",
+    "medAdherence.status.taken": "Genommen",
+    "medAdherence.status.missed": "Verpasst",
+    "medAdherence.status.unconfirmed": "Unbestaetigt",
+    "medAdherence.status.upcoming": "Anstehend",
 
     // Prepare Call
     "callPrep.title": "Anruf vorbereiten — {name}",
@@ -1967,10 +2005,12 @@ const translations: Record<Language, Record<string, string>> = {
     "settings.updating": "Wird aktualisiert...",
     "settings.updatePassword": "Passwort aktualisieren",
 
-    // Create User (InviteAdmin)
-    "invite.title": "Benutzer erstellen",
-    "invite.createNewUser": "Neuen Benutzer erstellen",
-    "invite.description": "Erstellen Sie einen Benutzer mit einem temporären Passwort. Teilen Sie die Zugangsdaten manuell.",
+    // Team Access (InviteAdmin)
+    "invite.title": "Teamzugang",
+    "invite.subtitle": "Konsolenzugang fuer Mitarbeitende verwalten, nicht Pflegeprofile von Klienten.",
+    "invite.createNewUser": "Teammitglied hinzufuegen",
+    "invite.description": "Erstellen Sie ein Konsolenkonto fuer Operator, Koordinator oder Admin. Klientenprofile werden unter Benutzer verwaltet.",
+    "invite.previewDisabled": "Teamzugang ist im Vorschaumodus deaktiviert.",
     "invite.email": "E-Mail",
     "invite.tempPassword": "Temporäres Passwort",
     "invite.min6chars": "Mind. 6 Zeichen",
@@ -1979,14 +2019,14 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.operator": "Operator",
     "invite.coordinator": "Koordinator",
     "invite.creating": "Wird erstellt...",
-    "invite.createUser": "Benutzer erstellen",
-    "invite.currentUsers": "Aktuelle Benutzer",
+    "invite.createUser": "Teammitglied hinzufuegen",
+    "invite.currentUsers": "Aktuelle Teammitglieder",
     "invite.name": "Name",
-    "invite.noUsersYet": "Noch keine Benutzer konfiguriert.",
-    "invite.userCreated": "Benutzer erfolgreich erstellt",
-    "invite.shareCredentials": "Teilen Sie diese Zugangsdaten mit dem Benutzer",
+    "invite.noUsersYet": "Noch keine Teammitglieder konfiguriert.",
+    "invite.userCreated": "Teammitglied erfolgreich erstellt",
+    "invite.shareCredentials": "Teilen Sie diese Zugangsdaten mit dem Teammitglied",
     "invite.copyCredentials": "Zugangsdaten kopieren",
-    "invite.createFailed": "Benutzer konnte nicht erstellt werden",
+    "invite.createFailed": "Teammitglied konnte nicht erstellt werden",
     "invite.passwordTooShort": "Passwort muss mindestens 6 Zeichen lang sein",
 
     // Common
@@ -2067,6 +2107,7 @@ const translations: Record<Language, Record<string, string>> = {
     "followup.table.riskScore": "Riesgo {score}",
     "followup.action.prepareCall": "Preparar llamada",
     "followup.action.reviewProfile": "Revisar perfil",
+    "followup.action.viewAdherence": "Ver adherencia",
     "followup.empty": "Ninguna persona coincide con esta vista de seguimiento.",
 
     // Login
@@ -2598,6 +2639,7 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.backToPeople": "Volver a usuarios",
     "profile.unknownPerson": "Usuario desconocido",
     "profile.preferredChannel": "Canal preferido",
+    "profile.phoneNumber": "Telefono",
     "profile.lastContact": "Último contacto",
     "profile.assignedTo": "Asignada a",
     "profile.status.urgent": "Urgente",
@@ -2719,6 +2761,22 @@ const translations: Record<Language, Record<string, string>> = {
     "profile.timeline.medicationAdded": "Medicación añadida: {item}",
     "profile.timeline.alert": "Alerta registrada",
 
+    // Medication Adherence
+    "medAdherence.title": "Adherencia a medicacion",
+    "medAdherence.subtitle": "Calendario semanal de confirmacion para el plan de medicacion de este usuario.",
+    "medAdherence.backToProfile": "Volver al perfil",
+    "medAdherence.previous": "Anterior",
+    "medAdherence.next": "Siguiente",
+    "medAdherence.medication": "Medicacion",
+    "medAdherence.dailySummary": "Resumen diario",
+    "medAdherence.noMedsTitle": "No hay medicacion configurada",
+    "medAdherence.noMedsDescription": "Anade medicacion desde el perfil del usuario para empezar el seguimiento.",
+    "medAdherence.goToProfile": "Ir al perfil",
+    "medAdherence.status.taken": "Tomada",
+    "medAdherence.status.missed": "Perdida",
+    "medAdherence.status.unconfirmed": "Sin confirmar",
+    "medAdherence.status.upcoming": "Programada",
+
     // Settings
     "settings.title": "Configuración",
     "settings.backToConsole": "Volver a la consola",
@@ -2736,6 +2794,30 @@ const translations: Record<Language, Record<string, string>> = {
     "settings.reenterPassword": "Vuelve a introducir la nueva contraseña",
     "settings.updating": "Actualizando...",
     "settings.updatePassword": "Actualizar contraseña",
+
+    // Team Access (InviteAdmin)
+    "invite.title": "Acceso del equipo",
+    "invite.subtitle": "Gestiona el acceso a la consola para el equipo, no los perfiles de clientes.",
+    "invite.createNewUser": "Agregar miembro del equipo",
+    "invite.description": "Crea una cuenta de consola para operador, coordinador o admin. Los perfiles de clientes se gestionan en Usuarios.",
+    "invite.previewDisabled": "El acceso del equipo esta desactivado en modo de vista previa.",
+    "invite.email": "Email",
+    "invite.tempPassword": "Contrasena temporal",
+    "invite.min6chars": "Min. 6 caracteres",
+    "invite.role": "Rol",
+    "invite.admin": "Admin",
+    "invite.operator": "Operador",
+    "invite.coordinator": "Coordinador",
+    "invite.creating": "Creando...",
+    "invite.createUser": "Agregar miembro",
+    "invite.currentUsers": "Miembros actuales del equipo",
+    "invite.name": "Nombre",
+    "invite.noUsersYet": "Aun no hay miembros del equipo configurados.",
+    "invite.userCreated": "Miembro del equipo creado",
+    "invite.shareCredentials": "Comparte estos datos de acceso con el miembro del equipo",
+    "invite.copyCredentials": "Copiar datos de acceso",
+    "invite.createFailed": "No se pudo crear el miembro del equipo",
+    "invite.passwordTooShort": "La contrasena debe tener al menos 6 caracteres",
 
     // Prepare Call
     "callPrep.title": "Preparar llamada — {name}",

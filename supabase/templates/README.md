@@ -1,8 +1,8 @@
 # Auth email templates
 
-These templates are for the hosted auth provider that sends magic-link emails.
-They are stored here so the live auth settings can be updated without losing the
-approved VYVA copy and design.
+These templates are for the hosted auth provider that currently sends magic-link
+emails. They are stored here so the live auth email editor can be updated without
+losing the approved VYVA copy and design.
 
 ## Magic link
 
@@ -27,8 +27,14 @@ values are `en`, `de`, and `es`; the template falls back to English.
 Recommended subject:
 
 ```text
-{{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Accede a VYVA{{ else }}Sign in to VYVA{{ end }}
+{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}
 ```
+
+## Applying it now
+
+Paste the full contents of `magic-link.html` into the hosted auth email template
+editor for the one-time login / magic-link email, then save and send a fresh
+test magic link. Existing emails in inboxes will not change.
 
 ## Sender settings
 

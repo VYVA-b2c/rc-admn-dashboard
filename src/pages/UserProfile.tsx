@@ -379,6 +379,7 @@ export default function UserProfile() {
 
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold text-muted-foreground xl:justify-end">
               <MetaItem icon={ChannelIcon} label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
+              <MetaItem icon={Phone} label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
               <MetaItem icon={Clock} label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
               <MetaItem icon={UserRound} label={t("careProviders.coverage")} value={assignedProviderLabel ?? t("usersList.unassigned")} />
             </div>
@@ -408,6 +409,7 @@ export default function UserProfile() {
             <InfoRow label={t("profile.livesAlone")} value={context.livingContextKey ? t(context.livingContextKey) : null} />
             <InfoRow label={t("profile.language")} value={user.language ? String(user.language).toUpperCase() : null} />
             <InfoRow label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
+            <InfoRow label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
             <InfoRow label={t("profile.address")} value={address || null} />
             <InfoRow label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
             <InfoRow label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
@@ -506,7 +508,8 @@ export default function UserProfile() {
             <Pill className="h-5 w-5 text-orange-500" />
             <CardTitle className="text-base font-bold">{t("profile.medicationCheckins")}</CardTitle>
             <div className="ml-auto flex gap-1">
-              <Button variant="outline" size="sm" className="h-8 rounded-full text-xs" onClick={() => navigate(`/users/${id}/medications`)}>
+              <Button size="sm" className="h-9 rounded-full px-3 text-xs font-bold shadow-sm" onClick={() => navigate(`/users/${id}/medications`)}>
+                <Calendar className="mr-1.5 h-3.5 w-3.5" />
                 {t("profile.viewAdherence")}
               </Button>
               {showAdminControls && (

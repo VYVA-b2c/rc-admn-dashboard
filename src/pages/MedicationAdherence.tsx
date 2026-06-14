@@ -1,245 +1,414 @@
-import { useState, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useCallback, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/apiClient";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  AlertCircle,
+  ArrowLeft,
+  Calendar,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Pill,
+  UserRound,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { addWeeks, eachDayOfInterval, endOfWeek, format, isBefore, isSameDay, startOfDay, startOfWeek } from "date-fns";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowLeft, ChevronLeft, ChevronRight, Pill, Check, X, Clock, Calendar } from "lucide-react";
-import { startOfWeek, endOfWeek, addWeeks, format, eachDayOfInterval, isSameDay, isBefore, startOfDay } from "date-fns";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
+import {
+  getDemoProfileById,
+  isDemoUserId,
+  type OperationalMedication,
+  type OperationalProfileResponse,
+} from "@/lib/operationalDemoData";
+import { cn } from "@/lib/utils";
+
+type ScheduleStatus = "taken" | "missed" | "unconfirmed" | "upcoming";
 
 type ScheduleEntry = {
   medication_name: string;
   dosage: string | null;
   time: string;
   notes: string | null;
-  status: "taken" | "missed" | "unconfirmed" | "upcoming";
+  status: ScheduleStatus | "pending" | "confirmed";
 };
 
 type WeeklyScheduleResponse = {
   schedule: Record<string, ScheduleEntry[]>;
 };
 
-type ScheduleStatus = ScheduleEntry["status"];
+const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"] as const;
 
-const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string; icon: React.ElementType }> = {
-  taken: { label: "Taken", color: "text-vyva-green", bg: "bg-vyva-green/15 border-vyva-green/30", icon: Check },
-  missed: { label: "Missed", color: "text-destructive", bg: "bg-destructive/10 border-destructive/30", icon: X },
-  unconfirmed: { label: "Unconfirmed", color: "text-accent", bg: "bg-accent/15 border-accent/30", icon: Clock },
-  upcoming: { label: "Upcoming", color: "text-muted-foreground", bg: "bg-muted/50 border-border/50", icon: Calendar },
+const STATUS_CONFIG: Record<ScheduleStatus, { bg: string; color: string; icon: LucideIcon; labelKey: string; pill: string }> = {
+  taken: {
+    bg: "bg-emerald-50 border-emerald-200",
+    color: "text-emerald-600",
+    icon: Check,
+    labelKey: "medAdherence.status.taken",
+    pill: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  },
+  missed: {
+    bg: "bg-red-50 border-red-200",
+    color: "text-red-600",
+    icon: X,
+    labelKey: "medAdherence.status.missed",
+    pill: "bg-red-50 text-red-700 ring-red-200",
+  },
+  unconfirmed: {
+    bg: "bg-amber-50 border-amber-200",
+    color: "text-amber-600",
+    icon: AlertCircle,
+    labelKey: "medAdherence.status.unconfirmed",
+    pill: "bg-amber-50 text-amber-700 ring-amber-200",
+  },
+  upcoming: {
+    bg: "bg-slate-50 border-slate-200",
+    color: "text-slate-500",
+    icon: Clock,
+    labelKey: "medAdherence.status.upcoming",
+    pill: "bg-slate-50 text-slate-600 ring-slate-200",
+  },
 };
+
+function fullName(profile?: OperationalProfileResponse | null) {
+  const user = profile?.user;
+  return [user?.first_name, user?.last_name].filter(Boolean).join(" ");
+}
+
+function statusFromApi(status: ScheduleEntry["status"]): ScheduleStatus {
+  if (status === "confirmed") return "taken";
+  if (status === "pending") return "unconfirmed";
+  if (status === "taken" || status === "missed" || status === "unconfirmed" || status === "upcoming") return status;
+  return "upcoming";
+}
+
+function formatDateForLocale(date: Date, language: string, options: Intl.DateTimeFormatOptions) {
+  return new Intl.DateTimeFormat(language, options).format(date);
+}
+
+function demoStatus(day: Date, todayStart: Date, dayIndex: number, medIndex: number, timeIndex: number): ScheduleStatus {
+  const dateStart = startOfDay(day);
+  if (!isBefore(dateStart, todayStart)) return "upcoming";
+  if (dayIndex <= 3) return "taken";
+  if (dayIndex === 4) {
+    if (medIndex === 0 && timeIndex === 0) return "unconfirmed";
+    if (medIndex === 0 && timeIndex === 1) return "missed";
+    return "taken";
+  }
+  return "unconfirmed";
+}
+
+function buildDemoSchedule(profile: OperationalProfileResponse, weekDays: Date[], todayStart: Date): WeeklyScheduleResponse {
+  const medications = profile.medications ?? [];
+  const schedule: WeeklyScheduleResponse["schedule"] = {};
+
+  weekDays.forEach((day, dayIndex) => {
+    schedule[DAY_NAMES[dayIndex]] = medications.flatMap((medication, medIndex) => {
+      const times = medication.schedule_times?.length ? medication.schedule_times : [""];
+      return times.map((time, timeIndex) => ({
+        medication_name: medication.medication_name || "",
+        dosage: medication.dosage || null,
+        time,
+        notes: null,
+        status: demoStatus(day, todayStart, dayIndex, medIndex, timeIndex),
+      }));
+    });
+  });
+
+  return { schedule };
+}
+
+async function fetchProfile(id: string): Promise<OperationalProfileResponse> {
+  if (isDemoUserId(id)) return getDemoProfileById(id);
+
+  const orgName = encodeURIComponent("Red Cross");
+  try {
+    const response = await apiFetch<OperationalProfileResponse>(
+      `/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(id)}&organization_name=${orgName}`,
+    );
+    if (authBypassEnabled && !response?.user) return getDemoProfileById(id);
+    return response;
+  } catch (error) {
+    if (authBypassEnabled) return getDemoProfileById(id);
+    throw error;
+  }
+}
 
 export default function MedicationAdherence() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { language, t } = useLanguage();
   const [weekOffset, setWeekOffset] = useState(0);
 
   const today = new Date();
+  const todayStart = startOfDay(today);
   const weekStart = startOfWeek(addWeeks(today, weekOffset), { weekStartsOn: 1 });
   const weekEnd = endOfWeek(addWeeks(today, weekOffset), { weekStartsOn: 1 });
-  const weekDays = eachDayOfInterval({ start: weekStart, end: weekEnd });
-  const isPresent = weekOffset === 0;
-  const todayStart = startOfDay(today);
+  const weekDays = useMemo(() => eachDayOfInterval({ start: weekStart, end: weekEnd }), [weekStart, weekEnd]);
 
-  const { data: schedule, isLoading } = useQuery({
-    queryKey: ["med-weekly-schedule", id, format(weekStart, "yyyy-MM-dd"), isPresent],
+  const { data: profile, isLoading: profileLoading } = useQuery({
+    queryKey: ["vyva-user-profile", id],
+    queryFn: () => fetchProfile(id!),
+    enabled: Boolean(id),
+    retry: false,
+  });
+
+  const isPreviewProfile = Boolean(profile?.isPreviewDemo || (id && isDemoUserId(id)));
+
+  const { data: schedule, isLoading: scheduleLoading } = useQuery({
+    queryKey: ["med-weekly-schedule", id, format(weekStart, "yyyy-MM-dd"), isPreviewProfile],
     queryFn: async () => {
+      if (isPreviewProfile) {
+        return buildDemoSchedule(profile ?? getDemoProfileById(id), weekDays, todayStart);
+      }
+
       return apiFetch<WeeklyScheduleResponse>("/api/v1/medications/weekly-schedule", {
         method: "POST",
         body: JSON.stringify({
-          user_id: Number(id),
+          user_id: id,
           date_start: format(weekStart, "yyyy-MM-dd"),
           date_end: format(weekEnd, "yyyy-MM-dd"),
-          is_present: isPresent,
+          is_present: weekOffset === 0,
         }),
       });
     },
-    enabled: !!id,
+    enabled: Boolean(id && (profile || isDemoUserId(id))),
+    retry: false,
   });
 
-  // Derive unique medication list from schedule
+  const getEffectiveStatus = useCallback((status: ScheduleEntry["status"], day: Date): ScheduleStatus => {
+    const normalized = statusFromApi(status);
+    if (normalized === "upcoming" && isBefore(startOfDay(day), todayStart)) return "unconfirmed";
+    return normalized;
+  }, [todayStart]);
+
   const medications = useMemo(() => {
-    if (!schedule?.schedule) return [];
     const medSet = new Map<string, { name: string; dosage: string | null }>();
-    for (const entries of Object.values(schedule.schedule)) {
+    for (const entries of Object.values(schedule?.schedule ?? {})) {
       for (const entry of entries) {
-        const key = `${entry.medication_name}||${entry.dosage}`;
-        if (!medSet.has(key)) {
-          medSet.set(key, { name: entry.medication_name, dosage: entry.dosage });
-        }
+        const key = `${entry.medication_name}||${entry.dosage || ""}`;
+        if (!medSet.has(key)) medSet.set(key, { name: entry.medication_name, dosage: entry.dosage });
       }
     }
     return Array.from(medSet.values());
   }, [schedule]);
 
-  // Build lookup: medKey -> dayName -> entries
   const entryMap = useMemo(() => {
-    if (!schedule?.schedule) return {};
     const map: Record<string, Record<string, ScheduleEntry[]>> = {};
-    for (const [dayName, entries] of Object.entries(schedule.schedule)) {
+    for (const [dayName, entries] of Object.entries(schedule?.schedule ?? {})) {
       for (const entry of entries) {
-        const key = `${entry.medication_name}||${entry.dosage}`;
-        if (!map[key]) map[key] = {};
-        if (!map[key][dayName]) map[key][dayName] = [];
+        const key = `${entry.medication_name}||${entry.dosage || ""}`;
+        map[key] ??= {};
+        map[key][dayName] ??= [];
         map[key][dayName].push(entry);
       }
     }
     return map;
   }, [schedule]);
 
-  const getEffectiveStatus = useCallback((status: ScheduleStatus, day: Date): ScheduleStatus => {
-    if (status === "upcoming" && isBefore(startOfDay(day), todayStart)) {
-      return "unconfirmed";
+  const medicationFromProfile = useMemo(() => {
+    const fallback = new Map<string, OperationalMedication>();
+    for (const medication of profile?.medications ?? []) {
+      fallback.set(`${medication.medication_name || ""}||${medication.dosage || ""}`, medication);
     }
-    return status;
-  }, [todayStart]);
+    return fallback;
+  }, [profile?.medications]);
 
-  const getDayStatus = (medKey: string, dayName: string, day: Date): { status: ScheduleStatus; entries: ScheduleEntry[] } => {
-    const entries = entryMap[medKey]?.[dayName] || [];
-    if (entries.length === 0) {
-      return { status: isBefore(startOfDay(day), todayStart) ? "unconfirmed" : "upcoming", entries: [] };
+  const getDayStatus = (medKey: string, dayName: string, day: Date) => {
+    const entries = entryMap[medKey]?.[dayName] ?? [];
+    if (!entries.length) {
+      return {
+        entries: [],
+        status: isBefore(startOfDay(day), todayStart) ? "unconfirmed" : "upcoming" as ScheduleStatus,
+      };
     }
 
     const statuses = entries.map((entry) => getEffectiveStatus(entry.status, day));
-    if (statuses.includes("missed")) return { status: "missed", entries };
-    if (statuses.includes("taken")) return { status: "taken", entries };
-    if (statuses.includes("unconfirmed")) return { status: "unconfirmed", entries };
-    return { status: "upcoming", entries };
+    if (statuses.includes("missed")) return { entries, status: "missed" as ScheduleStatus };
+    if (statuses.includes("taken")) return { entries, status: "taken" as ScheduleStatus };
+    if (statuses.includes("unconfirmed")) return { entries, status: "unconfirmed" as ScheduleStatus };
+    return { entries, status: "upcoming" as ScheduleStatus };
   };
 
-  // Summary counts per day
   const daySummary = useMemo(() => {
-    return DAY_NAMES.map((dayName, dayIndex) => {
-      let taken = 0, missed = 0, unconfirmed = 0;
-      medications.forEach((med) => {
-        const key = `${med.name}||${med.dosage}`;
-        const entries = entryMap[key]?.[dayName] || [];
-        entries.forEach((e) => {
-          const status = getEffectiveStatus(e.status, weekDays[dayIndex]);
-          if (status === "taken") taken++;
-          else if (status === "missed") missed++;
-          else if (status === "unconfirmed") unconfirmed++;
-        });
-      });
-      return { taken, missed, unconfirmed };
+    return DAY_NAMES.map((name, index) => {
+      const summary: Record<ScheduleStatus, number> = { taken: 0, missed: 0, unconfirmed: 0, upcoming: 0 };
+      for (const med of medications) {
+        const key = `${med.name}||${med.dosage || ""}`;
+        const entries = entryMap[key]?.[name] ?? [];
+        if (!entries.length) {
+          const status = isBefore(startOfDay(weekDays[index]), todayStart) ? "unconfirmed" : "upcoming";
+          summary[status] += 1;
+          continue;
+        }
+        for (const entry of entries) summary[getEffectiveStatus(entry.status, weekDays[index])] += 1;
+      }
+      return summary;
     });
-  }, [medications, entryMap, weekDays, getEffectiveStatus]);
+  }, [entryMap, getEffectiveStatus, medications, todayStart, weekDays]);
 
-  if (isLoading) {
+  const totals = useMemo(() => {
+    return daySummary.reduce(
+      (acc, day) => ({
+        taken: acc.taken + day.taken,
+        missed: acc.missed + day.missed,
+        unconfirmed: acc.unconfirmed + day.unconfirmed,
+        upcoming: acc.upcoming + day.upcoming,
+      }),
+      { taken: 0, missed: 0, unconfirmed: 0, upcoming: 0 },
+    );
+  }, [daySummary]);
+
+  const loading = profileLoading || scheduleLoading;
+  const personName = fullName(profile) || t("profile.unknownPerson");
+
+  if (loading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-96 rounded-xl" />
+      <div className="space-y-5">
+        <Skeleton className="h-20 rounded-2xl" />
+        <Skeleton className="h-96 rounded-2xl" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate(`/users/${id}`)}>
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <div>
-          <h1 className="font-display text-2xl font-bold text-foreground">
-            Medication Adherence
-          </h1>
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div className="flex flex-wrap gap-3">
-        {Object.entries(STATUS_CONFIG).map(([key, cfg]) => (
-          <div key={key} className="flex items-center gap-1.5">
-            <div className={`h-3 w-3 rounded-full ${cfg.bg} border`} />
-            <span className="text-xs text-muted-foreground">{cfg.label}</span>
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full" onClick={() => navigate(`/users/${id}`)}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+              <Pill className="h-4 w-4 text-orange-500" />
+              {personName}
+            </div>
+            <h1 className="font-display text-2xl font-bold text-foreground">{t("medAdherence.title")}</h1>
+            <p className="mt-1 text-sm text-muted-foreground">{t("medAdherence.subtitle")}</p>
           </div>
-        ))}
-      </div>
-
-      {/* Week navigation */}
-      <div className="flex items-center justify-between">
-        <Button variant="outline" size="sm" onClick={() => setWeekOffset((o) => o - 1)}>
-          <ChevronLeft className="h-4 w-4 mr-1" /> Previous
-        </Button>
-        <h2 className="font-display text-sm font-semibold text-foreground">
-          {format(weekStart, "MMM d")} — {format(weekEnd, "MMM d, yyyy")}
-        </h2>
-        <Button variant="outline" size="sm" onClick={() => setWeekOffset((o) => o + 1)} disabled={weekOffset >= 0}>
-          Next <ChevronRight className="h-4 w-4 ml-1" />
+        </div>
+        <Button variant="outline" className="w-fit rounded-full" onClick={() => navigate(`/users/${id}`)}>
+          <UserRound className="mr-2 h-4 w-4" />
+          {t("medAdherence.backToProfile")}
         </Button>
       </div>
 
-      {medications.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <Pill className="mx-auto h-10 w-10 text-muted-foreground/40 mb-3" />
-            <p className="text-muted-foreground">No medications configured for this user.</p>
-            <Button variant="link" className="mt-2" onClick={() => navigate(`/users/${id}`)}>
-              Go to user profile to add medications
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[700px]">
+      <div className="grid gap-3 sm:grid-cols-4">
+        {(Object.keys(STATUS_CONFIG) as ScheduleStatus[]).map((status) => {
+          const config = STATUS_CONFIG[status];
+          return (
+            <Card key={status} className={cn("rounded-2xl border bg-white shadow-sm", status === "taken" && "border-t-4 border-t-emerald-500", status === "missed" && "border-t-4 border-t-red-500", status === "unconfirmed" && "border-t-4 border-t-amber-500", status === "upcoming" && "border-t-4 border-t-slate-300")}>
+              <CardContent className="flex h-24 items-center justify-between p-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t(config.labelKey)}</p>
+                  <p className="mt-2 text-2xl font-bold text-foreground">{totals[status]}</p>
+                </div>
+                <div className={cn("flex h-10 w-10 items-center justify-center rounded-2xl border", config.bg)}>
+                  <config.icon className={cn("h-5 w-5", config.color)} />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardContent className="space-y-5 p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap gap-3">
+              {(Object.keys(STATUS_CONFIG) as ScheduleStatus[]).map((status) => {
+                const config = STATUS_CONFIG[status];
+                return (
+                  <div key={status} className="flex items-center gap-1.5">
+                    <span className={cn("h-3 w-3 rounded-full border", config.bg)} />
+                    <span className="text-xs font-semibold text-muted-foreground">{t(config.labelKey)}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <Button variant="outline" size="sm" className="h-10 rounded-full" onClick={() => setWeekOffset((offset) => offset - 1)}>
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                {t("medAdherence.previous")}
+              </Button>
+              <div className="min-w-[180px] rounded-full bg-muted px-4 py-2 text-center text-sm font-bold text-foreground">
+                {formatDateForLocale(weekStart, language, { month: "short", day: "numeric" })} - {formatDateForLocale(weekEnd, language, { month: "short", day: "numeric", year: "numeric" })}
+              </div>
+              <Button variant="outline" size="sm" className="h-10 rounded-full" onClick={() => setWeekOffset((offset) => offset + 1)} disabled={weekOffset >= 0}>
+                {t("medAdherence.next")}
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+
+          {medications.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border bg-muted/20 py-14 text-center">
+              <Pill className="mx-auto mb-3 h-10 w-10 text-muted-foreground/50" />
+              <p className="text-lg font-bold text-foreground">{t("medAdherence.noMedsTitle")}</p>
+              <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">{t("medAdherence.noMedsDescription")}</p>
+              <Button variant="link" className="mt-3" onClick={() => navigate(`/users/${id}`)}>
+                {t("medAdherence.goToProfile")}
+              </Button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-2xl border border-border">
+              <table className="w-full min-w-[880px] bg-white">
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-3 px-4 text-xs font-semibold text-muted-foreground w-[180px]">
-                      Medication
+                  <tr className="border-b border-border bg-muted/40">
+                    <th className="w-[220px] px-4 py-4 text-left text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                      {t("medAdherence.medication")}
                     </th>
-                    {weekDays.map((day, i) => (
-                      <th key={day.toISOString()} className={`text-center py-3 px-2 text-xs font-semibold ${isSameDay(day, today) ? "text-primary" : "text-muted-foreground"}`}>
-                        <div>{format(day, "EEE")}</div>
-                        <div className={`text-[11px] ${isSameDay(day, today) ? "font-bold" : "font-normal"}`}>
-                          {format(day, "d")}
-                        </div>
+                    {weekDays.map((day) => (
+                      <th key={day.toISOString()} className={cn("px-3 py-4 text-center text-xs font-bold uppercase tracking-[0.12em]", isSameDay(day, today) ? "text-primary" : "text-muted-foreground")}>
+                        <div>{formatDateForLocale(day, language, { weekday: "short" })}</div>
+                        <div className="mt-1 text-[11px] font-semibold">{formatDateForLocale(day, language, { day: "numeric" })}</div>
                       </th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {medications.map((med) => {
-                    const medKey = `${med.name}||${med.dosage}`;
+                    const medKey = `${med.name}||${med.dosage || ""}`;
+                    const profileMedication = medicationFromProfile.get(medKey);
                     return (
-                      <tr key={medKey} className="border-b border-border/50 last:border-0">
-                        <td className="py-3 px-4">
-                          <p className="text-sm font-medium text-foreground">{med.name}</p>
-                          {med.dosage && <p className="text-[10px] text-muted-foreground">{med.dosage}</p>}
+                      <tr key={medKey} className="border-b border-border/70 last:border-0">
+                        <td className="px-4 py-4">
+                          <p className="font-semibold text-foreground">{med.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {[med.dosage, profileMedication?.purpose].filter(Boolean).join(" · ")}
+                          </p>
                         </td>
                         {DAY_NAMES.map((dayName, dayIndex) => {
                           const day = weekDays[dayIndex];
-                          const { status, entries } = getDayStatus(medKey, dayName, day);
-                          const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.upcoming;
-                          const Icon = cfg.icon;
+                          const { entries, status } = getDayStatus(medKey, dayName, day);
+                          const config = STATUS_CONFIG[status];
+                          const Icon = config.icon;
 
                           return (
-                            <td key={dayName} className="py-2 px-1 text-center">
+                            <td key={dayName} className="px-2 py-3 text-center">
                               {entries.length === 0 ? (
-                                <div className={`mx-auto w-full max-w-[80px] rounded-lg border p-2 ${cfg.bg}`}>
-                                  <Icon className={`mx-auto h-4 w-4 ${cfg.color}`} />
-                                </div>
+                                <DosePill icon={Icon} status={status} />
                               ) : (
-                                <div className="flex flex-col gap-1 items-center">
-                                  {entries.map((entry, idx) => {
+                                <div className="flex flex-col items-center gap-1.5">
+                                  {entries.map((entry, index) => {
                                     const entryStatus = getEffectiveStatus(entry.status, day);
-                                    const eCfg = STATUS_CONFIG[entryStatus] || STATUS_CONFIG.upcoming;
-                                    const EIcon = eCfg.icon;
+                                    const entryConfig = STATUS_CONFIG[entryStatus];
                                     return (
-                                      <div key={idx} className={`w-full max-w-[80px] rounded-lg border px-2 py-1.5 ${eCfg.bg}`}>
-                                        <div className="flex items-center justify-center gap-1">
-                                          <EIcon className={`h-3.5 w-3.5 ${eCfg.color}`} />
-                                          {entry.time && (
-                                            <span className="text-[9px] text-muted-foreground">{entry.time}</span>
-                                          )}
-                                        </div>
-                                      </div>
+                                      <DosePill
+                                        key={`${entry.time}-${index}`}
+                                        icon={entryConfig.icon}
+                                        status={entryStatus}
+                                        time={entry.time}
+                                      />
                                     );
                                   })}
                                 </div>
@@ -250,17 +419,19 @@ export default function MedicationAdherence() {
                       </tr>
                     );
                   })}
-                  {/* Summary row */}
-                  <tr className="bg-muted/30">
-                    <td className="py-3 px-4 text-xs font-semibold text-muted-foreground">Daily Summary</td>
-                    {DAY_NAMES.map((dayName, i) => {
-                      const s = daySummary[i];
+                  <tr className="bg-muted/25">
+                    <td className="px-4 py-4 text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                      {t("medAdherence.dailySummary")}
+                    </td>
+                    {DAY_NAMES.map((dayName, dayIndex) => {
+                      const summary = daySummary[dayIndex];
                       return (
-                        <td key={dayName} className="py-2 px-1 text-center">
-                          <div className="flex flex-col items-center gap-0.5">
-                            {s.taken > 0 && <Badge className="bg-vyva-green/20 text-vyva-green text-[9px] px-1.5">{s.taken}✓</Badge>}
-                            {s.missed > 0 && <Badge className="bg-destructive/10 text-destructive text-[9px] px-1.5">{s.missed}✗</Badge>}
-                            {s.unconfirmed > 0 && <Badge className="bg-accent/15 text-accent text-[9px] px-1.5">{s.unconfirmed}?</Badge>}
+                        <td key={dayName} className="px-2 py-3 text-center">
+                          <div className="flex flex-col items-center gap-1">
+                            {summary.taken > 0 && <SummaryBadge status="taken" value={`${summary.taken}/${summary.taken + summary.missed + summary.unconfirmed + summary.upcoming}`} />}
+                            {summary.missed > 0 && <SummaryBadge status="missed" value={`${summary.missed}`} />}
+                            {summary.unconfirmed > 0 && <SummaryBadge status="unconfirmed" value={`${summary.unconfirmed}?`} />}
+                            {summary.upcoming > 0 && <SummaryBadge status="upcoming" value={`${summary.upcoming}`} />}
                           </div>
                         </td>
                       );
@@ -269,9 +440,28 @@ export default function MedicationAdherence() {
                 </tbody>
               </table>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
     </div>
+  );
+}
+
+function DosePill({ icon: Icon, status, time }: { icon: LucideIcon; status: ScheduleStatus; time?: string }) {
+  const config = STATUS_CONFIG[status];
+
+  return (
+    <div className={cn("mx-auto flex min-h-9 w-full max-w-[104px] items-center justify-center gap-1 rounded-full border px-2 py-1.5", config.bg)}>
+      <Icon className={cn("h-3.5 w-3.5", config.color)} />
+      {time && <span className="text-[11px] font-semibold text-muted-foreground">{time}</span>}
+    </div>
+  );
+}
+
+function SummaryBadge({ status, value }: { status: ScheduleStatus; value: string }) {
+  return (
+    <Badge className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold ring-1", STATUS_CONFIG[status].pill)}>
+      {value}
+    </Badge>
   );
 }

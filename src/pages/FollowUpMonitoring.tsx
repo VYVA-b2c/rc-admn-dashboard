@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
+  Calendar,
   CheckCircle2,
   Heart,
   MapPin,
@@ -271,6 +272,11 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
   }, [cityFilter, rows, search, statusFilter, t]);
 
   const openAction = (row: FollowUpRow) => {
+    if (kind === "medication") {
+      navigate(`/users/${row.id}/medications`);
+      return;
+    }
+
     if (row.action === "call") {
       navigate(`/risk-queue/${row.id}/prepare-call`);
       return;
@@ -431,8 +437,14 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
                             className="rounded-full px-4 text-xs font-bold"
                             onClick={() => openAction(row)}
                           >
-                            {row.action === "call" ? <PhoneCall className="mr-2 h-4 w-4" /> : <AlertTriangle className="mr-2 h-4 w-4" />}
-                            {t(row.action === "call" ? "followup.action.prepareCall" : "followup.action.reviewProfile")}
+                            {kind === "medication" ? (
+                              <Calendar className="mr-2 h-4 w-4" />
+                            ) : row.action === "call" ? (
+                              <PhoneCall className="mr-2 h-4 w-4" />
+                            ) : (
+                              <AlertTriangle className="mr-2 h-4 w-4" />
+                            )}
+                            {t(kind === "medication" ? "followup.action.viewAdherence" : row.action === "call" ? "followup.action.prepareCall" : "followup.action.reviewProfile")}
                           </Button>
                         </TableCell>
                       </TableRow>
