@@ -12,7 +12,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import type { CareProviderOption } from "@/lib/careProviders";
-import { providerCoverageLabel, providerTypeKey } from "@/lib/careProviders";
+import { providerCoverageLabel, providerPrimaryMeta, providerTypeShortKey } from "@/lib/careProviders";
 import { demoCareProviders } from "@/lib/operationalDemoData";
 
 async function fetchCareProviders() {
@@ -74,8 +74,8 @@ export default function EmergencyContacts() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <MetricCard label={t("careProviders.informal")} value={informalCount} />
-        <MetricCard label={t("careProviders.professional")} value={professionalCount} />
+        <MetricCard label={t("careProviders.informalShort")} value={informalCount} />
+        <MetricCard label={t("careProviders.professionalShort")} value={professionalCount} />
         <MetricCard label={t("careProviders.assignments")} value={assignmentCount} />
       </div>
 
@@ -97,8 +97,8 @@ export default function EmergencyContacts() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
-                  <TableHead className="min-w-[240px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.provider")}</TableHead>
-                  <TableHead className="min-w-[140px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.type")}</TableHead>
+                  <TableHead className="min-w-[220px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.provider")}</TableHead>
+                  <TableHead className="min-w-[110px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.type")}</TableHead>
                   <TableHead className="min-w-[180px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.phone")}</TableHead>
                   <TableHead className="min-w-[160px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.status")}</TableHead>
                   <TableHead className="min-w-[260px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.linkedUsers")}</TableHead>
@@ -132,15 +132,17 @@ export default function EmergencyContacts() {
                             </div>
                             <div className="min-w-0">
                               <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
-                              {providerCoverageLabel(provider) && (
-                                <p className="mt-0.5 text-xs font-semibold text-muted-foreground">{providerCoverageLabel(provider)}</p>
+                              {providerPrimaryMeta(provider) && (
+                                <p className="mt-0.5 max-w-[180px] truncate text-xs font-semibold text-muted-foreground" title={providerCoverageLabel(provider)}>
+                                  {providerPrimaryMeta(provider)}
+                                </p>
                               )}
                             </div>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={provider.provider_type === "field_staff" ? "default" : "secondary"} className="rounded-full">
-                            {t(providerTypeKey(provider.provider_type))}
+                          <Badge variant={provider.provider_type === "field_staff" ? "default" : "secondary"} className="whitespace-nowrap rounded-full px-3 py-1">
+                            {t(providerTypeShortKey(provider.provider_type))}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{provider.phone || t("profile.noPhone")}</TableCell>

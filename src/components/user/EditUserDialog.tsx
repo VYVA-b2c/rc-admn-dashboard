@@ -317,8 +317,8 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-5xl overflow-hidden rounded-[1.75rem] border-border bg-[#f7f9ff] p-0 shadow-2xl">
-        <DialogHeader className="border-b border-border bg-white px-7 py-6 pr-12 text-left">
+      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden rounded-[1.75rem] border-border bg-[#f7f9ff] p-0 shadow-2xl">
+        <DialogHeader className="shrink-0 border-b border-border bg-white px-7 py-6 pr-12 text-left">
           <Badge className="mb-2 w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.14em] text-primary hover:bg-primary/10">
             {t("userForm.careProfileBadge")}
           </Badge>
@@ -330,7 +330,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid max-h-[calc(90vh-12rem)] gap-5 overflow-y-auto px-7 py-5">
+        <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto px-7 py-5">
           <SectionPanel
             description={t("userForm.personSectionDescription")}
             icon={UserRound}
@@ -651,11 +651,11 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
           </SectionPanel>
         </div>
 
-        <DialogFooter className="border-t border-border bg-white px-7 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+        <DialogFooter className="shrink-0 gap-2 border-t border-border bg-white px-7 py-4 sm:justify-end">
+          <Button className="rounded-full px-5" variant="outline" onClick={() => onOpenChange(false)}>
             {t("userForm.cancel")}
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button className="rounded-full px-5" onClick={handleSave} disabled={saving}>
             {saving ? t("userForm.saving") : t(isEditing ? "userForm.saveCareProfile" : "userForm.createCareProfile")}
           </Button>
         </DialogFooter>

@@ -34,6 +34,10 @@ export function providerTypeKey(type?: string | null) {
   return type === "field_staff" ? "careProviders.professional" : "careProviders.informal";
 }
 
+export function providerTypeShortKey(type?: string | null) {
+  return type === "field_staff" ? "careProviders.professionalShort" : "careProviders.informalShort";
+}
+
 export function providerCoverageLabel(provider?: {
   display_name?: string | null;
   relationship_label?: string | null;
@@ -41,4 +45,12 @@ export function providerCoverageLabel(provider?: {
   team?: string | null;
 }) {
   return [provider?.relationship_label, provider?.role, provider?.team].filter(Boolean).join(" / ");
+}
+
+export function providerPrimaryMeta(provider?: {
+  relationship_label?: string | null;
+  role?: string | null;
+  team?: string | null;
+}) {
+  return provider?.relationship_label || provider?.role || provider?.team || "";
 }
