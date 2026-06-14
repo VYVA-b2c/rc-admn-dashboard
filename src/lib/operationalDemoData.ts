@@ -78,9 +78,34 @@ export interface OperationalService extends ProfileRecord {
 
 export interface OperationalCaregiver extends ProfileRecord {
   id: string;
+  assignment_id?: string;
+  care_provider_contact_id?: string | null;
   caretaker_name?: string | null;
   caretaker_phone?: string | null;
+  is_primary?: boolean;
+  relationship_label?: string | null;
+  notes?: string | null;
   created_at?: string;
+}
+
+export interface OperationalCareProviderAssignment extends ProfileRecord {
+  id: string;
+  assignment_id?: string;
+  provider_type: "caregiver" | "field_staff";
+  provider_id?: string | null;
+  display_name?: string | null;
+  phone?: string | null;
+  role?: string | null;
+  team?: string | null;
+  status?: string | null;
+  active?: boolean;
+  is_primary?: boolean;
+  relationship_label?: string | null;
+  notes?: string | null;
+  assignment_count?: number;
+  linked_users?: Array<{ id?: string; name?: string; city?: string | null }>;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface OperationalSensor extends ProfileRecord {
@@ -110,6 +135,7 @@ export interface OperationalProfileResponse {
   medications?: OperationalMedication[];
   checkins?: OperationalService | null;
   brainCoach?: OperationalService | null;
+  careProviders?: OperationalCareProviderAssignment[];
   caregivers?: OperationalCaregiver[];
   sensors?: OperationalSensor[];
   alerts?: OperationalAlert[];
@@ -139,6 +165,10 @@ export const demoOperationalUsers: OperationalQueueUser[] = [
     healthConditions: 2,
     missedMeds7d: 2,
     riskScore: 87,
+    careProviderCount: 2,
+    primaryCaregiverName: "Maria Garcia",
+    primaryProfessionalName: "Ana Novak",
+    careProviderNames: ["Maria Garcia", "Ana Novak"],
     operationalContext: {
       age: 84,
       assignedTo: "Ana Novak",
@@ -166,6 +196,10 @@ export const demoOperationalUsers: OperationalQueueUser[] = [
     healthConditions: 3,
     missedMeds7d: 0,
     riskScore: 58,
+    careProviderCount: 1,
+    primaryCaregiverName: null,
+    primaryProfessionalName: "Mila Weber",
+    careProviderNames: ["Mila Weber"],
     operationalContext: {
       age: 86,
       assignedTo: "Mila Weber",
@@ -194,6 +228,10 @@ export const demoOperationalUsers: OperationalQueueUser[] = [
     healthConditions: 1,
     missedMeds7d: 1,
     riskScore: 46,
+    careProviderCount: 0,
+    primaryCaregiverName: null,
+    primaryProfessionalName: null,
+    careProviderNames: [],
     operationalContext: {
       age: 77,
       assignedTo: null,
@@ -221,6 +259,10 @@ export const demoOperationalUsers: OperationalQueueUser[] = [
     healthConditions: 1,
     missedMeds7d: 0,
     riskScore: 12,
+    careProviderCount: 2,
+    primaryCaregiverName: "Laura Schneider",
+    primaryProfessionalName: "Ana Novak",
+    careProviderNames: ["Laura Schneider", "Ana Novak"],
     operationalContext: {
       age: 75,
       assignedTo: "Ana Novak",
@@ -295,8 +337,48 @@ export const demoOperationalProfile: OperationalProfileResponse = {
   caregivers: [
     {
       id: "demo-caregiver-carmen",
+      assignment_id: "demo-caregiver-carmen",
+      care_provider_contact_id: "demo-provider-maria",
       caretaker_name: "Maria Garcia",
       caretaker_phone: "+34 600 345 901",
+      is_primary: true,
+      relationship_label: "Daughter",
+      created_at: "2025-04-21T08:00:00.000Z",
+    },
+  ],
+  careProviders: [
+    {
+      id: "demo-caregiver-carmen",
+      assignment_id: "demo-caregiver-carmen",
+      provider_type: "caregiver",
+      provider_id: "demo-provider-maria",
+      display_name: "Maria Garcia",
+      phone: "+34 600 345 901",
+      is_primary: true,
+      relationship_label: "Daughter",
+      active: true,
+      assignment_count: 1,
+      linked_users: [{ id: "demo-carmen-lopez", name: "Carmen Lopez", city: "Madrid" }],
+      created_at: "2025-04-21T08:00:00.000Z",
+    },
+    {
+      id: "demo-professional-carmen",
+      assignment_id: "demo-professional-carmen",
+      provider_type: "field_staff",
+      provider_id: "demo-field-ana",
+      display_name: "Ana Novak",
+      phone: "+34 600 120 220",
+      role: "Field coordinator",
+      team: "Team North",
+      status: "available",
+      is_primary: true,
+      relationship_label: "Primary field provider",
+      active: true,
+      assignment_count: 2,
+      linked_users: [
+        { id: "demo-carmen-lopez", name: "Carmen Lopez", city: "Madrid" },
+        { id: "demo-marta-schneider", name: "Marta Schneider", city: "Leipzig" },
+      ],
       created_at: "2025-04-21T08:00:00.000Z",
     },
   ],
@@ -380,6 +462,39 @@ export const demoOperationalProfile: OperationalProfileResponse = {
   },
   isPreviewDemo: true,
 };
+
+export const demoCareProviders = [
+  ...(demoOperationalProfile.careProviders ?? []),
+  {
+    id: "demo-professional-mila",
+    assignment_id: "demo-professional-mila",
+    provider_type: "field_staff" as const,
+    provider_id: "demo-field-mila",
+    display_name: "Mila Weber",
+    phone: "+49 351 555 019",
+    role: "Field nurse",
+    team: "Team East",
+    status: "available",
+    active: true,
+    assignment_count: 1,
+    linked_users: [{ id: "demo-hans-mueller", name: "Hans Mueller", city: "Dresden" }],
+    created_at: "2025-04-21T08:00:00.000Z",
+  },
+  {
+    id: "demo-caregiver-laura",
+    assignment_id: "demo-caregiver-laura",
+    provider_type: "caregiver" as const,
+    provider_id: "demo-provider-laura",
+    display_name: "Laura Schneider",
+    phone: "+49 341 555 012",
+    is_primary: true,
+    relationship_label: "Niece",
+    active: true,
+    assignment_count: 1,
+    linked_users: [{ id: "demo-marta-schneider", name: "Marta Schneider", city: "Leipzig" }],
+    created_at: "2025-04-21T08:00:00.000Z",
+  },
+] satisfies OperationalCareProviderAssignment[];
 
 export function isDemoUserId(id?: string | null) {
   return Boolean(id && id.startsWith("demo-"));

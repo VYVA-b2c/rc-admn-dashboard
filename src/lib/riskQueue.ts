@@ -20,6 +20,10 @@ export type RiskQueueRow = {
   channel: OperationalChannel;
   lastContactKey: string;
   assignedTo?: string | null;
+  careProviderCount: number;
+  primaryCaregiverName?: string | null;
+  primaryProfessionalName?: string | null;
+  careProviderNames: string[];
   action: QueueAction;
   hasMedicationIssue: boolean;
   hasCheckinIssue: boolean;
@@ -88,6 +92,9 @@ export function toRiskQueueRow(user: OperationalQueueUser): RiskQueueRow {
   const score = getRiskScore(user);
   const status = deriveStatus(score, user);
   const meta = user.operationalContext;
+  const careProviderNames = Array.isArray(user.careProviderNames) ? user.careProviderNames : [];
+  const assignedTo = meta?.assignedTo ?? user.primaryProfessionalName ?? user.primaryCaregiverName ?? careProviderNames[0] ?? null;
+  const careProviderCount = user.careProviderCount ?? careProviderNames.length;
   const baseRow = {
     id: user.id,
     name: `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown",
@@ -99,11 +106,15 @@ export function toRiskQueueRow(user: OperationalQueueUser): RiskQueueRow {
     reasonKey: deriveReasonKey(user, status),
     channel: meta?.preferredChannel ?? "phone",
     lastContactKey: meta?.lastContactKey ?? "usersList.lastContactUnknown",
-    assignedTo: meta?.assignedTo,
+    assignedTo,
+    careProviderCount,
+    primaryCaregiverName: user.primaryCaregiverName ?? null,
+    primaryProfessionalName: user.primaryProfessionalName ?? null,
+    careProviderNames,
     hasMedicationIssue: (user.missedMeds7d ?? 0) > 0 || meta?.reasonKey === "usersList.reason.medication",
     hasCheckinIssue: !(user.checkinEnabled ?? false),
     hasNoResponse: Boolean(meta?.noResponse),
-    isUnassigned: meta?.assignedTo === null || meta?.assignedTo === undefined,
+    isUnassigned: !assignedTo && careProviderCount === 0,
     livingContextKey: meta?.livingContextKey,
   };
 

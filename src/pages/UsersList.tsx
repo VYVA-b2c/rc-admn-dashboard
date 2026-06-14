@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditUserDialog } from "@/components/user/EditUserDialog";
 import { UserApiIntakeDialog } from "@/components/user/UserApiIntakeDialog";
 import { UserCsvImportDialog } from "@/components/user/UserCsvImportDialog";
@@ -53,6 +54,10 @@ type QueueRow = {
   channel: OperationalChannel;
   lastContactKey: string;
   assignedTo?: string | null;
+  careProviderCount: number;
+  primaryCaregiverName?: string | null;
+  primaryProfessionalName?: string | null;
+  careProviderNames: string[];
   nextActionKey: string;
   hasMedicationIssue: boolean;
   hasCheckinIssue: boolean;
@@ -106,6 +111,9 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
   const score = getRiskScore(user);
   const status = deriveStatus(score, user);
   const meta = user.operationalContext;
+  const careProviderNames = Array.isArray(user.careProviderNames) ? user.careProviderNames : [];
+  const assignedTo = meta?.assignedTo ?? user.primaryProfessionalName ?? user.primaryCaregiverName ?? careProviderNames[0] ?? null;
+  const careProviderCount = user.careProviderCount ?? careProviderNames.length;
 
   return {
     id: user.id,
@@ -118,14 +126,18 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     reasonKey: deriveReasonKey(user, status),
     channel: meta?.preferredChannel ?? "phone",
     lastContactKey: meta?.lastContactKey ?? "usersList.lastContactUnknown",
-    assignedTo: meta?.assignedTo,
+    assignedTo,
+    careProviderCount,
+    primaryCaregiverName: user.primaryCaregiverName ?? null,
+    primaryProfessionalName: user.primaryProfessionalName ?? null,
+    careProviderNames,
     nextActionKey:
       meta?.nextActionKey ??
       (status === "urgent" ? "usersList.nextAction.callNow" : status === "review" ? "usersList.nextAction.review" : "usersList.nextAction.monitor"),
     hasMedicationIssue: (user.missedMeds7d ?? 0) > 0 || meta?.reasonKey === "usersList.reason.medication",
     hasCheckinIssue: !(user.checkinEnabled ?? false),
     hasNoResponse: Boolean(meta?.noResponse),
-    isUnassigned: meta?.assignedTo === null || meta?.assignedTo === undefined,
+    isUnassigned: !assignedTo && careProviderCount === 0,
     livingContextKey: meta?.livingContextKey,
   };
 }
@@ -160,6 +172,7 @@ export default function UsersList() {
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [csvImportOpen, setCsvImportOpen] = useState(false);
   const [apiIntakeOpen, setApiIntakeOpen] = useState(false);
+  const [assignTarget, setAssignTarget] = useState<QueueRow | null>(null);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
   const { isAdmin } = useAdminRole();
@@ -195,7 +208,8 @@ export default function UsersList() {
           user.name.toLowerCase().includes(normalizedSearch) ||
           user.city.toLowerCase().includes(normalizedSearch) ||
           t(user.reasonKey).toLowerCase().includes(normalizedSearch) ||
-          (user.assignedTo ?? "").toLowerCase().includes(normalizedSearch)
+          (user.assignedTo ?? "").toLowerCase().includes(normalizedSearch) ||
+          user.careProviderNames.some((providerName) => providerName.toLowerCase().includes(normalizedSearch))
         );
       })
       .sort((a, b) => b.score - a.score);
@@ -206,6 +220,7 @@ export default function UsersList() {
   const reviewCases = queueRows.filter((user) => user.status === "review").length;
   const checkinEnabled = sourceUsers.filter((user) => user.checkinEnabled).length;
   const canManageUsers = isAdmin && !authBypassEnabled;
+  const canAssignProviders = !authBypassEnabled && !usingPreviewData;
 
   if (isLoading) {
     return (
@@ -352,9 +367,9 @@ export default function UsersList() {
                     {t("usersList.lastContact")}
                   </TableHead>
                   <TableHead className="min-w-[170px] text-xs font-bold uppercase tracking-[0.12em]">
-                    {t("usersList.assignedOperator")}
+                    {t("careProviders.coverage")}
                   </TableHead>
-                  <TableHead className="min-w-[160px] text-right text-xs font-bold uppercase tracking-[0.12em]">
+                  <TableHead className="min-w-[240px] text-right text-xs font-bold uppercase tracking-[0.12em]">
                     {t("usersList.nextAction")}
                   </TableHead>
                 </TableRow>
@@ -409,7 +424,14 @@ export default function UsersList() {
                       <TableCell className="text-sm text-muted-foreground">{t(user.lastContactKey)}</TableCell>
                       <TableCell>
                         {user.assignedTo ? (
-                          <span className="text-sm font-semibold text-foreground">{user.assignedTo}</span>
+                          <div>
+                            <span className="text-sm font-semibold text-foreground">{user.assignedTo}</span>
+                            {user.careProviderCount > 1 && (
+                              <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+                                {user.careProviderCount} {t("careProviders.linkedShort")}
+                              </p>
+                            )}
+                          </div>
                         ) : (
                           <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
                             {t("usersList.unassigned")}
@@ -417,18 +439,34 @@ export default function UsersList() {
                         )}
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-9 rounded-full px-3 text-xs font-semibold"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            navigate(`/users/${user.id}`);
-                          }}
-                        >
-                          {t(user.nextActionKey)}
-                          <ChevronRight className="ml-1 h-4 w-4" />
-                        </Button>
+                        <div className="flex justify-end gap-2">
+                          {canAssignProviders && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-9 rounded-full border-primary/20 bg-primary/5 px-3 text-xs font-semibold text-primary hover:bg-primary/10 hover:text-primary"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setAssignTarget(user);
+                              }}
+                            >
+                              {t("careProviders.assign")}
+                            </Button>
+                          )}
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-9 rounded-full px-3 text-xs font-semibold"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              navigate(`/users/${user.id}`);
+                            }}
+                          >
+                            {t(user.nextActionKey)}
+                            <ChevronRight className="ml-1 h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -449,6 +487,16 @@ export default function UsersList() {
       )}
       {csvImportOpen && <UserCsvImportDialog open={csvImportOpen} onOpenChange={setCsvImportOpen} />}
       {apiIntakeOpen && <UserApiIntakeDialog open={apiIntakeOpen} onOpenChange={setApiIntakeOpen} />}
+      {assignTarget && (
+        <AssignCareProviderDialog
+          open={Boolean(assignTarget)}
+          onOpenChange={(open) => {
+            if (!open) setAssignTarget(null);
+          }}
+          userId={assignTarget.id}
+          userName={assignTarget.name}
+        />
+      )}
     </div>
   );
 }

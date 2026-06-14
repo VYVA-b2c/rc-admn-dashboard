@@ -18,12 +18,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { toast } from "@/hooks/use-toast";
 import { useGISData } from "@/hooks/useGISData";
 import { authBypassEnabled } from "@/lib/authMode";
 import {
@@ -81,6 +81,7 @@ export default function RiskQueue() {
   const [search, setSearch] = useState("");
   const [cityFilter, setCityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
+  const [assignTarget, setAssignTarget] = useState<RiskQueueRow | null>(null);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
   const { t } = useLanguage();
@@ -88,6 +89,7 @@ export default function RiskQueue() {
   const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
   const usingPreviewData = authBypassEnabled && apiUsers.length === 0;
   const sourceUsers = usingPreviewData ? demoOperationalUsers : apiUsers;
+  const canAssignProviders = !authBypassEnabled && !usingPreviewData;
 
   const queueRows = useMemo(
     () => deriveRiskQueueRows(sourceUsers),
@@ -135,10 +137,8 @@ export default function RiskQueue() {
     }
 
     if (row.action === "assign") {
-      toast({
-        title: t("riskQueue.action.assignReady"),
-        description: t("riskQueue.action.assignLocal"),
-      });
+      if (canAssignProviders) setAssignTarget(row);
+      else navigate(`/users/${row.id}`);
       return;
     }
 
@@ -264,9 +264,9 @@ export default function RiskQueue() {
                       {t("queue.lastContact")}
                     </TableHead>
                     <TableHead className="hidden min-w-[170px] text-xs font-bold uppercase tracking-[0.12em] 2xl:table-cell">
-                      {t("queue.assignedTo")}
+                      {t("careProviders.coverage")}
                     </TableHead>
-                    <TableHead className="sticky right-0 z-10 min-w-[210px] bg-muted/40 text-right text-xs font-bold uppercase tracking-[0.12em] shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">
+                    <TableHead className="sticky right-0 z-10 min-w-[300px] bg-muted/40 text-right text-xs font-bold uppercase tracking-[0.12em] shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">
                       {t("queue.action")}
                     </TableHead>
                   </TableRow>
@@ -311,7 +311,7 @@ export default function RiskQueue() {
                                 </span>
                                 <span className="hidden sm:inline 2xl:hidden">·</span>
                                 <span className="hidden sm:inline 2xl:hidden">
-                                  {t("queue.assignedTo")}: {assignedLabel}
+                                  {t("careProviders.coverage")}: {assignedLabel}
                                 </span>
                               </p>
                             </div>
@@ -337,7 +337,14 @@ export default function RiskQueue() {
                         <TableCell className="hidden text-sm text-muted-foreground 2xl:table-cell">{lastContactLabel}</TableCell>
                         <TableCell className="hidden 2xl:table-cell">
                           {row.assignedTo ? (
-                            <span className="text-sm font-semibold text-foreground">{row.assignedTo}</span>
+                            <div>
+                              <span className="text-sm font-semibold text-foreground">{row.assignedTo}</span>
+                              {row.careProviderCount > 1 && (
+                                <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+                                  {row.careProviderCount} {t("careProviders.linkedShort")}
+                                </p>
+                              )}
+                            </div>
                           ) : (
                             <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
                               {t("usersList.unassigned")}
@@ -359,6 +366,20 @@ export default function RiskQueue() {
                               {t(actionLabelKey(row.action))}
                               <ChevronRight className="ml-1 h-4 w-4" />
                             </Button>
+                            {canAssignProviders && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-9 rounded-full border-primary/20 bg-primary/5 px-3 text-xs font-semibold text-primary hover:bg-primary/10 hover:text-primary"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setAssignTarget(row);
+                                }}
+                              >
+                                {t("careProviders.assign")}
+                              </Button>
+                            )}
                             <Button
                               type="button"
                               variant="outline"
@@ -382,6 +403,16 @@ export default function RiskQueue() {
           )}
         </CardContent>
       </Card>
+      {assignTarget && (
+        <AssignCareProviderDialog
+          open={Boolean(assignTarget)}
+          onOpenChange={(open) => {
+            if (!open) setAssignTarget(null);
+          }}
+          userId={assignTarget.id}
+          userName={assignTarget.name}
+        />
+      )}
     </div>
   );
 }

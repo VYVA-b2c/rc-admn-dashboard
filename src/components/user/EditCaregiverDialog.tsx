@@ -36,7 +36,7 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
 
   const handleSave = async () => {
     if (!form.caretaker_name.trim()) {
-      toast({ title: "Caregiver name is required", variant: "destructive" });
+      toast({ title: t("careProviders.validation.name"), variant: "destructive" });
       return;
     }
     if (!isValidPhoneInput(form.caretaker_phone)) {
@@ -56,13 +56,15 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
         body: JSON.stringify(payload),
       });
 
-      toast({ title: caregiver ? "Caregiver updated" : "Caregiver added" });
+      toast({ title: t("careProviders.saved") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
+      queryClient.invalidateQueries({ queryKey: ["gis-data"] });
+      queryClient.invalidateQueries({ queryKey: ["care-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["emergency-contacts"] });
       onOpenChange(false);
-    } catch (error) {
+    } catch {
       toast({
-        title: "Error saving",
-        description: error instanceof Error ? error.message : undefined,
+        title: t("careProviders.saveFailed"),
         variant: "destructive",
       });
     } finally {
@@ -74,15 +76,15 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{caregiver ? "Edit Caregiver" : "Add Caregiver"}</DialogTitle>
+          <DialogTitle>{caregiver ? t("careProviders.editContact") : t("careProviders.addContact")}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="space-y-1.5">
-            <Label>Name *</Label>
+            <Label>{t("careProviders.name")} *</Label>
             <Input value={form.caretaker_name} onChange={e => update("caretaker_name", e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <Label>Phone</Label>
+            <Label>{t("careProviders.phone")}</Label>
             <Input
               type="tel"
               inputMode="tel"
@@ -95,8 +97,8 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("userForm.cancel")}</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? t("userForm.saving") : t("userForm.save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
 import { toast } from "@/hooks/use-toast";
+import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
 import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
@@ -49,12 +50,14 @@ import {
   type OperationalChannel,
   type OperationalAlert,
   type OperationalCaregiver,
+  type OperationalCareProviderAssignment,
   type OperationalMedication,
   type OperationalProfileContext,
   type OperationalProfileResponse,
   type OperationalSensor,
   type OperationalStatus,
 } from "@/lib/operationalDemoData";
+import { providerCoverageLabel, providerTypeKey } from "@/lib/careProviders";
 import { cn } from "@/lib/utils";
 
 function interpolate(template: string, values: Record<string, string | number | undefined>) {
@@ -77,6 +80,22 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
 
 function safeArray<T>(value: T[] | undefined | null): T[] {
   return Array.isArray(value) ? value : [];
+}
+
+function providerFromCaregiver(caregiver: OperationalCaregiver): OperationalCareProviderAssignment {
+  return {
+    id: caregiver.assignment_id || caregiver.id,
+    assignment_id: caregiver.assignment_id || caregiver.id,
+    provider_type: "caregiver",
+    provider_id: caregiver.care_provider_contact_id || caregiver.id,
+    display_name: caregiver.caretaker_name,
+    phone: caregiver.caretaker_phone,
+    is_primary: caregiver.is_primary,
+    relationship_label: caregiver.relationship_label,
+    notes: caregiver.notes,
+    active: true,
+    created_at: caregiver.created_at,
+  };
 }
 
 function profileStatusClasses(status: OperationalStatus) {
@@ -149,6 +168,7 @@ export default function UserProfile() {
   const [editMedTarget, setEditMedTarget] = useState<OperationalMedication | null>(null);
   const [editCaregiverOpen, setEditCaregiverOpen] = useState(false);
   const [editCaregiverTarget, setEditCaregiverTarget] = useState<OperationalCaregiver | null>(null);
+  const [assignProviderOpen, setAssignProviderOpen] = useState(false);
   const [editCheckinOpen, setEditCheckinOpen] = useState(false);
   const [editBrainOpen, setEditBrainOpen] = useState(false);
   const [editSensorOpen, setEditSensorOpen] = useState(false);
@@ -186,19 +206,21 @@ export default function UserProfile() {
     }
   };
 
-  const handleDeleteCaregiver = async (caregiverId: string) => {
+  const handleUnassignCareProvider = async (assignmentId: string) => {
     if (data?.isPreviewDemo) {
       handleOperationalAction("profile.previewNoWrite");
       return;
     }
 
     try {
-      await apiFetch(`/api/v1/user-dashboard/caregivers/${caregiverId}`, {
+      await apiFetch(`/api/v1/user-dashboard/care-provider-assignments/${assignmentId}`, {
         method: "DELETE",
       });
 
-      toast({ title: t("profile.caregiverDeleted") });
+      toast({ title: t("careProviders.unassigned") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      queryClient.invalidateQueries({ queryKey: ["gis-data"] });
+      queryClient.invalidateQueries({ queryKey: ["care-providers"] });
     } catch (error) {
       toast({ title: t("profile.deleteFailed"), variant: "destructive" });
     }
@@ -233,6 +255,11 @@ export default function UserProfile() {
   const health = data.health ?? null;
   const medications = safeArray(data.medications);
   const caregivers = safeArray(data.caregivers);
+  const careProviders = safeArray(data.careProviders).length
+    ? safeArray(data.careProviders)
+    : caregivers.map(providerFromCaregiver);
+  const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
+  const primaryProfessional = careProviders.find((provider) => provider.provider_type === "field_staff" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "field_staff") ?? null;
   const sensors = safeArray(data.sensors);
   const alerts = safeArray(data.alerts);
   const checkins = data.checkins ?? null;
@@ -266,12 +293,13 @@ export default function UserProfile() {
   const age = context.age ?? getAge(user.date_of_birth);
   const ChannelIcon = channelIcon(context.preferredChannel);
   const address = [user.street, user.house_number, user.post_code, user.city].filter(Boolean).join(" ");
+  const assignedProviderLabel = context.assignedTo ?? primaryProfessional?.display_name ?? primaryCaregiver?.display_name ?? null;
   const healthScore = Math.max(0, Math.min(100, 100 - criticalAlerts * 20 - warningAlerts * 10 - healthConditions.length * 4));
   const services = [
     { key: "profile.service.checkins", active: Boolean(checkins?.enabled), icon: PhoneCall },
     { key: "profile.service.brainCoach", active: Boolean(brainCoach?.enabled), icon: Brain },
     { key: "profile.service.medications", active: medications.length > 0, icon: Pill },
-    { key: "profile.service.caregivers", active: caregivers.length > 0, icon: Users },
+    { key: "profile.service.caregivers", active: careProviders.length > 0, icon: Users },
     { key: "profile.service.sensors", active: sensors.length > 0, icon: Activity },
     { key: "profile.service.consent", active: Boolean(data.consent?.consent_given), icon: ShieldCheck },
   ];
@@ -292,6 +320,7 @@ export default function UserProfile() {
   })();
 
   const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
+  const canAssignProviders = !authBypassEnabled && !isPreviewDemo;
 
   return (
     <div className="space-y-5">
@@ -351,7 +380,7 @@ export default function UserProfile() {
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold text-muted-foreground xl:justify-end">
               <MetaItem icon={ChannelIcon} label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
               <MetaItem icon={Clock} label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
-              <MetaItem icon={UserRound} label={t("profile.assignedTo")} value={context.assignedTo ?? t("usersList.unassigned")} />
+              <MetaItem icon={UserRound} label={t("careProviders.coverage")} value={assignedProviderLabel ?? t("usersList.unassigned")} />
             </div>
           </div>
 
@@ -542,36 +571,62 @@ export default function UserProfile() {
         <Card className="rounded-2xl border-border bg-white shadow-sm">
           <CardHeader className="flex flex-row items-center gap-2 pb-2">
             <Users className="h-5 w-5 text-primary" />
-            <CardTitle className="text-base font-bold">{t("profile.caregivers")}</CardTitle>
-            {showAdminControls && (
+            <CardTitle className="text-base font-bold">{t("careProviders.title")}</CardTitle>
+            {canAssignProviders && (
               <AdminIconButton
-                label={t("profile.addCaregiver")}
+                label={t("careProviders.assign")}
                 icon={Plus}
-                onClick={() => {
-                  setEditCaregiverTarget(null);
-                  setEditCaregiverOpen(true);
-                }}
+                onClick={() => setAssignProviderOpen(true)}
               />
             )}
           </CardHeader>
-          <CardContent>
-            {caregivers.length === 0 ? (
-              <EmptyLine icon={Users} label={t("profile.noCaregivers")} />
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ProviderHighlight label={t("careProviders.primaryCaregiver")} provider={primaryCaregiver} emptyLabel={t("careProviders.noPrimaryCaregiver")} />
+              <ProviderHighlight label={t("careProviders.primaryProfessional")} provider={primaryProfessional} emptyLabel={t("careProviders.noPrimaryProfessional")} />
+            </div>
+            {careProviders.length === 0 ? (
+              <EmptyLine icon={Users} label={t("careProviders.noProviders")} />
             ) : (
               <div className="space-y-2">
-                {caregivers.map((caregiver) => (
-                  <div key={caregiver.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
-                    <div>
-                      <p className="font-semibold text-foreground">{caregiver.caretaker_name || t("profile.unknownCaregiver")}</p>
+                {careProviders.map((provider) => (
+                  <div key={provider.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+                        <Badge variant={provider.is_primary ? "default" : "secondary"} className="rounded-full text-[11px]">
+                          {provider.is_primary ? t("careProviders.primary") : t(providerTypeKey(provider.provider_type))}
+                        </Badge>
+                      </div>
                       <p className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground">
                         <Phone className="h-3.5 w-3.5" />
-                        {caregiver.caretaker_phone || t("profile.noPhone")}
+                        {provider.phone || t("profile.noPhone")}
                       </p>
+                      {providerCoverageLabel(provider) && (
+                        <p className="mt-1 text-xs font-semibold text-muted-foreground">{providerCoverageLabel(provider)}</p>
+                      )}
                     </div>
-                    {showAdminControls && (
+                    {canAssignProviders && (
                       <div className="flex gap-1">
-                        <AdminIconButton label={t("profile.editCaregiver")} onClick={() => { setEditCaregiverTarget(caregiver); setEditCaregiverOpen(true); }} />
-                        <AdminIconButton label={t("profile.deleteCaregiver")} icon={Trash2} danger onClick={() => handleDeleteCaregiver(caregiver.id)} />
+                        {showAdminControls && provider.provider_type === "caregiver" && (
+                          <AdminIconButton
+                            label={t("profile.editCaregiver")}
+                            onClick={() => {
+                              setEditCaregiverTarget({
+                                id: provider.id,
+                                assignment_id: provider.id,
+                                care_provider_contact_id: provider.provider_id,
+                                caretaker_name: provider.display_name,
+                                caretaker_phone: provider.phone,
+                                is_primary: provider.is_primary,
+                                relationship_label: provider.relationship_label,
+                                notes: provider.notes,
+                              });
+                              setEditCaregiverOpen(true);
+                            }}
+                          />
+                        )}
+                        <AdminIconButton label={t("careProviders.unassign")} icon={Trash2} danger onClick={() => handleUnassignCareProvider(provider.id)} />
                       </div>
                     )}
                   </div>
@@ -684,6 +739,14 @@ export default function UserProfile() {
       {editHealthOpen && health && <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />}
       {editMedOpen && <EditMedicationDialog open={editMedOpen} onOpenChange={setEditMedOpen} vyvaUserId={user.id} medication={editMedTarget} />}
       {editCaregiverOpen && <EditCaregiverDialog open={editCaregiverOpen} onOpenChange={setEditCaregiverOpen} vyvaUserId={user.id} caregiver={editCaregiverTarget} />}
+      {assignProviderOpen && (
+        <AssignCareProviderDialog
+          open={assignProviderOpen}
+          onOpenChange={setAssignProviderOpen}
+          userId={user.id}
+          userName={fullName}
+        />
+      )}
       {editCheckinOpen && checkins && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
       {editBrainOpen && brainCoach && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
       {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
@@ -798,6 +861,34 @@ function EmptyLine({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
     <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-4 text-sm font-medium text-muted-foreground">
       <Icon className="h-4 w-4" />
       {label}
+    </div>
+  );
+}
+
+function ProviderHighlight({
+  emptyLabel,
+  label,
+  provider,
+}: {
+  emptyLabel: string;
+  label: string;
+  provider?: OperationalCareProviderAssignment | null;
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/25 p-3">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
+      {provider ? (
+        <div className="mt-2">
+          <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+          <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
+            {[t(providerTypeKey(provider.provider_type)), providerCoverageLabel(provider)].filter(Boolean).join(" / ")}
+          </p>
+        </div>
+      ) : (
+        <p className="mt-2 text-sm font-medium text-muted-foreground">{emptyLabel}</p>
+      )}
     </div>
   );
 }

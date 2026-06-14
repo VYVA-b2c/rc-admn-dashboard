@@ -170,6 +170,10 @@ function dashboardUser(row) {
     healthConditions,
     missedMeds7d,
     riskScore,
+    careProviderCount: Number(row.care_provider_count || 0),
+    primaryCaregiverName: row.primary_caregiver_name || null,
+    primaryProfessionalName: row.primary_professional_name || null,
+    careProviderNames: Array.isArray(row.care_provider_names) ? row.care_provider_names : [],
   };
 }
 
@@ -207,6 +211,18 @@ async function loadDashboardUsers() {
         )::int AS missed_meds_7d
       FROM public.vyva_medication_logs
       GROUP BY vyva_user_id
+    ),
+    care_provider_counts AS (
+      SELECT
+        a.vyva_user_id,
+        COUNT(*)::int AS care_provider_count,
+        MAX(c.full_name) FILTER (WHERE a.provider_type = 'caregiver' AND a.is_primary = true) AS primary_caregiver_name,
+        MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(c.full_name, fs.full_name)), NULL) AS care_provider_names
+      FROM public.vyva_user_care_provider_assignments a
+      LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      GROUP BY a.vyva_user_id
     )
     SELECT
       u.id::text,
@@ -223,13 +239,18 @@ async function loadDashboardUsers() {
       COALESCE(a.critical_alerts, 0) AS critical_alerts,
       COALESCE(h.health_conditions, 0) AS health_conditions,
       COALESCE(m.missed_meds_7d, 0) AS missed_meds_7d,
-      COALESCE(c.enabled, false) AS checkin_enabled
+      COALESCE(c.enabled, false) AS checkin_enabled,
+      COALESCE(cp.care_provider_count, 0) AS care_provider_count,
+      cp.primary_caregiver_name,
+      cp.primary_professional_name,
+      COALESCE(cp.care_provider_names, ARRAY[]::text[]) AS care_provider_names
     FROM public.vyva_users u
     LEFT JOIN sensor_counts s ON s.vyva_user_id = u.id
     LEFT JOIN alert_counts a ON a.vyva_user_id = u.id
     LEFT JOIN health_counts h ON h.vyva_user_id = u.id
     LEFT JOIN missed_med_counts m ON m.vyva_user_id = u.id
     LEFT JOIN public.vyva_user_checkins c ON c.vyva_user_id = u.id
+    LEFT JOIN care_provider_counts cp ON cp.vyva_user_id = u.id
     ORDER BY COALESCE(a.critical_alerts, 0) DESC, COALESCE(a.active_alerts, 0) DESC, u.created_at DESC
   `);
 
@@ -260,7 +281,7 @@ async function loadDashboardUsers() {
     ORDER BY count DESC, city ASC
   `);
 
-  const caregiverRows = await query("SELECT COUNT(*)::int AS count FROM public.vyva_user_caregivers");
+  const caregiverRows = await query("SELECT COUNT(*)::int AS count FROM public.vyva_user_care_provider_assignments");
   const checkinRows = await query("SELECT COUNT(*)::int AS count FROM public.vyva_user_checkins WHERE enabled = true");
   const sensorRows = await optionalRows("SELECT COUNT(*)::int AS count FROM public.vyva_user_sensors");
 
@@ -564,16 +585,30 @@ async function loadUserInfo(userId) {
   const user = userResult.rows[0];
   if (!user) return null;
 
-  const [consent, health, medications, checkins, brainCoach, caregivers, sensors, alerts] = await Promise.all([
+  const [consent, health, medications, checkins, brainCoach, careProviders, sensors, alerts] = await Promise.all([
     optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_caregivers WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
+    loadUserCareProviders(userId),
     optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId]),
   ]);
+  const caregivers = careProviders
+    .filter((provider) => provider.provider_type === "caregiver")
+    .map((provider) => ({
+      id: provider.id,
+      assignment_id: provider.id,
+      care_provider_contact_id: provider.provider_id,
+      vyva_user_id: userId,
+      caretaker_name: provider.display_name,
+      caretaker_phone: provider.phone,
+      is_primary: provider.is_primary,
+      relationship_label: provider.relationship_label,
+      notes: provider.notes,
+      created_at: provider.created_at,
+    }));
 
   return {
     user,
@@ -582,6 +617,7 @@ async function loadUserInfo(userId) {
     medications,
     checkins: checkins[0] || null,
     brainCoach: brainCoach[0] || null,
+    careProviders,
     caregivers,
     sensors,
     alerts,
@@ -766,13 +802,478 @@ async function upsertHealthWithClient(client, userId, health) {
   );
 }
 
-async function replaceCaregiversWithClient(client, userId, caregivers) {
-  await client.query("DELETE FROM public.vyva_user_caregivers WHERE vyva_user_id = $1", [userId]);
-  for (const caregiver of caregivers) {
-    await client.query(
-      "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
-      [userId, caregiver.caretaker_name, caregiver.caretaker_phone],
+function normalizeCareProviderType(value) {
+  const text = nullIfBlank(value)?.toLowerCase().replace(/[-\s]+/g, "_");
+  if (["field_staff", "fieldstaff", "professional", "staff"].includes(text)) return "field_staff";
+  return "caregiver";
+}
+
+function careProviderAssignmentRow(row) {
+  return {
+    id: row.id,
+    assignment_id: row.id,
+    provider_type: row.provider_type,
+    provider_id: row.provider_id,
+    display_name: row.display_name,
+    phone: row.phone,
+    role: row.role,
+    team: row.team,
+    status: row.status,
+    is_primary: Boolean(row.is_primary),
+    relationship_label: row.relationship_label,
+    notes: row.notes,
+    active: row.active === undefined ? true : Boolean(row.active),
+    assignment_count: row.assignment_count === undefined ? undefined : Number(row.assignment_count || 0),
+    linked_users: Array.isArray(row.linked_users) ? row.linked_users : [],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function loadUserCareProviders(userId) {
+  const rows = await optionalRows(
+    `
+      SELECT
+        a.id::text,
+        a.provider_type,
+        COALESCE(c.id::text, fs.id::text) AS provider_id,
+        COALESCE(c.full_name, fs.full_name) AS display_name,
+        COALESCE(c.phone, fs.phone) AS phone,
+        fs.role,
+        fs.team,
+        fs.status,
+        COALESCE(c.active, fs.active, true) AS active,
+        a.is_primary,
+        a.relationship_label,
+        a.notes,
+        a.created_at,
+        a.updated_at
+      FROM public.vyva_user_care_provider_assignments a
+      LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE a.vyva_user_id = $1
+      ORDER BY a.is_primary DESC, a.provider_type ASC, COALESCE(c.full_name, fs.full_name) ASC
+    `,
+    [userId],
+  );
+  return rows.map(careProviderAssignmentRow);
+}
+
+async function loadCareProviderAssignmentByIdWithClient(client, assignmentId) {
+  const result = await client.query(
+    `
+      SELECT
+        a.id::text,
+        a.provider_type,
+        COALESCE(c.id::text, fs.id::text) AS provider_id,
+        COALESCE(c.full_name, fs.full_name) AS display_name,
+        COALESCE(c.phone, fs.phone) AS phone,
+        fs.role,
+        fs.team,
+        fs.status,
+        COALESCE(c.active, fs.active, true) AS active,
+        a.is_primary,
+        a.relationship_label,
+        a.notes,
+        a.created_at,
+        a.updated_at
+      FROM public.vyva_user_care_provider_assignments a
+      LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE a.id = $1
+      LIMIT 1
+    `,
+    [assignmentId],
+  );
+  return result.rows[0] ? careProviderAssignmentRow(result.rows[0]) : null;
+}
+
+async function loadCareProviders(filters = {}) {
+  const search = nullIfBlank(filters.search)?.toLowerCase() || null;
+  const type = filters.type && filters.type !== "all" ? normalizeCareProviderType(filters.type) : null;
+  const rows = await optionalRows(
+    `
+      WITH caregiver_counts AS (
+        SELECT
+          a.care_provider_contact_id AS provider_id,
+          COUNT(*)::int AS assignment_count,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'id', u.id::text,
+              'name', u.first_name || ' ' || u.last_name,
+              'city', u.city
+            )
+            ORDER BY u.last_name ASC, u.first_name ASC
+          ) AS linked_users
+        FROM public.vyva_user_care_provider_assignments a
+        JOIN public.vyva_users u ON u.id = a.vyva_user_id
+        WHERE a.provider_type = 'caregiver'
+        GROUP BY a.care_provider_contact_id
+      ),
+      field_staff_counts AS (
+        SELECT
+          a.field_staff_id AS provider_id,
+          COUNT(*)::int AS assignment_count,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'id', u.id::text,
+              'name', u.first_name || ' ' || u.last_name,
+              'city', u.city
+            )
+            ORDER BY u.last_name ASC, u.first_name ASC
+          ) AS linked_users
+        FROM public.vyva_user_care_provider_assignments a
+        JOIN public.vyva_users u ON u.id = a.vyva_user_id
+        WHERE a.provider_type = 'field_staff'
+        GROUP BY a.field_staff_id
+      )
+      SELECT
+        c.id::text AS id,
+        'caregiver' AS provider_type,
+        c.id::text AS provider_id,
+        c.full_name AS display_name,
+        c.phone,
+        NULL::text AS role,
+        NULL::text AS team,
+        CASE WHEN c.active THEN 'active' ELSE 'inactive' END AS status,
+        c.active,
+        COALESCE(cc.assignment_count, 0) AS assignment_count,
+        COALESCE(cc.linked_users, '[]'::json) AS linked_users,
+        c.created_at,
+        c.updated_at
+      FROM public.care_provider_contacts c
+      LEFT JOIN caregiver_counts cc ON cc.provider_id = c.id
+      WHERE
+        c.active = true
+        AND ($1::text IS NULL OR LOWER(c.full_name) LIKE '%' || $1 || '%' OR COALESCE(c.phone, '') LIKE '%' || $1 || '%')
+        AND ($2::text IS NULL OR $2 = 'caregiver')
+      UNION ALL
+      SELECT
+        fs.id::text AS id,
+        'field_staff' AS provider_type,
+        fs.id::text AS provider_id,
+        fs.full_name AS display_name,
+        fs.phone,
+        fs.role,
+        fs.team,
+        fs.status,
+        fs.active,
+        COALESCE(fc.assignment_count, 0) AS assignment_count,
+        COALESCE(fc.linked_users, '[]'::json) AS linked_users,
+        fs.created_at,
+        fs.updated_at
+      FROM public.field_staff fs
+      LEFT JOIN field_staff_counts fc ON fc.provider_id = fs.id
+      WHERE
+        fs.active = true
+        AND ($1::text IS NULL OR LOWER(fs.full_name) LIKE '%' || $1 || '%' OR LOWER(COALESCE(fs.team, '')) LIKE '%' || $1 || '%' OR COALESCE(fs.phone, '') LIKE '%' || $1 || '%')
+        AND ($2::text IS NULL OR $2 = 'field_staff')
+      ORDER BY display_name ASC
+      LIMIT 100
+    `,
+    [search, type],
+  );
+  return rows.map(careProviderAssignmentRow);
+}
+
+async function upsertCareProviderContactWithClient(client, payload) {
+  const caregiver = normalizeCaregiverPayload(payload);
+  if (caregiver.error) return caregiver;
+
+  const fullName = caregiver.value.caretaker_name || "Care contact";
+  const phone = caregiver.value.caretaker_phone;
+  const digits = phoneDigits(phone);
+
+  if (digits) {
+    const existing = await client.query(
+      "SELECT id::text FROM public.care_provider_contacts WHERE phone_digits = $1 LIMIT 1",
+      [digits],
     );
+    if (existing.rows[0]) {
+      const result = await client.query(
+        `
+          UPDATE public.care_provider_contacts
+          SET full_name = $2, phone = COALESCE($3, phone), phone_digits = $4, active = true, updated_at = now()
+          WHERE id = $1
+          RETURNING id::text, full_name, phone, phone_digits
+        `,
+        [existing.rows[0].id, fullName, phone, digits],
+      );
+      return { value: result.rows[0] };
+    }
+  }
+
+  const result = await client.query(
+    `
+      INSERT INTO public.care_provider_contacts (full_name, phone, phone_digits)
+      VALUES ($1, $2, $3)
+      RETURNING id::text, full_name, phone, phone_digits
+    `,
+    [fullName, phone, digits],
+  );
+  return { value: result.rows[0] };
+}
+
+async function shouldMakePrimaryWithClient(client, userId, providerType, requestedPrimary) {
+  if (requestedPrimary !== undefined) return Boolean(requestedPrimary);
+  const existing = await client.query(
+    `
+      SELECT id::text
+      FROM public.vyva_user_care_provider_assignments
+      WHERE vyva_user_id = $1 AND provider_type = $2 AND is_primary = true
+      LIMIT 1
+    `,
+    [userId, providerType],
+  );
+  return !existing.rows[0];
+}
+
+async function assignCareProviderWithClient(client, userId, payload) {
+  const providerType = normalizeCareProviderType(firstValue(payload?.provider_type, payload?.type));
+  const providerPayload = objectValue(firstValue(payload?.provider, payload?.caregiver, payload?.contact));
+  const relationshipLabel = nullIfBlank(firstValue(payload?.relationship_label, payload?.relationship, payload?.role));
+  const notes = nullIfBlank(payload?.notes);
+  const requestedPrimary = optionalBooleanValue(payload?.is_primary, payload?.primary);
+  const makePrimary = await shouldMakePrimaryWithClient(client, userId, providerType, requestedPrimary);
+
+  let result;
+  if (providerType === "field_staff") {
+    const fieldStaffId = nullIfBlank(firstValue(payload?.field_staff_id, payload?.provider_id, providerPayload.id));
+    if (!fieldStaffId) return { error: "field_staff_id is required" };
+
+    const staff = await client.query("SELECT id::text FROM public.field_staff WHERE id = $1 AND active = true LIMIT 1", [fieldStaffId]);
+    if (!staff.rows[0]) return { error: "field_staff provider not found" };
+
+    if (makePrimary) {
+      await client.query(
+        "UPDATE public.vyva_user_care_provider_assignments SET is_primary = false WHERE vyva_user_id = $1 AND provider_type = 'field_staff'",
+        [userId],
+      );
+    }
+
+    result = await client.query(
+      `
+        INSERT INTO public.vyva_user_care_provider_assignments (
+          vyva_user_id,
+          provider_type,
+          field_staff_id,
+          is_primary,
+          relationship_label,
+          notes
+        )
+        VALUES ($1, 'field_staff', $2, $3, $4, $5)
+        ON CONFLICT (vyva_user_id, field_staff_id) WHERE provider_type = 'field_staff' AND field_staff_id IS NOT NULL
+        DO UPDATE SET
+          is_primary = EXCLUDED.is_primary,
+          relationship_label = COALESCE(EXCLUDED.relationship_label, public.vyva_user_care_provider_assignments.relationship_label),
+          notes = COALESCE(EXCLUDED.notes, public.vyva_user_care_provider_assignments.notes),
+          updated_at = now()
+        RETURNING id::text
+      `,
+      [userId, fieldStaffId, makePrimary, relationshipLabel, notes],
+    );
+  } else {
+    const existingContactId = nullIfBlank(firstValue(payload?.care_provider_contact_id, payload?.provider_id, providerPayload.id));
+    let contact;
+    if (existingContactId) {
+      const contactResult = await client.query(
+        "SELECT id::text FROM public.care_provider_contacts WHERE id = $1 AND active = true LIMIT 1",
+        [existingContactId],
+      );
+      if (!contactResult.rows[0]) return { error: "care provider contact not found" };
+      contact = contactResult.rows[0];
+    } else {
+      const contactResult = await upsertCareProviderContactWithClient(client, {
+        ...providerPayload,
+        ...payload,
+      });
+      if (contactResult.error) return contactResult;
+      contact = contactResult.value;
+    }
+
+    if (makePrimary) {
+      await client.query(
+        "UPDATE public.vyva_user_care_provider_assignments SET is_primary = false WHERE vyva_user_id = $1 AND provider_type = 'caregiver'",
+        [userId],
+      );
+    }
+
+    result = await client.query(
+      `
+        INSERT INTO public.vyva_user_care_provider_assignments (
+          vyva_user_id,
+          provider_type,
+          care_provider_contact_id,
+          is_primary,
+          relationship_label,
+          notes
+        )
+        VALUES ($1, 'caregiver', $2, $3, $4, $5)
+        ON CONFLICT (vyva_user_id, care_provider_contact_id) WHERE provider_type = 'caregiver' AND care_provider_contact_id IS NOT NULL
+        DO UPDATE SET
+          is_primary = EXCLUDED.is_primary,
+          relationship_label = COALESCE(EXCLUDED.relationship_label, public.vyva_user_care_provider_assignments.relationship_label),
+          notes = COALESCE(EXCLUDED.notes, public.vyva_user_care_provider_assignments.notes),
+          updated_at = now()
+        RETURNING id::text
+      `,
+      [userId, contact.id, makePrimary, relationshipLabel, notes],
+    );
+  }
+
+  const assignment = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id);
+  return assignment ? { value: assignment } : { notFound: true };
+}
+
+async function assignCareProvider(userId, payload) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const userResult = await client.query("SELECT id::text FROM public.vyva_users WHERE id = $1 LIMIT 1", [userId]);
+    if (!userResult.rows[0]) {
+      await client.query("ROLLBACK");
+      return { notFound: true };
+    }
+
+    const result = await assignCareProviderWithClient(client, userId, payload);
+    if (result.error || result.notFound) {
+      await client.query("ROLLBACK");
+      return result;
+    }
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateCareProviderAssignment(assignmentId, payload) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `
+        SELECT
+          id::text,
+          vyva_user_id::text,
+          provider_type,
+          care_provider_contact_id::text,
+          field_staff_id::text
+        FROM public.vyva_user_care_provider_assignments
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [assignmentId],
+    );
+    const assignment = existing.rows[0];
+    if (!assignment) {
+      await client.query("ROLLBACK");
+      return { notFound: true };
+    }
+
+    let contactId = assignment.care_provider_contact_id;
+    if (assignment.provider_type === "caregiver" && hasMeaningfulPayloadValue(payload)) {
+      const hasContactEdit = [
+        payload?.caretaker_name,
+        payload?.caregiver_name,
+        payload?.name,
+        payload?.full_name,
+        payload?.fullName,
+        payload?.caretaker_phone,
+        payload?.caregiver_phone,
+        payload?.phone,
+        payload?.phone_number,
+        payload?.phoneNumber,
+      ].some((value) => nullIfBlank(value));
+
+      if (hasContactEdit) {
+        const contact = await upsertCareProviderContactWithClient(client, payload);
+        if (contact.error) {
+          await client.query("ROLLBACK");
+          return contact;
+        }
+        contactId = contact.value.id;
+      }
+    }
+
+    const requestedPrimary = optionalBooleanValue(payload?.is_primary, payload?.primary);
+    if (requestedPrimary === true) {
+      await client.query(
+        "UPDATE public.vyva_user_care_provider_assignments SET is_primary = false WHERE vyva_user_id = $1 AND provider_type = $2",
+        [assignment.vyva_user_id, assignment.provider_type],
+      );
+    }
+
+    const result = await client.query(
+      `
+        UPDATE public.vyva_user_care_provider_assignments
+        SET
+          care_provider_contact_id = CASE WHEN provider_type = 'caregiver' THEN $2::uuid ELSE care_provider_contact_id END,
+          is_primary = COALESCE($3, is_primary),
+          relationship_label = COALESCE($4, relationship_label),
+          notes = COALESCE($5, notes),
+          updated_at = now()
+        WHERE id = $1
+        RETURNING id::text
+      `,
+      [
+        assignmentId,
+        contactId,
+        requestedPrimary === undefined ? null : requestedPrimary,
+        nullIfBlank(firstValue(payload?.relationship_label, payload?.relationship)),
+        nullIfBlank(payload?.notes),
+      ],
+    );
+
+    const updated = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id);
+    await client.query("COMMIT");
+    return updated ? { value: updated } : { notFound: true };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function deleteCareProviderAssignment(assignmentId) {
+  const result = await query(
+    "DELETE FROM public.vyva_user_care_provider_assignments WHERE id = $1 RETURNING id::text",
+    [assignmentId],
+  );
+  return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
+}
+
+function compatibilityCaregiverRow(assignment) {
+  return {
+    id: assignment.id,
+    assignment_id: assignment.id,
+    care_provider_contact_id: assignment.provider_id,
+    caretaker_name: assignment.display_name,
+    caretaker_phone: assignment.phone,
+    is_primary: assignment.is_primary,
+    relationship_label: assignment.relationship_label,
+    notes: assignment.notes,
+    created_at: assignment.created_at,
+    updated_at: assignment.updated_at,
+  };
+}
+
+async function replaceCaregiversWithClient(client, userId, caregivers) {
+  await client.query(
+    "DELETE FROM public.vyva_user_care_provider_assignments WHERE vyva_user_id = $1 AND provider_type = 'caregiver'",
+    [userId],
+  );
+  for (const [index, caregiver] of caregivers.entries()) {
+    await assignCareProviderWithClient(client, userId, {
+      provider_type: "caregiver",
+      provider: caregiver,
+      is_primary: index === 0,
+      relationship_label: "Caregiver",
+    });
   }
 }
 
@@ -1040,39 +1541,29 @@ async function createCaregiver(payload) {
   const caregiver = normalizeCaregiverPayload(payload, true);
   if (caregiver.error) return caregiver;
 
-  const result = await query(
-    `
-      INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone)
-      VALUES ($1, $2, $3)
-      RETURNING *, id::text, vyva_user_id::text
-    `,
-    [caregiver.value.vyva_user_id, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
-  );
-
-  return { value: result.rows[0] };
+  const result = await assignCareProvider(caregiver.value.vyva_user_id, {
+    provider_type: "caregiver",
+    provider: caregiver.value,
+    is_primary: optionalBooleanValue(payload?.is_primary, payload?.primary),
+    relationship_label: nullIfBlank(firstValue(payload?.relationship_label, payload?.relationship)) || "Caregiver",
+  });
+  return result.value ? { value: compatibilityCaregiverRow(result.value) } : result;
 }
 
 async function updateCaregiver(caregiverId, payload) {
   const caregiver = normalizeCaregiverPayload(payload);
   if (caregiver.error) return caregiver;
 
-  const result = await query(
-    `
-      UPDATE public.vyva_user_caregivers
-      SET caretaker_name = $2, caretaker_phone = $3, updated_at = now()
-      WHERE id = $1
-      RETURNING *, id::text, vyva_user_id::text
-    `,
-    [caregiverId, caregiver.value.caretaker_name, caregiver.value.caretaker_phone],
-  );
-
-  if (!result.rows[0]) return { notFound: true };
-  return { value: result.rows[0] };
+  const result = await updateCareProviderAssignment(caregiverId, {
+    ...payload,
+    caretaker_name: caregiver.value.caretaker_name,
+    caretaker_phone: caregiver.value.caretaker_phone,
+  });
+  return result.value ? { value: compatibilityCaregiverRow(result.value) } : result;
 }
 
 async function deleteCaregiver(caregiverId) {
-  const result = await query("DELETE FROM public.vyva_user_caregivers WHERE id = $1 RETURNING id::text", [caregiverId]);
-  return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
+  return deleteCareProviderAssignment(caregiverId);
 }
 
 function normalizeHealthPayload(payload) {
@@ -1459,16 +1950,14 @@ async function syncOnboardingRelatedData(userId, registration) {
   ]);
 
   if (Array.isArray(registration.caregivers)) {
-    await query("DELETE FROM public.vyva_user_caregivers WHERE vyva_user_id = $1", [userId]);
+    const caregivers = [];
     for (const caregiver of registration.caregivers.map(objectValue)) {
       const name = nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.name, caregiver.full_name, caregiver.fullName));
       const phone = nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber));
       if (!name && !phone) continue;
-      await query(
-        "INSERT INTO public.vyva_user_caregivers (vyva_user_id, caretaker_name, caretaker_phone) VALUES ($1, $2, $3)",
-        [userId, name, phone],
-      );
+      caregivers.push({ caretaker_name: name, caretaker_phone: phone });
     }
+    await replaceCaregiversWithClient({ query }, userId, caregivers);
   }
 
   if (Array.isArray(registration.medications)) {
@@ -1594,6 +2083,27 @@ function sendWriteResult(res, result, okStatus = 200) {
   }
   res.status(okStatus).json(result.value);
 }
+
+app.get("/api/v1/care-providers", asyncRoute(async (req, res) => {
+  res.json({
+    providers: await loadCareProviders({
+      search: req.query.search,
+      type: req.query.type,
+    }),
+  });
+}));
+
+app.post("/api/v1/user-dashboard/users/:id/care-providers", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await assignCareProvider(req.params.id, req.body), 201);
+}));
+
+app.patch("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await updateCareProviderAssignment(req.params.id, req.body));
+}));
+
+app.delete("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await deleteCareProviderAssignment(req.params.id));
+}));
 
 app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
   sendWriteResult(res, await createMedication(req.body), 201);

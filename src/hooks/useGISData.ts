@@ -20,6 +20,10 @@ export interface GISUser {
   healthConditions: number;
   missedMeds7d: number;
   riskScore: number;
+  careProviderCount?: number;
+  primaryCaregiverName?: string | null;
+  primaryProfessionalName?: string | null;
+  careProviderNames?: string[];
 }
 
 export interface ActiveAlert {
