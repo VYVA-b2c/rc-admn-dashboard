@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 
 function initials(email?: string | null) {
   if (!email) return "AN";
@@ -16,6 +17,8 @@ function initials(email?: string | null) {
 export function DashboardLayout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { t } = useLanguage();
+  const { data: currentContext } = useCurrentUserContext();
+  const organizationName = currentContext?.user.organization?.name || t("layout.organization");
 
   return (
     <SidebarProvider>
@@ -27,7 +30,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
 
             <div className="min-w-0 max-[420px]:hidden">
               <p className="text-sm font-bold text-foreground">{t("layout.product")}</p>
-              <p className="hidden text-xs text-muted-foreground sm:block">{t("layout.organization")}</p>
+              <p className="hidden truncate text-xs text-muted-foreground sm:block">{organizationName}</p>
             </div>
 
             <div className="ml-auto flex items-center gap-3">

@@ -26,6 +26,13 @@ const isProduction =
 const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const apiAuthBypass =
+  process.env.AUTH_BYPASS === "true" ||
+  process.env.VITE_AUTH_BYPASS === "true" ||
+  (!isProduction && (!supabaseUrl || !supabaseAnonKey));
+const tokenUserCache = new Map();
 
 function sslConfig(connectionString) {
   if (!connectionString) return undefined;
@@ -115,6 +122,334 @@ async function optionalRows(text, params = []) {
   }
 }
 
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function platformAdminEmails() {
+  return String(process.env.VYVA_PLATFORM_ADMIN_EMAILS || process.env.PLATFORM_ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+async function defaultOrganization() {
+  const result = await query(
+    `
+      SELECT id::text, slug, name, country, default_language, timezone, active
+      FROM public.organizations
+      WHERE slug = 'red-cross-leipzig'
+      LIMIT 1
+    `,
+  );
+  return result.rows[0] || null;
+}
+
+async function loadOrganizations({ includeInactive = false } = {}) {
+  const result = await query(
+    `
+      SELECT id::text, slug, name, country, default_language, timezone, active, created_at, updated_at
+      FROM public.organizations
+      WHERE ($1::boolean = true OR active = true)
+      ORDER BY name ASC
+    `,
+    [includeInactive],
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    slug: row.slug,
+    name: row.name,
+    country: row.country,
+    defaultLanguage: row.default_language,
+    timezone: row.timezone,
+    active: Boolean(row.active),
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  }));
+}
+
+async function loadOrganizationById(id) {
+  const result = await query(
+    `
+      SELECT id::text, slug, name, country, default_language, timezone, active, created_at, updated_at
+      FROM public.organizations
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id],
+  );
+  return organizationRow(result.rows[0]);
+}
+
+async function verifySupabaseToken(token) {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  const cached = tokenUserCache.get(token);
+  if (cached && cached.expiresAt > Date.now()) return cached.user;
+
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/user`, {
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!response.ok) return null;
+  const user = await response.json();
+  tokenUserCache.set(token, { user, expiresAt: Date.now() + 60_000 });
+  return user;
+}
+
+async function loadUserContext(user) {
+  const rolesResult = await query(
+    `
+      SELECT role::text, organization_id::text
+      FROM public.user_roles
+      WHERE user_id = $1
+      ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'coordinator' THEN 1 ELSE 2 END
+    `,
+    [user.id],
+  );
+  const profileResult = await query(
+    `
+      SELECT
+        p.user_id,
+        p.full_name,
+        p.email,
+        p.organization_id::text,
+        p.is_platform_admin,
+        o.id::text AS org_id,
+        o.slug AS org_slug,
+        o.name AS org_name,
+        o.country AS org_country,
+        o.default_language,
+        o.timezone
+      FROM public.profiles p
+      LEFT JOIN public.organizations o ON o.id = p.organization_id
+      WHERE p.user_id = $1
+      LIMIT 1
+    `,
+    [user.id],
+  );
+  const profile = profileResult.rows[0] || null;
+  const email = String(user.email || profile?.email || "").toLowerCase();
+  const isPlatformAdmin = Boolean(profile?.is_platform_admin) || platformAdminEmails().includes(email);
+  const roles = rolesResult.rows.map((row) => row.role);
+  const primaryRole = roles.includes("admin") ? "admin" : roles[0] || "operator";
+  const roleOrg = rolesResult.rows.find((row) => row.organization_id)?.organization_id;
+  let organization = profile?.org_id
+    ? {
+        id: profile.org_id,
+        slug: profile.org_slug,
+        name: profile.org_name,
+        country: profile.org_country,
+        defaultLanguage: profile.default_language,
+        timezone: profile.timezone,
+      }
+    : null;
+
+  if (!organization && roleOrg) {
+    const orgResult = await query(
+      `
+        SELECT id::text, slug, name, country, default_language, timezone
+        FROM public.organizations
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [roleOrg],
+    );
+    const row = orgResult.rows[0];
+    if (row) {
+      organization = {
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
+        country: row.country,
+        defaultLanguage: row.default_language,
+        timezone: row.timezone,
+      };
+    }
+  }
+
+  if (!organization) {
+    const defaultOrg = await defaultOrganization();
+    organization = {
+      id: defaultOrg?.id || null,
+      slug: defaultOrg?.slug || null,
+      name: defaultOrg?.name || null,
+      country: defaultOrg?.country || null,
+      defaultLanguage: defaultOrg?.default_language || "de",
+      timezone: defaultOrg?.timezone || "Europe/Berlin",
+    };
+  }
+
+  return {
+    userId: user.id,
+    email,
+    roles,
+    role: primaryRole,
+    isAdmin: roles.includes("admin") || isPlatformAdmin,
+    isPlatformAdmin,
+    organizationId: organization.id,
+    organization,
+  };
+}
+
+async function applyOrganizationOverride(req, context) {
+  const overrideId = req.get("x-organization-id") || req.query.organization_id;
+  if (!overrideId) return context;
+  if (!context?.isPlatformAdmin) throw httpError(403, "Platform admin access required");
+  const organization = await loadOrganizationById(overrideId);
+  if (!organization?.id || !organization.active) throw httpError(404, "Organization not found");
+  return {
+    ...context,
+    organizationId: organization.id,
+    organization,
+  };
+}
+
+async function resolveRequestContext(req, options = {}) {
+  if (options.auth === "none") return null;
+
+  const authorization = req.get("authorization") || "";
+  const token = authorization.toLowerCase().startsWith("bearer ") ? authorization.slice(7).trim() : null;
+
+  if (!token) {
+    if (!apiAuthBypass) throw httpError(401, "Authentication required");
+    const org = await defaultOrganization();
+    return applyOrganizationOverride(req, {
+      userId: "preview",
+      email: null,
+      roles: ["admin"],
+      role: "admin",
+      isAdmin: true,
+      isPlatformAdmin: true,
+      organizationId: org?.id || null,
+      organization: {
+        id: org?.id || null,
+        slug: org?.slug || "red-cross-leipzig",
+        name: org?.name || "Red Cross Leipzig",
+        country: org?.country || "Germany",
+        defaultLanguage: org?.default_language || "de",
+        timezone: org?.timezone || "Europe/Berlin",
+      },
+    });
+  }
+
+  const user = await verifySupabaseToken(token);
+  if (!user?.id) throw httpError(401, "Invalid session");
+  const context = await loadUserContext(user);
+  return applyOrganizationOverride(req, context);
+}
+
+function requireAdmin(context) {
+  if (!context?.isAdmin) throw httpError(403, "Admin access required");
+}
+
+function requirePlatformAdmin(context) {
+  if (!context?.isPlatformAdmin) throw httpError(403, "Platform admin access required");
+}
+
+function scopeOrganizationId(context) {
+  if (!context?.organizationId) throw httpError(403, "Organization access required");
+  return context.organizationId;
+}
+
+function publicContext(context) {
+  return {
+    userId: context?.userId || null,
+    email: context?.email || null,
+    role: context?.role || "operator",
+    roles: context?.roles || [],
+    isAdmin: Boolean(context?.isAdmin),
+    isPlatformAdmin: Boolean(context?.isPlatformAdmin),
+    organization: context?.organization || null,
+  };
+}
+
+function organizationRow(row) {
+  return row
+    ? {
+        id: row.id,
+        slug: row.slug,
+        name: row.name,
+        country: row.country,
+        defaultLanguage: row.default_language,
+        timezone: row.timezone,
+        active: Boolean(row.active),
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+      }
+    : null;
+}
+
+function normalizeOrganizationPayload(payload = {}, creating = false) {
+  const name = nullIfBlank(payload.name);
+  const slug = nullIfBlank(payload.slug)?.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-|-$/g, "");
+  const defaultLanguage = nullIfBlank(firstValue(payload.defaultLanguage, payload.default_language)) || (creating ? "de" : null);
+  const timezone = nullIfBlank(payload.timezone) || (creating ? (defaultLanguage === "es" ? "Europe/Madrid" : "Europe/Berlin") : null);
+  const active = optionalBooleanValue(payload.active);
+  if (creating && !name) return { error: "name is required" };
+  if (creating && !slug) return { error: "slug is required" };
+  if (defaultLanguage && !["en", "de", "es"].includes(defaultLanguage)) return { error: "default_language must be en, de, or es" };
+  return {
+    value: {
+      name,
+      slug,
+      country: nullIfBlank(payload.country),
+      default_language: defaultLanguage,
+      timezone,
+      active: active ?? (creating ? true : null),
+    },
+  };
+}
+
+async function resolveOrganizationFromRegistration(registration) {
+  const id = nullIfBlank(firstValue(registration.organization_id, registration.organizationId, registration.org_id, registration.orgId));
+  const slug = nullIfBlank(firstValue(registration.organization_slug, registration.organizationSlug, registration.org_slug, registration.orgSlug, registration.org));
+  const name = nullIfBlank(firstValue(registration.organization_name, registration.organizationName));
+  const country = nullIfBlank(registration.country)?.toLowerCase();
+
+  if (id) {
+    const result = await query(
+      "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE id = $1 AND active = true LIMIT 1",
+      [id],
+    );
+    if (result.rows[0]) return result.rows[0];
+  }
+
+  const inferredSlug =
+    slug ||
+    (country?.includes("spain") || country?.includes("espa") ? "red-cross-zamora" : null) ||
+    (country?.includes("germany") || country?.includes("deutsch") ? "red-cross-leipzig" : null);
+  if (inferredSlug) {
+    const result = await query(
+      "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE slug = $1 AND active = true LIMIT 1",
+      [inferredSlug],
+    );
+    if (result.rows[0]) return result.rows[0];
+  }
+
+  if (name) {
+    const result = await query(
+      "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE LOWER(name) = LOWER($1) AND active = true LIMIT 1",
+      [name],
+    );
+    if (result.rows[0]) return result.rows[0];
+  }
+
+  return defaultOrganization();
+}
+
+async function userBelongsToOrganization(userId, context, client = { query }) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await client.query(
+    "SELECT id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
+    [userId, organizationId],
+  );
+  return Boolean(result.rows[0]);
+}
+
 async function initializeDatabase() {
   if (!pool) return;
   const schema = fs.readFileSync(schemaPath, "utf8");
@@ -122,13 +457,14 @@ async function initializeDatabase() {
   console.log("Database schema is ready.");
 }
 
-function asyncRoute(handler) {
+function asyncRoute(handler, options = {}) {
   return async (req, res, next) => {
     try {
       if (!pool) {
         dbUnavailable(res);
         return;
       }
+      req.context = await resolveRequestContext(req, options);
       await handler(req, res);
     } catch (error) {
       next(error);
@@ -177,7 +513,8 @@ function dashboardUser(row) {
   };
 }
 
-async function loadDashboardUsers() {
+async function loadDashboardUsers(context) {
+  const organizationId = scopeOrganizationId(context);
   const users = await query(`
     WITH sensor_counts AS (
       SELECT
@@ -251,8 +588,9 @@ async function loadDashboardUsers() {
     LEFT JOIN missed_med_counts m ON m.vyva_user_id = u.id
     LEFT JOIN public.vyva_user_checkins c ON c.vyva_user_id = u.id
     LEFT JOIN care_provider_counts cp ON cp.vyva_user_id = u.id
+    WHERE u.organization_id = $1
     ORDER BY COALESCE(a.critical_alerts, 0) DESC, COALESCE(a.active_alerts, 0) DESC, u.created_at DESC
-  `);
+  `, [organizationId]);
 
   const alerts = await optionalRows(`
     SELECT
@@ -267,23 +605,48 @@ async function loadDashboardUsers() {
       u.phone
     FROM public.vyva_sensor_alerts a
     JOIN public.vyva_users u ON u.id = a.vyva_user_id
-    WHERE a.resolved_at IS NULL
+    WHERE a.resolved_at IS NULL AND u.organization_id = $1
     ORDER BY
       CASE a.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
       a.created_at DESC
     LIMIT 50
-  `);
+  `, [organizationId]);
 
   const cityRows = await query(`
     SELECT COALESCE(NULLIF(city, ''), 'Unknown') AS city, COUNT(*)::int AS count
     FROM public.vyva_users
+    WHERE organization_id = $1
     GROUP BY COALESCE(NULLIF(city, ''), 'Unknown')
     ORDER BY count DESC, city ASC
-  `);
+  `, [organizationId]);
 
-  const caregiverRows = await query("SELECT COUNT(*)::int AS count FROM public.vyva_user_care_provider_assignments");
-  const checkinRows = await query("SELECT COUNT(*)::int AS count FROM public.vyva_user_checkins WHERE enabled = true");
-  const sensorRows = await optionalRows("SELECT COUNT(*)::int AS count FROM public.vyva_user_sensors");
+  const caregiverRows = await query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM public.vyva_user_care_provider_assignments a
+      JOIN public.vyva_users u ON u.id = a.vyva_user_id
+      WHERE u.organization_id = $1
+    `,
+    [organizationId],
+  );
+  const checkinRows = await query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM public.vyva_user_checkins c
+      JOIN public.vyva_users u ON u.id = c.vyva_user_id
+      WHERE c.enabled = true AND u.organization_id = $1
+    `,
+    [organizationId],
+  );
+  const sensorRows = await optionalRows(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM public.vyva_user_sensors s
+      JOIN public.vyva_users u ON u.id = s.vyva_user_id
+      WHERE u.organization_id = $1
+    `,
+    [organizationId],
+  );
 
   const gisUsers = users.rows.map(dashboardUser);
   const activeAlertCount = alerts.length;
@@ -383,6 +746,7 @@ async function ensureCampaignTargets(campaigns, dashboardUsers) {
       await query(
         `
           INSERT INTO public.campaign_targets (
+            organization_id,
             campaign_id,
             vyva_user_id,
             status,
@@ -391,10 +755,11 @@ async function ensureCampaignTargets(campaigns, dashboardUsers) {
             owner,
             channel
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (campaign_id, vyva_user_id) DO NOTHING
         `,
         [
+          campaign.organization_id,
           campaign.id,
           user.id,
           status,
@@ -412,6 +777,7 @@ function normalizeCampaign(row, targets = []) {
   const hasTargets = targets.length > 0;
   return {
     id: row.id,
+    organizationId: row.organization_id,
     slug: row.slug,
     name: row.name,
     nameKey: row.name_key,
@@ -442,10 +808,12 @@ function normalizeCampaign(row, targets = []) {
   };
 }
 
-async function loadCampaigns() {
+async function loadCampaigns(context) {
+  const organizationId = scopeOrganizationId(context);
   const campaignResult = await query(`
     SELECT
       id::text,
+      organization_id::text,
       slug,
       name,
       name_key,
@@ -471,12 +839,13 @@ async function loadCampaigns() {
       follow_up_count,
       tone
     FROM public.campaigns
+    WHERE organization_id = $1
     ORDER BY
       CASE status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
       created_at DESC
-  `);
+  `, [organizationId]);
   const campaigns = campaignResult.rows;
-  const dashboardData = await loadDashboardUsers();
+  const dashboardData = await loadDashboardUsers(context);
   const usersById = new Map(dashboardData.gisUsers.map((user) => [user.id, user]));
 
   await ensureCampaignTargets(campaigns, dashboardData.gisUsers);
@@ -494,12 +863,12 @@ async function loadCampaigns() {
             owner,
             channel
           FROM public.campaign_targets
-          WHERE campaign_id = ANY($1::uuid[])
+          WHERE organization_id = $2 AND campaign_id = ANY($1::uuid[])
           ORDER BY
             CASE status WHEN 'followUp' THEN 0 WHEN 'pending' THEN 1 WHEN 'contacted' THEN 2 ELSE 3 END,
             created_at ASC
         `,
-        [campaigns.map((campaign) => campaign.id)],
+        [campaigns.map((campaign) => campaign.id), organizationId],
       )
     : { rows: [] };
 
@@ -597,16 +966,17 @@ function normalizeCallRun(row) {
   };
 }
 
-async function buildCampaignCallPreview(campaignId, payload = {}) {
+async function buildCampaignCallPreview(campaignId, payload = {}, context) {
+  const organizationId = scopeOrganizationId(context);
   const settings = normalizeCampaignCallSettings(payload);
   const campaignResult = await query(
     `
-      SELECT id::text, city, call_script, call_window_start, call_window_end, retry_limit
+      SELECT id::text, organization_id::text, city, call_script, call_window_start, call_window_end, retry_limit
       FROM public.campaigns
-      WHERE id = $1
+      WHERE id = $1 AND organization_id = $2
       LIMIT 1
     `,
-    [campaignId],
+    [campaignId, organizationId],
   );
   const campaign = campaignResult.rows[0];
   if (!campaign) return null;
@@ -632,10 +1002,11 @@ async function buildCampaignCallPreview(campaignId, payload = {}) {
         ) AS duplicate_target
       FROM public.vyva_users u
       LEFT JOIN public.vyva_user_consent c ON c.vyva_user_id = u.id
-      WHERE ($2::text IS NULL OR LOWER(COALESCE(u.city, '')) = LOWER($2::text))
+      WHERE u.organization_id = $3
+        AND ($2::text IS NULL OR LOWER(COALESCE(u.city, '')) = LOWER($2::text))
       ORDER BY u.created_at DESC
     `,
-    [campaignId, city],
+    [campaignId, city, organizationId],
   );
 
   const skipped = {
@@ -675,6 +1046,7 @@ async function buildCampaignCallPreview(campaignId, payload = {}) {
 
   return {
     campaignId,
+    organizationId,
     scheduledAt,
     callWindowStart,
     callWindowEnd,
@@ -687,8 +1059,8 @@ async function buildCampaignCallPreview(campaignId, payload = {}) {
   };
 }
 
-async function createCampaignCallRun(campaignId, payload = {}) {
-  const preview = await buildCampaignCallPreview(campaignId, payload);
+async function createCampaignCallRun(campaignId, payload = {}, context) {
+  const preview = await buildCampaignCallPreview(campaignId, payload, context);
   if (!preview) return null;
 
   const scheduledAt = preview.scheduledAt ?? null;
@@ -704,6 +1076,7 @@ async function createCampaignCallRun(campaignId, payload = {}) {
     const runResult = await client.query(
       `
         INSERT INTO public.campaign_call_runs (
+          organization_id,
           campaign_id,
           status,
           scheduled_at,
@@ -716,10 +1089,11 @@ async function createCampaignCallRun(campaignId, payload = {}) {
           retry_limit,
           created_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING id::text
       `,
       [
+        preview.organizationId,
         campaignId,
         runStatus,
         scheduledAt,
@@ -740,6 +1114,7 @@ async function createCampaignCallRun(campaignId, payload = {}) {
       await client.query(
         `
           INSERT INTO public.campaign_call_jobs (
+            organization_id,
             run_id,
             campaign_id,
             vyva_user_id,
@@ -747,10 +1122,11 @@ async function createCampaignCallRun(campaignId, payload = {}) {
             skip_reason,
             scheduled_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (run_id, vyva_user_id) DO NOTHING
         `,
         [
+          preview.organizationId,
           runId,
           campaignId,
           target.userId,
@@ -771,7 +1147,8 @@ async function createCampaignCallRun(campaignId, payload = {}) {
   }
 }
 
-async function loadCampaignCallRuns(campaignId) {
+async function loadCampaignCallRuns(campaignId, context) {
+  const organizationId = scopeOrganizationId(context);
   const result = await query(
     `
       SELECT
@@ -795,11 +1172,11 @@ async function loadCampaignCallRuns(campaignId) {
         r.updated_at
       FROM public.campaign_call_runs r
       LEFT JOIN public.campaign_call_jobs j ON j.run_id = r.id
-      WHERE r.campaign_id = $1
+      WHERE r.campaign_id = $1 AND r.organization_id = $2
       GROUP BY r.id
       ORDER BY r.created_at DESC
     `,
-    [campaignId],
+    [campaignId, organizationId],
   );
 
   return result.rows.map(normalizeCallRun);
@@ -828,7 +1205,8 @@ function normalizeCheckin(row) {
   };
 }
 
-async function loadCheckins() {
+async function loadCheckins(context) {
+  const organizationId = scopeOrganizationId(context);
   const result = await query(`
     SELECT
       c.id::text,
@@ -843,8 +1221,9 @@ async function loadCheckins() {
       u.city
     FROM public.vyva_user_checkins c
     JOIN public.vyva_users u ON u.id = c.vyva_user_id
+    WHERE u.organization_id = $1
     ORDER BY c.enabled DESC, u.last_name ASC, u.first_name ASC
-  `);
+  `, [organizationId]);
   return result.rows.map(normalizeCheckin);
 }
 
@@ -858,8 +1237,12 @@ function validateCheckinPayload(payload, creating = false) {
   return null;
 }
 
-async function loadUserInfo(userId) {
-  const userResult = await query("SELECT *, id::text FROM public.vyva_users WHERE id = $1 LIMIT 1", [userId]);
+async function loadUserInfo(userId, context) {
+  const organizationId = scopeOrganizationId(context);
+  const userResult = await query(
+    "SELECT *, id::text, organization_id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
+    [userId, organizationId],
+  );
   const user = userResult.rows[0];
   if (!user) return null;
 
@@ -869,7 +1252,7 @@ async function loadUserInfo(userId) {
     optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    loadUserCareProviders(userId),
+    loadUserCareProviders(userId, context),
     optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId]),
   ]);
@@ -909,11 +1292,11 @@ function nullIfBlank(value) {
   return text ? text : null;
 }
 
-function normalizeUserPayload(payload, creating = false) {
+function normalizeUserPayload(payload, creating = false, organization = null) {
   const firstName = nullIfBlank(payload?.first_name);
   const lastName = nullIfBlank(payload?.last_name);
   const dateOfBirth = nullIfBlank(payload?.date_of_birth);
-  const language = nullIfBlank(payload?.language) || "de";
+  const language = nullIfBlank(payload?.language) || organization?.defaultLanguage || "de";
 
   if (!firstName) return { error: "first_name is required" };
   if (!lastName) return { error: "last_name is required" };
@@ -929,8 +1312,8 @@ function normalizeUserPayload(payload, creating = false) {
       street: nullIfBlank(payload?.street),
       house_number: nullIfBlank(payload?.house_number),
       post_code: nullIfBlank(payload?.post_code),
-      country: nullIfBlank(payload?.country) || (creating ? "Germany" : null),
-      timezone: nullIfBlank(payload?.timezone) || (creating ? "Europe/Berlin" : null),
+      country: nullIfBlank(payload?.country) || (creating ? organization?.country || "Germany" : null),
+      timezone: nullIfBlank(payload?.timezone) || (creating ? organization?.timezone || "Europe/Berlin" : null),
       date_of_birth: dateOfBirth,
       gender: nullIfBlank(payload?.gender),
       language,
@@ -1108,7 +1491,8 @@ function careProviderAssignmentRow(row) {
   };
 }
 
-async function loadUserCareProviders(userId) {
+async function loadUserCareProviders(userId, context = null) {
+  const organizationId = context ? scopeOrganizationId(context) : null;
   const rows = await optionalRows(
     `
       SELECT
@@ -1127,17 +1511,19 @@ async function loadUserCareProviders(userId) {
         a.created_at,
         a.updated_at
       FROM public.vyva_user_care_provider_assignments a
+      JOIN public.vyva_users u ON u.id = a.vyva_user_id
       LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
       LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
       WHERE a.vyva_user_id = $1
+        AND ($2::uuid IS NULL OR u.organization_id = $2)
       ORDER BY a.is_primary DESC, a.provider_type ASC, COALESCE(c.full_name, fs.full_name) ASC
     `,
-    [userId],
+    [userId, organizationId],
   );
   return rows.map(careProviderAssignmentRow);
 }
 
-async function loadCareProviderAssignmentByIdWithClient(client, assignmentId) {
+async function loadCareProviderAssignmentByIdWithClient(client, assignmentId, organizationId = null) {
   const result = await client.query(
     `
       SELECT
@@ -1156,17 +1542,20 @@ async function loadCareProviderAssignmentByIdWithClient(client, assignmentId) {
         a.created_at,
         a.updated_at
       FROM public.vyva_user_care_provider_assignments a
+      JOIN public.vyva_users u ON u.id = a.vyva_user_id
       LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
       LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
       WHERE a.id = $1
+        AND ($2::uuid IS NULL OR u.organization_id = $2)
       LIMIT 1
     `,
-    [assignmentId],
+    [assignmentId, organizationId],
   );
   return result.rows[0] ? careProviderAssignmentRow(result.rows[0]) : null;
 }
 
-async function loadCareProviders(filters = {}) {
+async function loadCareProviders(filters = {}, context) {
+  const organizationId = scopeOrganizationId(context);
   const search = nullIfBlank(filters.search)?.toLowerCase() || null;
   const type = filters.type && filters.type !== "all" ? normalizeCareProviderType(filters.type) : null;
   const rows = await optionalRows(
@@ -1186,6 +1575,7 @@ async function loadCareProviders(filters = {}) {
         FROM public.vyva_user_care_provider_assignments a
         JOIN public.vyva_users u ON u.id = a.vyva_user_id
         WHERE a.provider_type = 'caregiver'
+          AND u.organization_id = $3
         GROUP BY a.care_provider_contact_id
       ),
       field_staff_counts AS (
@@ -1203,6 +1593,7 @@ async function loadCareProviders(filters = {}) {
         FROM public.vyva_user_care_provider_assignments a
         JOIN public.vyva_users u ON u.id = a.vyva_user_id
         WHERE a.provider_type = 'field_staff'
+          AND u.organization_id = $3
         GROUP BY a.field_staff_id
       )
       SELECT
@@ -1223,6 +1614,7 @@ async function loadCareProviders(filters = {}) {
       LEFT JOIN caregiver_counts cc ON cc.provider_id = c.id
       WHERE
         c.active = true
+        AND c.organization_id = $3
         AND ($1::text IS NULL OR LOWER(c.full_name) LIKE '%' || $1 || '%' OR COALESCE(c.phone, '') LIKE '%' || $1 || '%')
         AND ($2::text IS NULL OR $2 = 'caregiver')
       UNION ALL
@@ -1244,17 +1636,18 @@ async function loadCareProviders(filters = {}) {
       LEFT JOIN field_staff_counts fc ON fc.provider_id = fs.id
       WHERE
         fs.active = true
+        AND fs.organization_id = $3
         AND ($1::text IS NULL OR LOWER(fs.full_name) LIKE '%' || $1 || '%' OR LOWER(COALESCE(fs.team, '')) LIKE '%' || $1 || '%' OR COALESCE(fs.phone, '') LIKE '%' || $1 || '%')
         AND ($2::text IS NULL OR $2 = 'field_staff')
       ORDER BY display_name ASC
       LIMIT 100
     `,
-    [search, type],
+    [search, type, organizationId],
   );
   return rows.map(careProviderAssignmentRow);
 }
 
-async function upsertCareProviderContactWithClient(client, payload) {
+async function upsertCareProviderContactWithClient(client, payload, organizationId) {
   const caregiver = normalizeCaregiverPayload(payload);
   if (caregiver.error) return caregiver;
 
@@ -1264,8 +1657,8 @@ async function upsertCareProviderContactWithClient(client, payload) {
 
   if (digits) {
     const existing = await client.query(
-      "SELECT id::text FROM public.care_provider_contacts WHERE phone_digits = $1 LIMIT 1",
-      [digits],
+      "SELECT id::text FROM public.care_provider_contacts WHERE organization_id = $1 AND phone_digits = $2 LIMIT 1",
+      [organizationId, digits],
     );
     if (existing.rows[0]) {
       const result = await client.query(
@@ -1283,20 +1676,21 @@ async function upsertCareProviderContactWithClient(client, payload) {
 
   const result = await client.query(
     `
-      INSERT INTO public.care_provider_contacts (full_name, phone, phone_digits)
-      VALUES ($1, $2, $3)
+      INSERT INTO public.care_provider_contacts (organization_id, full_name, phone, phone_digits)
+      VALUES ($1, $2, $3, $4)
       RETURNING id::text, full_name, phone, phone_digits
     `,
-    [fullName, phone, digits],
+    [organizationId, fullName, phone, digits],
   );
   return { value: result.rows[0] };
 }
 
-async function createCareProviderContact(payload) {
+async function createCareProviderContact(payload, context) {
+  const organizationId = scopeOrganizationId(context);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const contact = await upsertCareProviderContactWithClient(client, payload);
+    const contact = await upsertCareProviderContactWithClient(client, payload, organizationId);
     if (contact.error) {
       await client.query("ROLLBACK");
       return contact;
@@ -1319,10 +1713,10 @@ async function createCareProviderContact(payload) {
           c.created_at,
           c.updated_at
         FROM public.care_provider_contacts c
-        WHERE c.id = $1
+        WHERE c.id = $1 AND c.organization_id = $2
         LIMIT 1
       `,
-      [contact.value.id],
+      [contact.value.id, organizationId],
     );
     await client.query("COMMIT");
     return result.rows[0] ? { value: careProviderAssignmentRow(result.rows[0]) } : { notFound: true };
@@ -1348,7 +1742,7 @@ async function shouldMakePrimaryWithClient(client, userId, providerType, request
   return !existing.rows[0];
 }
 
-async function assignCareProviderWithClient(client, userId, payload) {
+async function assignCareProviderWithClient(client, userId, payload, organizationId) {
   const providerType = normalizeCareProviderType(firstValue(payload?.provider_type, payload?.type));
   const providerPayload = objectValue(firstValue(payload?.provider, payload?.caregiver, payload?.contact));
   const relationshipLabel = nullIfBlank(firstValue(payload?.relationship_label, payload?.relationship, payload?.role));
@@ -1361,7 +1755,10 @@ async function assignCareProviderWithClient(client, userId, payload) {
     const fieldStaffId = nullIfBlank(firstValue(payload?.field_staff_id, payload?.provider_id, providerPayload.id));
     if (!fieldStaffId) return { error: "field_staff_id is required" };
 
-    const staff = await client.query("SELECT id::text FROM public.field_staff WHERE id = $1 AND active = true LIMIT 1", [fieldStaffId]);
+    const staff = await client.query(
+      "SELECT id::text FROM public.field_staff WHERE id = $1 AND organization_id = $2 AND active = true LIMIT 1",
+      [fieldStaffId, organizationId],
+    );
     if (!staff.rows[0]) return { error: "field_staff provider not found" };
 
     if (makePrimary) {
@@ -1397,8 +1794,8 @@ async function assignCareProviderWithClient(client, userId, payload) {
     let contact;
     if (existingContactId) {
       const contactResult = await client.query(
-        "SELECT id::text FROM public.care_provider_contacts WHERE id = $1 AND active = true LIMIT 1",
-        [existingContactId],
+        "SELECT id::text FROM public.care_provider_contacts WHERE id = $1 AND organization_id = $2 AND active = true LIMIT 1",
+        [existingContactId, organizationId],
       );
       if (!contactResult.rows[0]) return { error: "care provider contact not found" };
       contact = contactResult.rows[0];
@@ -1406,7 +1803,7 @@ async function assignCareProviderWithClient(client, userId, payload) {
       const contactResult = await upsertCareProviderContactWithClient(client, {
         ...providerPayload,
         ...payload,
-      });
+      }, organizationId);
       if (contactResult.error) return contactResult;
       contact = contactResult.value;
     }
@@ -1441,21 +1838,25 @@ async function assignCareProviderWithClient(client, userId, payload) {
     );
   }
 
-  const assignment = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id);
+  const assignment = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id, organizationId);
   return assignment ? { value: assignment } : { notFound: true };
 }
 
-async function assignCareProvider(userId, payload) {
+async function assignCareProvider(userId, payload, context) {
+  const organizationId = scopeOrganizationId(context);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const userResult = await client.query("SELECT id::text FROM public.vyva_users WHERE id = $1 LIMIT 1", [userId]);
+    const userResult = await client.query(
+      "SELECT id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
+      [userId, organizationId],
+    );
     if (!userResult.rows[0]) {
       await client.query("ROLLBACK");
       return { notFound: true };
     }
 
-    const result = await assignCareProviderWithClient(client, userId, payload);
+    const result = await assignCareProviderWithClient(client, userId, payload, organizationId);
     if (result.error || result.notFound) {
       await client.query("ROLLBACK");
       return result;
@@ -1470,23 +1871,26 @@ async function assignCareProvider(userId, payload) {
   }
 }
 
-async function updateCareProviderAssignment(assignmentId, payload) {
+async function updateCareProviderAssignment(assignmentId, payload, context) {
+  const organizationId = scopeOrganizationId(context);
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const existing = await client.query(
       `
         SELECT
-          id::text,
-          vyva_user_id::text,
-          provider_type,
-          care_provider_contact_id::text,
-          field_staff_id::text
-        FROM public.vyva_user_care_provider_assignments
-        WHERE id = $1
+          a.id::text,
+          a.vyva_user_id::text,
+          a.provider_type,
+          a.care_provider_contact_id::text,
+          a.field_staff_id::text
+        FROM public.vyva_user_care_provider_assignments a
+        JOIN public.vyva_users u ON u.id = a.vyva_user_id
+        WHERE a.id = $1
+          AND u.organization_id = $2
         LIMIT 1
       `,
-      [assignmentId],
+      [assignmentId, organizationId],
     );
     const assignment = existing.rows[0];
     if (!assignment) {
@@ -1510,7 +1914,7 @@ async function updateCareProviderAssignment(assignmentId, payload) {
       ].some((value) => nullIfBlank(value));
 
       if (hasContactEdit) {
-        const contact = await upsertCareProviderContactWithClient(client, payload);
+        const contact = await upsertCareProviderContactWithClient(client, payload, organizationId);
         if (contact.error) {
           await client.query("ROLLBACK");
           return contact;
@@ -1548,7 +1952,7 @@ async function updateCareProviderAssignment(assignmentId, payload) {
       ],
     );
 
-    const updated = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id);
+    const updated = await loadCareProviderAssignmentByIdWithClient(client, result.rows[0].id, organizationId);
     await client.query("COMMIT");
     return updated ? { value: updated } : { notFound: true };
   } catch (error) {
@@ -1559,10 +1963,18 @@ async function updateCareProviderAssignment(assignmentId, payload) {
   }
 }
 
-async function deleteCareProviderAssignment(assignmentId) {
+async function deleteCareProviderAssignment(assignmentId, context) {
+  const organizationId = scopeOrganizationId(context);
   const result = await query(
-    "DELETE FROM public.vyva_user_care_provider_assignments WHERE id = $1 RETURNING id::text",
-    [assignmentId],
+    `
+      DELETE FROM public.vyva_user_care_provider_assignments a
+      USING public.vyva_users u
+      WHERE a.id = $1
+        AND u.id = a.vyva_user_id
+        AND u.organization_id = $2
+      RETURNING a.id::text
+    `,
+    [assignmentId, organizationId],
   );
   return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
 }
@@ -1582,7 +1994,7 @@ function compatibilityCaregiverRow(assignment) {
   };
 }
 
-async function replaceCaregiversWithClient(client, userId, caregivers) {
+async function replaceCaregiversWithClient(client, userId, caregivers, organizationId) {
   await client.query(
     "DELETE FROM public.vyva_user_care_provider_assignments WHERE vyva_user_id = $1 AND provider_type = 'caregiver'",
     [userId],
@@ -1593,7 +2005,7 @@ async function replaceCaregiversWithClient(client, userId, caregivers) {
       provider: caregiver,
       is_primary: index === 0,
       relationship_label: "Caregiver",
-    });
+    }, organizationId);
   }
 }
 
@@ -1633,7 +2045,7 @@ async function upsertServiceWithClient(client, table, userId, config) {
   );
 }
 
-async function syncCareProfileWithClient(client, userId, careProfile) {
+async function syncCareProfileWithClient(client, userId, careProfile, organizationId) {
   if (careProfile.healthPresent && (hasMeaningfulPayloadValue(careProfile.health) || careProfile.health)) {
     await upsertHealthWithClient(client, userId, careProfile.health);
   }
@@ -1641,7 +2053,7 @@ async function syncCareProfileWithClient(client, userId, careProfile) {
     await upsertConsentWithClient(client, userId, careProfile.consent);
   }
   if (careProfile.caregivers) {
-    await replaceCaregiversWithClient(client, userId, careProfile.caregivers);
+    await replaceCaregiversWithClient(client, userId, careProfile.caregivers, organizationId);
   }
   if (careProfile.medications) {
     await replaceMedicationsWithClient(client, userId, careProfile.medications);
@@ -1654,8 +2066,10 @@ async function syncCareProfileWithClient(client, userId, careProfile) {
   }
 }
 
-async function createDashboardUser(payload) {
-  const user = normalizeUserPayload(payload, true);
+async function createDashboardUser(payload, context) {
+  requireAdmin(context);
+  const organizationId = scopeOrganizationId(context);
+  const user = normalizeUserPayload(payload, true, context.organization);
   if (user.error) return user;
 
   const careProfile = normalizeCareProfilePayload(payload, true);
@@ -1667,6 +2081,7 @@ async function createDashboardUser(payload) {
     const result = await client.query(
       `
         INSERT INTO public.vyva_users (
+          organization_id,
           first_name,
           last_name,
           phone,
@@ -1681,10 +2096,11 @@ async function createDashboardUser(payload) {
           language,
           emergency_notes
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *, id::text
       `,
       [
+        organizationId,
         user.value.first_name,
         user.value.last_name,
         user.value.phone,
@@ -1702,7 +2118,7 @@ async function createDashboardUser(payload) {
     );
     const createdUser = result.rows[0];
 
-    await syncCareProfileWithClient(client, createdUser.id, careProfile.value);
+    await syncCareProfileWithClient(client, createdUser.id, careProfile.value, organizationId);
 
     await client.query("COMMIT");
     return { value: createdUser };
@@ -1714,8 +2130,10 @@ async function createDashboardUser(payload) {
   }
 }
 
-async function updateDashboardUser(userId, payload) {
-  const user = normalizeUserPayload(payload);
+async function updateDashboardUser(userId, payload, context) {
+  requireAdmin(context);
+  const organizationId = scopeOrganizationId(context);
+  const user = normalizeUserPayload(payload, false, context.organization);
   if (user.error) return user;
 
   const careProfile = normalizeCareProfilePayload(payload);
@@ -1740,7 +2158,7 @@ async function updateDashboardUser(userId, payload) {
           language = $11,
           emergency_notes = $12,
           updated_at = now()
-        WHERE id = $1
+        WHERE id = $1 AND organization_id = $13
         RETURNING *, id::text
       `,
       [
@@ -1756,6 +2174,7 @@ async function updateDashboardUser(userId, payload) {
         user.value.gender,
         user.value.language,
         user.value.emergency_notes,
+        organizationId,
       ],
     );
 
@@ -1764,7 +2183,7 @@ async function updateDashboardUser(userId, payload) {
       return { notFound: true };
     }
 
-    await syncCareProfileWithClient(client, userId, careProfile.value);
+    await syncCareProfileWithClient(client, userId, careProfile.value, organizationId);
     await client.query("COMMIT");
     return { value: result.rows[0] };
   } catch (error) {
@@ -1791,9 +2210,10 @@ function normalizeMedicationPayload(payload, creating = false) {
   };
 }
 
-async function createMedication(payload) {
+async function createMedication(payload, context) {
   const medication = normalizeMedicationPayload(payload, true);
   if (medication.error) return medication;
+  if (!(await userBelongsToOrganization(medication.value.vyva_user_id, context))) return { notFound: true };
 
   const result = await query(
     `
@@ -1813,16 +2233,20 @@ async function createMedication(payload) {
   return { value: result.rows[0] };
 }
 
-async function updateMedication(medicationId, payload) {
+async function updateMedication(medicationId, payload, context) {
+  const organizationId = scopeOrganizationId(context);
   const medication = normalizeMedicationPayload(payload);
   if (medication.error) return medication;
 
   const result = await query(
     `
-      UPDATE public.vyva_user_medications
+      UPDATE public.vyva_user_medications m
       SET medication_name = $2, purpose = $3, dosage = $4, schedule_times = $5, updated_at = now()
-      WHERE id = $1
-      RETURNING *, id::text, vyva_user_id::text
+      FROM public.vyva_users u
+      WHERE m.id = $1
+        AND u.id = m.vyva_user_id
+        AND u.organization_id = $6
+      RETURNING m.*, m.id::text, m.vyva_user_id::text
     `,
     [
       medicationId,
@@ -1830,6 +2254,7 @@ async function updateMedication(medicationId, payload) {
       medication.value.purpose,
       medication.value.dosage,
       medication.value.schedule_times,
+      organizationId,
     ],
   );
 
@@ -1837,8 +2262,19 @@ async function updateMedication(medicationId, payload) {
   return { value: result.rows[0] };
 }
 
-async function deleteMedication(medicationId) {
-  const result = await query("DELETE FROM public.vyva_user_medications WHERE id = $1 RETURNING id::text", [medicationId]);
+async function deleteMedication(medicationId, context) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await query(
+    `
+      DELETE FROM public.vyva_user_medications m
+      USING public.vyva_users u
+      WHERE m.id = $1
+        AND u.id = m.vyva_user_id
+        AND u.organization_id = $2
+      RETURNING m.id::text
+    `,
+    [medicationId, organizationId],
+  );
   return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
 }
 
@@ -1857,7 +2293,7 @@ function normalizeCaregiverPayload(payload, creating = false) {
   };
 }
 
-async function createCaregiver(payload) {
+async function createCaregiver(payload, context) {
   const caregiver = normalizeCaregiverPayload(payload, true);
   if (caregiver.error) return caregiver;
 
@@ -1866,11 +2302,11 @@ async function createCaregiver(payload) {
     provider: caregiver.value,
     is_primary: optionalBooleanValue(payload?.is_primary, payload?.primary),
     relationship_label: nullIfBlank(firstValue(payload?.relationship_label, payload?.relationship)) || "Caregiver",
-  });
+  }, context);
   return result.value ? { value: compatibilityCaregiverRow(result.value) } : result;
 }
 
-async function updateCaregiver(caregiverId, payload) {
+async function updateCaregiver(caregiverId, payload, context) {
   const caregiver = normalizeCaregiverPayload(payload);
   if (caregiver.error) return caregiver;
 
@@ -1878,12 +2314,12 @@ async function updateCaregiver(caregiverId, payload) {
     ...payload,
     caretaker_name: caregiver.value.caretaker_name,
     caretaker_phone: caregiver.value.caretaker_phone,
-  });
+  }, context);
   return result.value ? { value: compatibilityCaregiverRow(result.value) } : result;
 }
 
-async function deleteCaregiver(caregiverId) {
-  return deleteCareProviderAssignment(caregiverId);
+async function deleteCaregiver(caregiverId, context) {
+  return deleteCareProviderAssignment(caregiverId, context);
 }
 
 function normalizeHealthPayload(payload) {
@@ -1895,7 +2331,8 @@ function normalizeHealthPayload(payload) {
   };
 }
 
-async function upsertHealth(userId, payload) {
+async function upsertHealth(userId, payload, context) {
+  if (!(await userBelongsToOrganization(userId, context))) return { notFound: true };
   const health = normalizeHealthPayload(payload);
   const existing = await query("SELECT id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]);
 
@@ -1936,25 +2373,30 @@ function normalizeServicePayload(payload) {
   };
 }
 
-async function updateCheckinConfig(checkinId, payload) {
+async function updateCheckinConfig(checkinId, payload, context) {
+  const organizationId = scopeOrganizationId(context);
   const config = normalizeServicePayload(payload);
   if (config.error) return config;
 
   const result = await query(
     `
-      UPDATE public.vyva_user_checkins
+      UPDATE public.vyva_user_checkins c
       SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
-      WHERE id = $1
-      RETURNING *, id::text, vyva_user_id::text
+      FROM public.vyva_users u
+      WHERE c.id = $1
+        AND u.id = c.vyva_user_id
+        AND u.organization_id = $5
+      RETURNING c.*, c.id::text, c.vyva_user_id::text
     `,
-    [checkinId, config.value.enabled, config.value.frequency, config.value.preferred_time],
+    [checkinId, config.value.enabled, config.value.frequency, config.value.preferred_time, organizationId],
   );
 
   if (!result.rows[0]) return { notFound: true };
   return { value: result.rows[0] };
 }
 
-async function upsertBrainCoachConfig(userId, payload) {
+async function upsertBrainCoachConfig(userId, payload, context) {
+  if (!(await userBelongsToOrganization(userId, context))) return { notFound: true };
   const config = normalizeServicePayload(payload);
   if (config.error) return config;
 
@@ -1999,9 +2441,9 @@ function hasMeaningfulPayloadValue(value) {
   return String(value).trim() !== "";
 }
 
-function normalizeLanguage(value) {
+function normalizeLanguage(value, fallback = "de") {
   const language = nullIfBlank(value)?.toLowerCase().slice(0, 2);
-  return ["en", "de", "es"].includes(language) ? language : "de";
+  return ["en", "de", "es"].includes(language) ? language : fallback;
 }
 
 function normalizeDateValue(value) {
@@ -2109,16 +2551,19 @@ function normalizePhoneRegistrationPayload(payload = {}) {
     value: {
       first_name: nullIfBlank(firstValue(source.first_name, source.firstName, source.given_name)) || parsedName.firstName || "Unknown",
       last_name: nullIfBlank(firstValue(source.last_name, source.lastName, source.family_name, source.surname)) || parsedName.lastName || "User",
+      organization_id: nullIfBlank(firstValue(source.organization_id, source.organizationId, source.org_id, source.orgId)),
+      organization_slug: nullIfBlank(firstValue(source.organization_slug, source.organizationSlug, source.org_slug, source.orgSlug, source.org)),
+      organization_name: nullIfBlank(firstValue(source.organization_name, source.organizationName)),
       phone: nullIfBlank(phone),
       city: nullIfBlank(firstValue(source.city, source.town, source.locality)),
       street: nullIfBlank(firstValue(source.street, source.address_street, source.addressLine1)),
       house_number: nullIfBlank(firstValue(source.house_number, source.houseNumber, source.house_no, source.houseNo)),
       post_code: nullIfBlank(firstValue(source.post_code, source.postCode, source.postal_code, source.zip)),
-      country: nullIfBlank(source.country) || "Germany",
-      timezone: nullIfBlank(source.timezone) || "Europe/Berlin",
+      country: nullIfBlank(source.country),
+      timezone: nullIfBlank(source.timezone),
       date_of_birth: dateOfBirth,
       gender: nullIfBlank(source.gender),
-      language: normalizeLanguage(firstValue(source.language, source.lang, source.locale)),
+      language: normalizeLanguage(firstValue(source.language, source.lang, source.locale), null),
       emergency_notes: nullIfBlank(firstValue(source.emergency_notes, source.emergencyNotes, source.notes, source.summary)),
       conversation_id: conversationId,
       transcript: nullIfBlank(firstValue(source.transcript, source.call_transcript, source.callTranscript)),
@@ -2141,13 +2586,16 @@ async function findOnboardingUser(registration) {
       SELECT id::text
       FROM public.vyva_users
       WHERE
-        ($1::text IS NOT NULL AND conversation_id = $1)
-        OR ($2::text IS NOT NULL AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = $2)
-        OR ($3::text IS NOT NULL AND phone = $3)
+        organization_id = $4
+        AND (
+          ($1::text IS NOT NULL AND conversation_id = $1)
+          OR ($2::text IS NOT NULL AND regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = $2)
+          OR ($3::text IS NOT NULL AND phone = $3)
+        )
       ORDER BY updated_at DESC
       LIMIT 1
     `,
-    [registration.conversation_id, digits, registration.phone],
+    [registration.conversation_id, digits, registration.phone, registration.organization_id],
   );
 
   return result.rows[0]?.id || null;
@@ -2156,6 +2604,7 @@ async function findOnboardingUser(registration) {
 async function upsertPhoneRegistrationUser(registration) {
   const existingId = await findOnboardingUser(registration);
   const params = [
+    registration.organization_id,
     registration.first_name,
     registration.last_name,
     registration.phone,
@@ -2179,6 +2628,7 @@ async function upsertPhoneRegistrationUser(registration) {
     const result = await query(
       `
         INSERT INTO public.vyva_users (
+          organization_id,
           first_name,
           last_name,
           phone,
@@ -2197,7 +2647,7 @@ async function upsertPhoneRegistrationUser(registration) {
           call_duration,
           call_timestamp
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         RETURNING *, id::text
       `,
       params,
@@ -2209,25 +2659,25 @@ async function upsertPhoneRegistrationUser(registration) {
     `
       UPDATE public.vyva_users
       SET
-        first_name = COALESCE($2, first_name),
-        last_name = COALESCE($3, last_name),
-        phone = COALESCE($4, phone),
-        city = COALESCE($5, city),
-        street = COALESCE($6, street),
-        house_number = COALESCE($7, house_number),
-        post_code = COALESCE($8, post_code),
-        country = COALESCE($9, country),
-        timezone = COALESCE($10, timezone),
-        date_of_birth = COALESCE($11, date_of_birth),
-        gender = COALESCE($12, gender),
-        language = COALESCE($13, language),
-        emergency_notes = COALESCE($14, emergency_notes),
-        conversation_id = COALESCE($15, conversation_id),
-        transcript = COALESCE($16, transcript),
-        call_duration = COALESCE($17, call_duration),
-        call_timestamp = COALESCE($18, call_timestamp),
+        first_name = COALESCE($3, first_name),
+        last_name = COALESCE($4, last_name),
+        phone = COALESCE($5, phone),
+        city = COALESCE($6, city),
+        street = COALESCE($7, street),
+        house_number = COALESCE($8, house_number),
+        post_code = COALESCE($9, post_code),
+        country = COALESCE($10, country),
+        timezone = COALESCE($11, timezone),
+        date_of_birth = COALESCE($12, date_of_birth),
+        gender = COALESCE($13, gender),
+        language = COALESCE($14, language),
+        emergency_notes = COALESCE($15, emergency_notes),
+        conversation_id = COALESCE($16, conversation_id),
+        transcript = COALESCE($17, transcript),
+        call_duration = COALESCE($18, call_duration),
+        call_timestamp = COALESCE($19, call_timestamp),
         updated_at = now()
-      WHERE id = $1
+      WHERE id = $1 AND organization_id = $2
       RETURNING *, id::text
     `,
     [existingId, ...params],
@@ -2277,7 +2727,7 @@ async function syncOnboardingRelatedData(userId, registration) {
       if (!name && !phone) continue;
       caregivers.push({ caretaker_name: name, caretaker_phone: phone });
     }
-    await replaceCaregiversWithClient({ query }, userId, caregivers);
+    await replaceCaregiversWithClient({ query }, userId, caregivers, registration.organization_id);
   }
 
   if (Array.isArray(registration.medications)) {
@@ -2317,6 +2767,12 @@ async function syncOnboardingRelatedData(userId, registration) {
 async function ingestPhoneRegistration(payload) {
   const normalized = normalizePhoneRegistrationPayload(payload);
   if (normalized.error) return normalized;
+  const organization = await resolveOrganizationFromRegistration(normalized.value);
+  if (!organization) return { error: "organization is required" };
+  normalized.value.organization_id = organization.id;
+  normalized.value.country = normalized.value.country || organization.country || "Germany";
+  normalized.value.timezone = normalized.value.timezone || organization.timezone || "Europe/Berlin";
+  normalized.value.language = normalized.value.language || organization.default_language || "de";
 
   const { user, created } = await upsertPhoneRegistrationUser(normalized.value);
   await syncOnboardingRelatedData(user.id, normalized.value);
@@ -2347,12 +2803,89 @@ app.get("/api/health", async (req, res, next) => {
   }
 });
 
-app.get("/api/v1/user-dashboard/users", asyncRoute(async (_req, res) => {
-  res.json(await loadDashboardUsers());
+app.get("/api/v1/me", asyncRoute(async (req, res) => {
+  res.json({ user: publicContext(req.context) });
+}));
+
+app.get("/api/v1/organizations", asyncRoute(async (req, res) => {
+  if (!req.context.isPlatformAdmin) {
+    res.json({
+      organizations: req.context.organization ? [req.context.organization] : [],
+      currentOrganization: req.context.organization,
+    });
+    return;
+  }
+  const organizations = await loadOrganizations({ includeInactive: req.query.includeInactive === "true" });
+  res.json({ organizations, currentOrganization: req.context.organization });
+}));
+
+app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
+  requirePlatformAdmin(req.context);
+  const payload = normalizeOrganizationPayload(req.body, true);
+  if (payload.error) {
+    res.status(400).json({ error: payload.error });
+    return;
+  }
+  const result = await query(
+    `
+      INSERT INTO public.organizations (slug, name, country, default_language, timezone, active)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id::text, slug, name, country, default_language, timezone, active, created_at, updated_at
+    `,
+    [
+      payload.value.slug,
+      payload.value.name,
+      payload.value.country,
+      payload.value.default_language,
+      payload.value.timezone,
+      payload.value.active,
+    ],
+  );
+  res.status(201).json({ organization: organizationRow(result.rows[0]) });
+}));
+
+app.patch("/api/v1/organizations/:id", asyncRoute(async (req, res) => {
+  requirePlatformAdmin(req.context);
+  const payload = normalizeOrganizationPayload(req.body);
+  if (payload.error) {
+    res.status(400).json({ error: payload.error });
+    return;
+  }
+  const result = await query(
+    `
+      UPDATE public.organizations
+      SET
+        name = COALESCE($2, name),
+        country = COALESCE($3, country),
+        default_language = COALESCE($4, default_language),
+        timezone = COALESCE($5, timezone),
+        active = COALESCE($6, active),
+        updated_at = now()
+      WHERE id = $1
+      RETURNING id::text, slug, name, country, default_language, timezone, active, created_at, updated_at
+    `,
+    [
+      req.params.id,
+      payload.value.name,
+      payload.value.country,
+      payload.value.default_language,
+      payload.value.timezone,
+      payload.value.active,
+    ],
+  );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "Organization not found" });
+    return;
+  }
+  res.json({ organization: organizationRow(result.rows[0]) });
+}));
+
+app.get("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
+  res.json(await loadDashboardUsers(req.context));
 }));
 
 app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
-  const result = await createDashboardUser(req.body);
+  const result = await createDashboardUser(req.body, req.context);
   if (result.error) {
     res.status(400).json({ error: result.error });
     return;
@@ -2367,7 +2900,7 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
     res.status(400).json({ error: "user_id is required" });
     return;
   }
-  const data = await loadUserInfo(userId);
+  const data = await loadUserInfo(userId, req.context);
   if (!data) {
     res.status(404).json({ error: "User not found" });
     return;
@@ -2376,7 +2909,7 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
 }));
 
 async function updateUserRoute(req, res) {
-  const result = await updateDashboardUser(req.params.id, req.body);
+  const result = await updateDashboardUser(req.params.id, req.body, req.context);
   if (result.error) {
     res.status(400).json({ error: result.error });
     return;
@@ -2409,60 +2942,60 @@ app.get("/api/v1/care-providers", asyncRoute(async (req, res) => {
     providers: await loadCareProviders({
       search: req.query.search,
       type: req.query.type,
-    }),
+    }, req.context),
   });
 }));
 
 app.post("/api/v1/care-providers", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await createCareProviderContact(req.body), 201);
+  sendWriteResult(res, await createCareProviderContact(req.body, req.context), 201);
 }));
 
 app.post("/api/v1/user-dashboard/users/:id/care-providers", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await assignCareProvider(req.params.id, req.body), 201);
+  sendWriteResult(res, await assignCareProvider(req.params.id, req.body, req.context), 201);
 }));
 
 app.patch("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await updateCareProviderAssignment(req.params.id, req.body));
+  sendWriteResult(res, await updateCareProviderAssignment(req.params.id, req.body, req.context));
 }));
 
 app.delete("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await deleteCareProviderAssignment(req.params.id));
+  sendWriteResult(res, await deleteCareProviderAssignment(req.params.id, req.context));
 }));
 
 app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await createMedication(req.body), 201);
+  sendWriteResult(res, await createMedication(req.body, req.context), 201);
 }));
 
 app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await updateMedication(req.params.med_id, req.body));
+  sendWriteResult(res, await updateMedication(req.params.med_id, req.body, req.context));
 }));
 
 app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await deleteMedication(req.params.med_id));
+  sendWriteResult(res, await deleteMedication(req.params.med_id, req.context));
 }));
 
 app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await createCaregiver(req.body), 201);
+  sendWriteResult(res, await createCaregiver(req.body, req.context), 201);
 }));
 
 app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await updateCaregiver(req.params.caregiver_id, req.body));
+  sendWriteResult(res, await updateCaregiver(req.params.caregiver_id, req.body, req.context));
 }));
 
 app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await deleteCaregiver(req.params.caregiver_id));
+  sendWriteResult(res, await deleteCaregiver(req.params.caregiver_id, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await upsertHealth(req.params.user_id, req.body));
+  sendWriteResult(res, await upsertHealth(req.params.user_id, req.body, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await updateCheckinConfig(req.params.checkin_id, req.body));
+  sendWriteResult(res, await updateCheckinConfig(req.params.checkin_id, req.body, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, res) => {
-  sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body));
+  sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body, req.context));
 }));
 
 async function phoneRegistrationRoute(req, res) {
@@ -2484,14 +3017,15 @@ async function phoneRegistrationRoute(req, res) {
   res.status(result.value.created ? 201 : 200).json(result.value);
 }
 
-app.post("/api/v1/onboarding/phone-registration", asyncRoute(phoneRegistrationRoute));
-app.post("/api/v1/webhooks/phone-registration", asyncRoute(phoneRegistrationRoute));
+app.post("/api/v1/onboarding/phone-registration", asyncRoute(phoneRegistrationRoute, { auth: "none" }));
+app.post("/api/v1/webhooks/phone-registration", asyncRoute(phoneRegistrationRoute, { auth: "none" }));
 
-app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (_req, res) => {
-  res.json({ campaigns: await loadCampaigns() });
+app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) => {
+  res.json({ campaigns: await loadCampaigns(req.context) });
 }));
 
 app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
   const validationError = validateCampaignPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
@@ -2502,9 +3036,11 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
   const status = String(req.body.status || "draft");
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
+  const organizationId = scopeOrganizationId(req.context);
   const result = await query(
     `
       INSERT INTO public.campaigns (
+        organization_id,
         name,
         objective,
         audience,
@@ -2522,10 +3058,11 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         execution_type,
         tone
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING id::text
     `,
     [
+      organizationId,
       String(req.body.name || "").trim(),
       String(req.body.objective || "").trim() || null,
       String(req.body.audience || "").trim() || null,
@@ -2545,11 +3082,12 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
     ],
   );
 
-  const campaigns = await loadCampaigns();
+  const campaigns = await loadCampaigns(req.context);
   res.status(201).json({ campaign: campaigns.find((campaign) => campaign.id === result.rows[0]?.id) || null });
 }));
 
 app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
   const validationError = validateCampaignPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
@@ -2560,7 +3098,8 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
   const status = String(req.body.status || "draft");
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
-  await query(
+  const organizationId = scopeOrganizationId(req.context);
+  const updateResult = await query(
     `
       UPDATE public.campaigns
       SET
@@ -2583,7 +3122,8 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
         retry_limit = $15,
         execution_type = $16,
         tone = $17
-      WHERE id = $1
+      WHERE id = $1 AND organization_id = $18
+      RETURNING id::text
     `,
     [
       req.params.id,
@@ -2603,16 +3143,22 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
       callSettings.retryLimit,
       executionType,
       campaignTone(type, status),
+      organizationId,
     ],
   );
+  if (!updateResult.rows[0]) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
 
-  await query("DELETE FROM public.campaign_targets WHERE campaign_id = $1", [req.params.id]);
-  const campaigns = await loadCampaigns();
+  await query("DELETE FROM public.campaign_targets WHERE campaign_id = $1 AND organization_id = $2", [req.params.id, organizationId]);
+  const campaigns = await loadCampaigns(req.context);
   res.json({ campaign: campaigns.find((campaign) => campaign.id === req.params.id) || null });
 }));
 
 app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs/preview", asyncRoute(async (req, res) => {
-  const preview = await buildCampaignCallPreview(req.params.id, req.body);
+  requireAdmin(req.context);
+  const preview = await buildCampaignCallPreview(req.params.id, req.body, req.context);
   if (!preview) {
     res.status(404).json({ error: "Campaign not found" });
     return;
@@ -2621,7 +3167,8 @@ app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs/preview", asyncRou
 }));
 
 app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async (req, res) => {
-  const preview = await buildCampaignCallPreview(req.params.id, req.body);
+  requireAdmin(req.context);
+  const preview = await buildCampaignCallPreview(req.params.id, req.body, req.context);
   if (!preview) {
     res.status(404).json({ error: "Campaign not found" });
     return;
@@ -2631,24 +3178,28 @@ app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async
     return;
   }
 
-  const runId = await createCampaignCallRun(req.params.id, req.body);
-  const runs = await loadCampaignCallRuns(req.params.id);
+  const runId = await createCampaignCallRun(req.params.id, req.body, req.context);
+  const runs = await loadCampaignCallRuns(req.params.id, req.context);
   res.status(201).json({ run: runs.find((run) => run.id === runId) || null, preview });
 }));
 
 app.get("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async (req, res) => {
-  res.json({ runs: await loadCampaignCallRuns(req.params.id) });
+  res.json({ runs: await loadCampaignCallRuns(req.params.id, req.context) });
 }));
 
 app.post("/api/v1/campaigns-dashboard/call-jobs/:id/cancel", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
+  const organizationId = scopeOrganizationId(req.context);
   const result = await query(
     `
-      UPDATE public.campaign_call_jobs
+      UPDATE public.campaign_call_jobs j
       SET status = 'cancelled', updated_at = now()
-      WHERE id = $1 AND status IN ('pending', 'queued')
-      RETURNING id::text
+      WHERE j.id = $1
+        AND j.organization_id = $2
+        AND j.status IN ('pending', 'queued')
+      RETURNING j.id::text
     `,
-    [req.params.id],
+    [req.params.id, organizationId],
   );
   if (!result.rows[0]) {
     res.status(404).json({ error: "Queued call job not found" });
@@ -2658,14 +3209,16 @@ app.post("/api/v1/campaigns-dashboard/call-jobs/:id/cancel", asyncRoute(async (r
 }));
 
 app.post("/api/v1/campaigns-dashboard/call-runs/:id/cancel", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
+  const organizationId = scopeOrganizationId(req.context);
   const runResult = await query(
     `
       UPDATE public.campaign_call_runs
       SET status = 'cancelled', updated_at = now()
-      WHERE id = $1 AND status IN ('scheduled', 'queued')
+      WHERE id = $1 AND organization_id = $2 AND status IN ('scheduled', 'queued')
       RETURNING id::text, campaign_id::text
     `,
-    [req.params.id],
+    [req.params.id, organizationId],
   );
   const run = runResult.rows[0];
   if (!run) {
@@ -2676,15 +3229,16 @@ app.post("/api/v1/campaigns-dashboard/call-runs/:id/cancel", asyncRoute(async (r
     `
       UPDATE public.campaign_call_jobs
       SET status = 'cancelled', updated_at = now()
-      WHERE run_id = $1 AND status IN ('pending', 'queued')
+      WHERE run_id = $1 AND organization_id = $2 AND status IN ('pending', 'queued')
     `,
-    [req.params.id],
+    [req.params.id, organizationId],
   );
-  const runs = await loadCampaignCallRuns(run.campaign_id);
+  const runs = await loadCampaignCallRuns(run.campaign_id, req.context);
   res.json({ run: runs.find((item) => item.id === req.params.id) || null });
 }));
 
-app.get("/api/v1/operational/offices", asyncRoute(async (_req, res) => {
+app.get("/api/v1/operational/offices", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
   const result = await optionalRows(`
     SELECT
       id::text,
@@ -2697,9 +3251,9 @@ app.get("/api/v1/operational/offices", asyncRoute(async (_req, res) => {
       latitude,
       longitude
     FROM public.operational_offices
-    WHERE active = true
+    WHERE active = true AND organization_id = $1
     ORDER BY name ASC
-  `);
+  `, [organizationId]);
 
   res.json(result.map((office) => ({
     id: office.id,
@@ -2713,7 +3267,8 @@ app.get("/api/v1/operational/offices", asyncRoute(async (_req, res) => {
   })));
 }));
 
-app.get("/api/v1/operational/field-staff", asyncRoute(async (_req, res) => {
+app.get("/api/v1/operational/field-staff", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
   const result = await optionalRows(`
     SELECT
       id::text,
@@ -2728,9 +3283,9 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (_req, res) => {
       last_known_longitude,
       last_seen_at
     FROM public.field_staff
-    WHERE active = true
+    WHERE active = true AND organization_id = $1
     ORDER BY full_name ASC
-  `);
+  `, [organizationId]);
 
   res.json(result.map((staff) => ({
     id: staff.id,
@@ -2749,14 +3304,20 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (_req, res) => {
   })));
 }));
 
-app.get("/api/v1/checkins-dashboard/checkins", asyncRoute(async (_req, res) => {
-  res.json({ checkins: await loadCheckins() });
+app.get("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
+  res.json({ checkins: await loadCheckins(req.context) });
 }));
 
 app.post("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
   const validationError = validateCheckinPayload(req.body, true);
   if (validationError) {
     res.status(400).json({ error: validationError });
+    return;
+  }
+
+  if (!(await userBelongsToOrganization(req.body.user_id, req.context))) {
+    res.status(404).json({ error: "User not found" });
     return;
   }
 
@@ -2769,32 +3330,53 @@ app.post("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
     [req.body.user_id, Boolean(req.body.is_active), String(req.body.frequency_days), req.body.preferred_time || null],
   );
 
-  const checkins = await loadCheckins();
+  const checkins = await loadCheckins(req.context);
   res.status(201).json(checkins.find((item) => item.id === result.rows[0]?.id) || { id: result.rows[0]?.id });
 }));
 
 app.patch("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
+  const organizationId = scopeOrganizationId(req.context);
   const validationError = validateCheckinPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
     return;
   }
 
-  await query(
+  const result = await query(
     `
-      UPDATE public.vyva_user_checkins
+      UPDATE public.vyva_user_checkins c
       SET enabled = $2, frequency = $3, preferred_time = $4
-      WHERE id = $1
+      FROM public.vyva_users u
+      WHERE c.id = $1
+        AND u.id = c.vyva_user_id
+        AND u.organization_id = $5
+      RETURNING c.id::text
     `,
-    [req.params.id, Boolean(req.body.is_active), String(req.body.frequency_days), req.body.preferred_time || null],
+    [req.params.id, Boolean(req.body.is_active), String(req.body.frequency_days), req.body.preferred_time || null, organizationId],
   );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "Scheduled call not found" });
+    return;
+  }
 
-  const checkins = await loadCheckins();
+  const checkins = await loadCheckins(req.context);
   res.json(checkins.find((item) => item.id === req.params.id) || { id: req.params.id });
 }));
 
 app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res) => {
-  await query("DELETE FROM public.vyva_user_checkins WHERE id = $1", [req.params.id]);
+  requireAdmin(req.context);
+  const organizationId = scopeOrganizationId(req.context);
+  await query(
+    `
+      DELETE FROM public.vyva_user_checkins c
+      USING public.vyva_users u
+      WHERE c.id = $1
+        AND u.id = c.vyva_user_id
+        AND u.organization_id = $2
+    `,
+    [req.params.id, organizationId],
+  );
   res.status(204).end();
 }));
 
@@ -2804,6 +3386,10 @@ app.post("/api/v1/medications/weekly-schedule", asyncRoute(async (req, res) => {
   const end = req.body?.date_end;
   if (!userId || !start || !end) {
     res.status(400).json({ error: "user_id, date_start, and date_end are required" });
+    return;
+  }
+  if (!(await userBelongsToOrganization(userId, req.context))) {
+    res.status(404).json({ error: "User not found" });
     return;
   }
 
@@ -2856,10 +3442,10 @@ app.post("/api/v1/medications/weekly-schedule", asyncRoute(async (req, res) => {
 }));
 
 app.use((error, _req, res, _next) => {
-  console.error(error);
-  const status = error.code === "23505" ? 409 : error.code === "DB_NOT_CONFIGURED" ? 503 : 500;
+  const status = error.status || (error.code === "23505" ? 409 : error.code === "DB_NOT_CONFIGURED" ? 503 : 500);
+  if (status >= 500) console.error(error);
   res.status(status).json({
-    error: status === 409 ? "Record already exists" : "Server error",
+    error: status === 409 ? "Record already exists" : status >= 500 ? "Server error" : error.message,
   });
 });
 

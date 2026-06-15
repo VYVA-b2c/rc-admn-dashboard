@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { UserPlus, Eye, EyeOff } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 
 type AdminUserRow = {
   id: string;
@@ -24,6 +25,8 @@ type AdminUserRow = {
 
 export default function InviteAdmin() {
   const { t } = useLanguage();
+  const { data: currentContext } = useCurrentUserContext();
+  const organizationId = currentContext?.user.organization?.id;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("admin");
@@ -31,17 +34,18 @@ export default function InviteAdmin() {
   const [loading, setLoading] = useState(false);
 
   const { data: admins, isLoading: loadingAdmins, isError: adminsError, refetch } = useQuery({
-    queryKey: ["admin-users"],
+    queryKey: ["admin-users", organizationId],
     queryFn: async () => {
-      if (authBypassEnabled) return [];
+      if (authBypassEnabled || !organizationId) return [];
       const { data, error } = await supabase
         .from("user_roles")
         .select("*, profiles(full_name, email)")
+        .eq("organization_id", organizationId)
         .order("role");
       if (error) throw error;
       return data || [];
     },
-    enabled: !authBypassEnabled,
+    enabled: !authBypassEnabled && Boolean(organizationId),
     placeholderData: [],
     retry: false,
   });
@@ -53,12 +57,12 @@ export default function InviteAdmin() {
       toast.info(t("invite.previewDisabled"));
       return;
     }
-    if (!email || !password) return;
+    if (!email || !password || !organizationId) return;
     if (password.length < 6) { toast.error(t("invite.passwordTooShort")); return; }
     setLoading(true);
     try {
       const { error } = await supabase.functions.invoke("invite-admin", {
-        body: { email, password, role },
+        body: { email, password, role, organization_id: organizationId },
       });
       if (error) throw error;
       const creds = `Email: ${email}\nPassword: ${password}`;
@@ -95,7 +99,7 @@ export default function InviteAdmin() {
             {t("invite.createNewUser")}
           </CardTitle>
           <CardDescription>
-            {authBypassEnabled ? t("invite.previewDisabled") : t("invite.description")}
+          {authBypassEnabled ? t("invite.previewDisabled") : t("invite.description")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -110,7 +114,7 @@ export default function InviteAdmin() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  disabled={authBypassEnabled}
+                  disabled={authBypassEnabled || !organizationId}
                 />
               </div>
               <div className="space-y-1.5">
@@ -125,14 +129,14 @@ export default function InviteAdmin() {
                     minLength={6}
                     required
                     className="pr-10"
-                    disabled={authBypassEnabled}
+                    disabled={authBypassEnabled || !organizationId}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                     tabIndex={-1}
-                    disabled={authBypassEnabled}
+                    disabled={authBypassEnabled || !organizationId}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -142,7 +146,7 @@ export default function InviteAdmin() {
             <div className="flex gap-3 items-end">
               <div className="w-48 space-y-1.5">
                 <Label>{t("invite.role")}</Label>
-                <Select value={role} onValueChange={setRole} disabled={authBypassEnabled}>
+                <Select value={role} onValueChange={setRole} disabled={authBypassEnabled || !organizationId}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">{t("invite.admin")}</SelectItem>
@@ -151,7 +155,7 @@ export default function InviteAdmin() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="submit" disabled={loading || authBypassEnabled}>
+              <Button type="submit" disabled={loading || authBypassEnabled || !organizationId}>
                 {loading ? t("invite.creating") : t("invite.createUser")}
               </Button>
             </div>

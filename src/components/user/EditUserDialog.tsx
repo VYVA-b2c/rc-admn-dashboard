@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import type { OperationalProfileResponse, OperationalProfileUser } from "@/lib/operationalDemoData";
@@ -108,7 +109,7 @@ function hasCaregiverDetail(caregiver: CaregiverForm) {
   return Boolean(caregiver.caretaker_name.trim() || caregiver.caretaker_phone.trim());
 }
 
-function userFormState(user?: Partial<OperationalProfileUser> | null) {
+function userFormState(user?: Partial<OperationalProfileUser> | null, defaultLanguage = "de") {
   return {
     city: String(user?.city ?? ""),
     date_of_birth: dateInputValue(user?.date_of_birth),
@@ -116,7 +117,7 @@ function userFormState(user?: Partial<OperationalProfileUser> | null) {
     first_name: String(user?.first_name ?? ""),
     gender: String(user?.gender ?? ""),
     house_number: String(user?.house_number ?? ""),
-    language: String(user?.language ?? "de"),
+    language: String(user?.language ?? defaultLanguage),
     last_name: String(user?.last_name ?? ""),
     phone: String(user?.phone ?? ""),
     post_code: String(user?.post_code ?? ""),
@@ -149,10 +150,12 @@ function caregiverFormState(profileData?: OperationalProfileResponse | null) {
 export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user }: EditUserDialogProps) {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
+  const { data: currentContext } = useCurrentUserContext();
   const isEditing = Boolean(user?.id);
+  const defaultLanguage = currentContext?.user.organization?.defaultLanguage || "de";
 
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState(() => userFormState(user));
+  const [form, setForm] = useState(() => userFormState(user, defaultLanguage));
   const [healthConditions, setHealthConditions] = useState<string[]>([]);
   const [mobilityNeeds, setMobilityNeeds] = useState<string[]>([]);
   const [newCondition, setNewCondition] = useState("");
@@ -167,7 +170,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
   useEffect(() => {
     if (!open) return;
 
-    setForm(userFormState(user));
+    setForm(userFormState(user, defaultLanguage));
     setHealthConditions(profileData?.health?.health_conditions ?? []);
     setMobilityNeeds(profileData?.health?.mobility_needs ?? []);
     setNewCondition("");
@@ -178,7 +181,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
     setCaregiverConsent(Boolean(profileData?.consent?.caretaker_consent));
     setCheckins(defaultService(profileData?.checkins ?? null, "weekly"));
     setBrainCoach(defaultService(profileData?.brainCoach ?? null, "weekly"));
-  }, [open, profileData, user]);
+  }, [defaultLanguage, open, profileData, user]);
 
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
   const updateMedication = (index: number, key: keyof MedicationForm, value: string) =>
@@ -282,7 +285,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
         first_name: form.first_name.trim(),
         gender: form.gender || null,
         house_number: form.house_number.trim() || null,
-        language: form.language || "de",
+        language: form.language || defaultLanguage,
         last_name: form.last_name.trim(),
         phone: form.phone.trim() || null,
         post_code: form.post_code.trim() || null,

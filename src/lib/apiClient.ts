@@ -2,6 +2,7 @@ import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
 import { authBypassEnabled } from "@/lib/authMode";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+export const ACTIVE_ORGANIZATION_STORAGE_KEY = "active-organization-id";
 
 const DEFAULT_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 3500);
 
@@ -15,6 +16,10 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
   const requestHeaders = new Headers(headers);
   if (!requestHeaders.has("Content-Type")) requestHeaders.set("Content-Type", "application/json");
   requestHeaders.set("ngrok-skip-browser-warning", "true");
+  const activeOrganizationId = localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY);
+  if (activeOrganizationId && !requestHeaders.has("x-organization-id")) {
+    requestHeaders.set("x-organization-id", activeOrganizationId);
+  }
   if (!authBypassEnabled && supabaseConfigured && !requestHeaders.has("Authorization")) {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
