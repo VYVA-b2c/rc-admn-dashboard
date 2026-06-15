@@ -26,6 +26,8 @@ const isProduction =
 const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
+const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
+const vyvaBackendApiDisabled = process.env.VYVA_BACKEND_API_DISABLED === "true";
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseBaseUrl = supabaseUrl ? supabaseUrl.replace(/\/$/, "") : null;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -107,6 +109,135 @@ function dbUnavailable(res) {
   res.status(503).json({
     error: "Database is not configured. Add DATABASE_URL through Replit Database or Replit Secrets.",
   });
+}
+
+function appendSearchParams(url, params = {}) {
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    if (Array.isArray(value)) {
+      value.forEach((item) => {
+        if (item !== undefined && item !== null && item !== "") url.searchParams.append(key, String(item));
+      });
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+}
+
+function normalizeExternalDashboardPayload(data) {
+  const gisUsers = Array.isArray(data?.gisUsers)
+    ? data.gisUsers.map((user) => {
+        const careProviderNames = Array.isArray(user.careProviderNames)
+          ? user.careProviderNames
+          : Array.isArray(user.caretakerNames)
+            ? user.caretakerNames
+            : [];
+        return {
+          ...user,
+          id: user.id == null ? user.id : String(user.id),
+          coords: Array.isArray(user.coords) && user.coords.length === 2 ? [Number(user.coords[0]), Number(user.coords[1])] : null,
+          careProviderNames,
+          careProviderCount: Number(user.careProviderCount ?? careProviderNames.length ?? 0),
+          primaryCaregiverName: user.primaryCaregiverName ?? careProviderNames[0] ?? null,
+        };
+      })
+    : [];
+
+  const activeAlerts = Array.isArray(data?.activeAlerts)
+    ? data.activeAlerts.map((alert) => ({
+        ...alert,
+        id: alert.id == null ? alert.id : String(alert.id),
+        vyva_user_id: alert.vyva_user_id == null ? alert.vyva_user_id : String(alert.vyva_user_id),
+      }))
+    : [];
+
+  return {
+    totalUsers: Number(data?.totalUsers ?? gisUsers.length),
+    checkinsEnabled: Number(data?.checkinsEnabled ?? 0),
+    activeAlertCount: Number(data?.activeAlertCount ?? activeAlerts.length),
+    criticalAlertCount: Number(data?.criticalAlertCount ?? activeAlerts.filter((alert) => alert.severity === "critical").length),
+    totalSensors: Number(data?.totalSensors ?? 0),
+    caregiversLinked: Number(data?.caregiversLinked ?? 0),
+    gisUsers,
+    activeAlerts,
+    cityDistribution: Array.isArray(data?.cityDistribution) ? data.cityDistribution : [],
+  };
+}
+
+function normalizeExternalProfilePayload(data) {
+  if (!data || typeof data !== "object") return data;
+  const normalizeRecords = (records) =>
+    Array.isArray(records)
+      ? records.map((record) => ({
+          ...record,
+          id: record?.id == null ? record?.id : String(record.id),
+          vyva_user_id: record?.vyva_user_id == null ? record?.vyva_user_id : String(record.vyva_user_id),
+        }))
+      : records;
+
+  return {
+    ...data,
+    user: data.user
+      ? {
+          ...data.user,
+          id: data.user.id == null ? data.user.id : String(data.user.id),
+        }
+      : data.user,
+    consent: data.consent
+      ? { ...data.consent, id: data.consent.id == null ? data.consent.id : String(data.consent.id) }
+      : data.consent,
+    health: data.health
+      ? { ...data.health, id: data.health.id == null ? data.health.id : String(data.health.id) }
+      : data.health,
+    medications: normalizeRecords(data.medications),
+    caregivers: normalizeRecords(data.caregivers),
+    careProviders: normalizeRecords(data.careProviders),
+    sensors: normalizeRecords(data.sensors),
+    alerts: normalizeRecords(data.alerts),
+    readings: normalizeRecords(data.readings),
+  };
+}
+
+async function requestVyvaBackend(pathname, { method = "GET", query: queryParams, body } = {}) {
+  if (vyvaBackendApiDisabled || !vyvaBackendApiUrl) return null;
+
+  const url = new URL(pathname, `${vyvaBackendApiUrl}/`);
+  appendSearchParams(url, queryParams);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.VYVA_BACKEND_API_TIMEOUT_MS || 8000));
+
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: body === undefined ? { Accept: "application/json" } : { Accept: "application/json", "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    return {
+      ok: response.ok,
+      status: response.status,
+      data,
+    };
+  } catch (error) {
+    console.warn("VYVA backend API unavailable:", error instanceof Error ? error.message : "request failed");
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function handleVyvaBackendResponse(res, upstream, successStatus) {
+  if (upstream?.ok) {
+    res.status(successStatus || upstream.status || 200).json(upstream.data);
+    return true;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return true;
+  }
+  return false;
 }
 
 async function query(text, params = []) {
@@ -3174,10 +3305,28 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
+  if (upstream?.ok) {
+    res.json(normalizeExternalDashboardPayload(upstream.data));
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
   res.json(await loadDashboardUsers(req.context));
 }));
 
 app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { method: "POST", body: req.body });
+  if (upstream?.ok) {
+    res.status(upstream.status || 201).json(upstream.data);
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
   const result = await createDashboardUser(req.body, req.context);
   if (result.error) {
     res.status(400).json({ error: result.error });
@@ -3193,6 +3342,21 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
     res.status(400).json({ error: "user_id is required" });
     return;
   }
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
+    query: {
+      ...req.query,
+      user_id: userId,
+      organization_name: "Red Cross",
+    },
+  });
+  if (upstream?.ok) {
+    res.json(normalizeExternalProfilePayload(upstream.data));
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
   const data = await loadUserInfo(userId, req.context);
   if (!data) {
     res.status(404).json({ error: "User not found" });
@@ -3202,6 +3366,19 @@ app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
 }));
 
 async function updateUserRoute(req, res) {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}`, {
+    method: req.method,
+    body: req.body,
+  });
+  if (upstream?.ok) {
+    res.json(upstream.data);
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
+
   const result = await updateDashboardUser(req.params.id, req.body, req.context);
   if (result.error) {
     res.status(400).json({ error: result.error });
@@ -3256,38 +3433,90 @@ app.delete("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(as
 }));
 
 app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/medications", {
+    method: "POST",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream, 201)) return;
+
   sendWriteResult(res, await createMedication(req.body, req.context), 201);
 }));
 
 app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
+    method: "PUT",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream)) return;
+
   sendWriteResult(res, await updateMedication(req.params.med_id, req.body, req.context));
 }));
 
 app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
+    method: "DELETE",
+  });
+  if (handleVyvaBackendResponse(res, upstream, 204)) return;
+
   sendWriteResult(res, await deleteMedication(req.params.med_id, req.context));
 }));
 
 app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/caregivers", {
+    method: "POST",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream, 201)) return;
+
   sendWriteResult(res, await createCaregiver(req.body, req.context), 201);
 }));
 
 app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
+    method: "PUT",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream)) return;
+
   sendWriteResult(res, await updateCaregiver(req.params.caregiver_id, req.body, req.context));
 }));
 
 app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
+    method: "DELETE",
+  });
+  if (handleVyvaBackendResponse(res, upstream, 204)) return;
+
   sendWriteResult(res, await deleteCaregiver(req.params.caregiver_id, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/health/${encodeURIComponent(req.params.user_id)}`, {
+    method: "PUT",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream)) return;
+
   sendWriteResult(res, await upsertHealth(req.params.user_id, req.body, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/checkins/${encodeURIComponent(req.params.checkin_id)}`, {
+    method: "PUT",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream)) return;
+
   sendWriteResult(res, await updateCheckinConfig(req.params.checkin_id, req.body, req.context));
 }));
 
 app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/brain-coach/${encodeURIComponent(req.params.user_id)}`, {
+    method: "PUT",
+    body: req.body,
+  });
+  if (handleVyvaBackendResponse(res, upstream)) return;
+
   sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body, req.context));
 }));
 
@@ -3681,6 +3910,20 @@ app.post("/api/v1/medications/weekly-schedule", asyncRoute(async (req, res) => {
     res.status(400).json({ error: "user_id, date_start, and date_end are required" });
     return;
   }
+
+  const upstream = await requestVyvaBackend("/api/v1/medications/weekly-schedule", {
+    method: "POST",
+    body: req.body,
+  });
+  if (upstream?.ok) {
+    res.json(upstream.data);
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
+
   if (!(await userBelongsToOrganization(userId, req.context))) {
     res.status(404).json({ error: "User not found" });
     return;
