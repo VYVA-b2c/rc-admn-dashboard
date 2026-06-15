@@ -6,7 +6,6 @@ import {
   HeartPulse,
   Link2,
   PhoneCall,
-  Plus,
   Users,
   Wrench,
   type LucideIcon,
@@ -106,14 +105,6 @@ export default function Reports() {
           >
             <Download className="mr-2 h-4 w-4" />
             {t("reports.export")}
-          </Button>
-          <Button
-            type="button"
-            className="h-10 rounded-full px-4 text-sm font-bold"
-            onClick={() => navigate("/campaigns?create=1")}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            {t("reports.newCampaign")}
           </Button>
         </div>
       </header>

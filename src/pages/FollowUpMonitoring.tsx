@@ -11,6 +11,7 @@ import {
   PhoneCall,
   Pill,
   Search,
+  UserPlus,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
@@ -18,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -233,6 +235,7 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
   const [search, setSearch] = useState("");
   const [cityFilter, setCityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
+  const [assignTarget, setAssignTarget] = useState<FollowUpRow | null>(null);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
   const { t } = useLanguage();
@@ -242,6 +245,7 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
   const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
   const usingPreviewData = authBypassEnabled && apiUsers.length === 0;
   const sourceUsers = usingPreviewData ? demoOperationalUsers : apiUsers;
+  const canAssignProviders = !authBypassEnabled && !usingPreviewData;
 
   const rows = useMemo(
     () =>
@@ -428,7 +432,29 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
                             {t(channelKey(row.channel))}
                           </div>
                         </TableCell>
-                        <TableCell className="text-muted-foreground">{row.assignedTo || t("usersList.unassigned")}</TableCell>
+                        <TableCell onClick={(event) => event.stopPropagation()}>
+                          {row.assignedTo ? (
+                            <span className="text-sm font-medium text-muted-foreground">{row.assignedTo}</span>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
+                                {t("usersList.unassigned")}
+                              </span>
+                              {canAssignProviders && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 rounded-full border-primary/20 bg-primary/5 px-2.5 text-xs font-semibold text-primary hover:bg-primary/10 hover:text-primary"
+                                  onClick={() => setAssignTarget(row)}
+                                >
+                                  <UserPlus className="mr-1.5 h-3.5 w-3.5" />
+                                  {t("careProviders.assignNow")}
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
                         <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
                           <Button
                             type="button"
@@ -456,6 +482,16 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
           </div>
         </CardContent>
       </Card>
+      {assignTarget && (
+        <AssignCareProviderDialog
+          open={Boolean(assignTarget)}
+          onOpenChange={(open) => {
+            if (!open) setAssignTarget(null);
+          }}
+          userId={assignTarget.id}
+          userName={assignTarget.name}
+        />
+      )}
     </div>
   );
 }
