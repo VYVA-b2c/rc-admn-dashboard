@@ -361,7 +361,7 @@ async function loadUserContext(user) {
 async function applyOrganizationOverride(req, context) {
   const overrideId = req.get("x-organization-id") || req.query.organization_id;
   if (!overrideId) return context;
-  if (!context?.isPlatformAdmin) throw httpError(403, "Platform admin access required");
+  if (!context?.isAdmin) throw httpError(403, "Admin access required");
   const organization = await loadOrganizationById(overrideId);
   if (!organization?.id || !organization.active) throw httpError(404, "Organization not found");
   return {
@@ -3058,7 +3058,7 @@ app.get("/api/v1/me", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/v1/organizations", asyncRoute(async (req, res) => {
-  if (!req.context.isPlatformAdmin) {
+  if (!req.context.isAdmin) {
     res.json({
       organizations: req.context.organization ? [req.context.organization] : [],
       currentOrganization: req.context.organization,
@@ -3070,7 +3070,7 @@ app.get("/api/v1/organizations", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
-  requirePlatformAdmin(req.context);
+  requireAdmin(req.context);
   const payload = normalizeOrganizationPayload(req.body, true);
   if (payload.error) {
     res.status(400).json({ error: payload.error });
@@ -3095,7 +3095,7 @@ app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
 }));
 
 app.patch("/api/v1/organizations/:id", asyncRoute(async (req, res) => {
-  requirePlatformAdmin(req.context);
+  requireAdmin(req.context);
   const payload = normalizeOrganizationPayload(req.body);
   if (payload.error) {
     res.status(400).json({ error: payload.error });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { ArrowLeft, Building2, Languages, Lock, Plus } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
-import { apiFetch } from "@/lib/apiClient";
+import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
 import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
 
 type OrganizationsResponse = {
@@ -20,9 +20,11 @@ type OrganizationsResponse = {
   organizations: OrganizationContext[];
 };
 
+type LanguageCode = "en" | "de" | "es";
+
 const emptyOrganizationForm = {
   country: "",
-  defaultLanguage: "de" as "en" | "de" | "es",
+  defaultLanguage: "de" as LanguageCode,
   name: "",
   slug: "",
   timezone: "Europe/Berlin",
@@ -43,6 +45,8 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [organizationForm, setOrganizationForm] = useState(emptyOrganizationForm);
+  const [branchLanguage, setBranchLanguage] = useState<LanguageCode>("de");
+  const [branchTimezone, setBranchTimezone] = useState("Europe/Berlin");
 
   const organizationsQuery = useQuery({
     queryKey: ["organizations"],
@@ -58,6 +62,13 @@ export default function Settings() {
     null;
   const organizationPlaceholder =
     loadingCurrentContext || organizationsQuery.isLoading ? t("settings.loadingOrganization") : t("settings.notAvailable");
+  const canManageOrganizations = Boolean(currentUser?.isAdmin);
+
+  useEffect(() => {
+    if (!currentOrganization) return;
+    setBranchLanguage(currentOrganization.defaultLanguage || "de");
+    setBranchTimezone(currentOrganization.timezone || suggestedTimezone(currentOrganization.defaultLanguage || "de"));
+  }, [currentOrganization]);
 
   const createOrganization = useMutation({
     mutationFn: (payload: typeof emptyOrganizationForm) =>
@@ -79,10 +90,10 @@ export default function Settings() {
   });
 
   const updateOrganization = useMutation({
-    mutationFn: ({ id, defaultLanguage }: { id: string; defaultLanguage: "en" | "de" | "es" }) =>
+    mutationFn: ({ id, defaultLanguage, timezone }: { id: string; defaultLanguage?: LanguageCode; timezone?: string }) =>
       apiFetch<{ organization: OrganizationContext }>(`/api/v1/organizations/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ defaultLanguage }),
+        body: JSON.stringify({ defaultLanguage, timezone }),
       }),
     onSuccess: async () => {
       toast.success(t("settings.organizationUpdated"));
@@ -102,7 +113,7 @@ export default function Settings() {
       if (key === "defaultLanguage") {
         return {
           ...current,
-          defaultLanguage: value as "en" | "de" | "es",
+          defaultLanguage: value as LanguageCode,
           timezone: current.timezone || suggestedTimezone(value),
         };
       }
@@ -114,6 +125,23 @@ export default function Settings() {
         };
       }
       return { ...current, [key]: value };
+    });
+  };
+
+  const handleSwitchOrganization = async (nextOrganizationId: string) => {
+    localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, nextOrganizationId);
+    await queryClient.invalidateQueries();
+  };
+
+  const handleSaveBranchSettings = () => {
+    if (!currentOrganization?.id) {
+      toast.error(t("settings.organizationUpdateFailed"));
+      return;
+    }
+    updateOrganization.mutate({
+      id: currentOrganization.id,
+      defaultLanguage: branchLanguage,
+      timezone: branchTimezone.trim() || suggestedTimezone(branchLanguage),
     });
   };
 
@@ -187,7 +215,69 @@ export default function Settings() {
               <OrgMeta label={t("settings.organizationTimezone")} value={currentOrganization?.timezone || organizationPlaceholder} />
             </div>
 
-            {currentUser?.isPlatformAdmin && (
+            {canManageOrganizations && (
+              <div className="rounded-2xl border border-border bg-muted/30 p-4">
+                <div className="mb-4">
+                  <h3 className="text-sm font-bold text-foreground">{t("settings.activeOrganization")}</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">{t("settings.activeOrganizationDescription")}</p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="space-y-2 md:col-span-3">
+                    <Label>{t("settings.organization")}</Label>
+                    <Select
+                      value={currentOrganization?.id || ""}
+                      onValueChange={(value) => void handleSwitchOrganization(value)}
+                      disabled={organizations.length === 0}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={organizationPlaceholder} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {organizations.filter((organization) => organization.id).map((organization) => (
+                          <SelectItem key={organization.id || organization.slug} value={organization.id!}>
+                            {organization.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("settings.organizationDefaultLanguage")}</Label>
+                    <Select value={branchLanguage} onValueChange={(value) => setBranchLanguage(value as LanguageCode)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="en">{t("settings.language.en")}</SelectItem>
+                        <SelectItem value="de">{t("settings.language.de")}</SelectItem>
+                        <SelectItem value="es">{t("settings.language.es")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="active-organization-timezone">{t("settings.organizationTimezone")}</Label>
+                    <Input
+                      id="active-organization-timezone"
+                      value={branchTimezone}
+                      onChange={(event) => setBranchTimezone(event.target.value)}
+                      placeholder="Europe/Madrid"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      type="button"
+                      className="w-full"
+                      disabled={!currentOrganization?.id || updateOrganization.isPending}
+                      onClick={handleSaveBranchSettings}
+                    >
+                      {updateOrganization.isPending ? t("settings.savingOrganization") : t("settings.saveOrganization")}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {canManageOrganizations && (
               <form onSubmit={handleCreateOrganization} className="rounded-2xl border border-border bg-muted/30 p-4">
                 <div className="mb-4">
                   <h3 className="text-sm font-bold text-foreground">{t("settings.createOrganization")}</h3>
@@ -254,7 +344,7 @@ export default function Settings() {
               </form>
             )}
 
-            {currentUser?.isPlatformAdmin && (
+            {canManageOrganizations && (
               <div className="rounded-2xl border border-border bg-white">
                 <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
                 <div className="divide-y divide-border">
@@ -268,7 +358,7 @@ export default function Settings() {
                           onValueChange={(value) =>
                             updateOrganization.mutate({
                               id: organization.id!,
-                              defaultLanguage: value as "en" | "de" | "es",
+                              defaultLanguage: value as LanguageCode,
                             })
                           }
                         >
