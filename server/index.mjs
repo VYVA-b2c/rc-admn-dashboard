@@ -3304,18 +3304,27 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
   res.status(201).json({ member: result.value });
 }));
 
-app.get("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
-  if (upstream?.ok) {
-    res.json(normalizeExternalDashboardPayload(upstream.data));
-    return;
+app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
+  try {
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
+    if (upstream?.ok) {
+      res.json(normalizeExternalDashboardPayload(upstream.data));
+      return;
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
+      return;
+    }
+    if (!pool) {
+      dbUnavailable(res);
+      return;
+    }
+    req.context = await resolveRequestContext(req);
+    res.json(await loadDashboardUsers(req.context));
+  } catch (error) {
+    next(error);
   }
-  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
-    res.status(upstream.status).json(upstream.data);
-    return;
-  }
-  res.json(await loadDashboardUsers(req.context));
-}));
+});
 
 app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { method: "POST", body: req.body });
@@ -3336,34 +3345,43 @@ app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
   res.status(201).json({ user: result.value });
 }));
 
-app.get("/api/v1/user-dashboard/user-info", asyncRoute(async (req, res) => {
-  const userId = String(req.query.user_id || "");
-  if (!userId) {
-    res.status(400).json({ error: "user_id is required" });
-    return;
+app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
+  try {
+    const userId = String(req.query.user_id || "");
+    if (!userId) {
+      res.status(400).json({ error: "user_id is required" });
+      return;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
+      query: {
+        ...req.query,
+        user_id: userId,
+        organization_name: "Red Cross",
+      },
+    });
+    if (upstream?.ok) {
+      res.json(normalizeExternalProfilePayload(upstream.data));
+      return;
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
+      return;
+    }
+    if (!pool) {
+      res.status(upstream?.status || 404).json(upstream?.data || { error: "User not found" });
+      return;
+    }
+    req.context = await resolveRequestContext(req);
+    const data = await loadUserInfo(userId, req.context);
+    if (!data) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    res.json(data);
+  } catch (error) {
+    next(error);
   }
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
-    query: {
-      ...req.query,
-      user_id: userId,
-      organization_name: "Red Cross",
-    },
-  });
-  if (upstream?.ok) {
-    res.json(normalizeExternalProfilePayload(upstream.data));
-    return;
-  }
-  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
-    res.status(upstream.status).json(upstream.data);
-    return;
-  }
-  const data = await loadUserInfo(userId, req.context);
-  if (!data) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
-  res.json(data);
-}));
+});
 
 async function updateUserRoute(req, res) {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}`, {
@@ -3902,80 +3920,89 @@ app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res
   res.status(204).end();
 }));
 
-app.post("/api/v1/medications/weekly-schedule", asyncRoute(async (req, res) => {
-  const userId = req.body?.user_id;
-  const start = req.body?.date_start;
-  const end = req.body?.date_end;
-  if (!userId || !start || !end) {
-    res.status(400).json({ error: "user_id, date_start, and date_end are required" });
-    return;
-  }
+app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
+  try {
+    const userId = req.body?.user_id;
+    const start = req.body?.date_start;
+    const end = req.body?.date_end;
+    if (!userId || !start || !end) {
+      res.status(400).json({ error: "user_id, date_start, and date_end are required" });
+      return;
+    }
 
-  const upstream = await requestVyvaBackend("/api/v1/medications/weekly-schedule", {
-    method: "POST",
-    body: req.body,
-  });
-  if (upstream?.ok) {
-    res.json(upstream.data);
-    return;
-  }
-  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
-    res.status(upstream.status).json(upstream.data);
-    return;
-  }
+    const upstream = await requestVyvaBackend("/api/v1/medications/weekly-schedule", {
+      method: "POST",
+      body: req.body,
+    });
+    if (upstream?.ok) {
+      res.json(upstream.data);
+      return;
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
+      return;
+    }
+    if (!pool) {
+      res.status(upstream?.status || 404).json(upstream?.data || { error: "Schedule not found" });
+      return;
+    }
 
-  if (!(await userBelongsToOrganization(userId, req.context))) {
-    res.status(404).json({ error: "User not found" });
-    return;
-  }
+    req.context = await resolveRequestContext(req);
+    if (!(await userBelongsToOrganization(userId, req.context))) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
 
-  const medications = await optionalRows(
-    `
-      SELECT id::text, medication_name, dosage, schedule_times
-      FROM public.vyva_user_medications
-      WHERE vyva_user_id = $1
-      ORDER BY medication_name ASC
-    `,
-    [userId],
-  );
-  const logs = await optionalRows(
-    `
-      SELECT medication_id::text, scheduled_date::text, scheduled_time, status, notes
-      FROM public.vyva_medication_logs
-      WHERE vyva_user_id = $1 AND scheduled_date BETWEEN $2 AND $3
-    `,
-    [userId, start, end],
-  );
-  const logMap = new Map(
-    logs.map((log) => [`${log.medication_id}|${log.scheduled_date}|${log.scheduled_time || ""}`, log]),
-  );
-  const today = formatDate(new Date());
-  const schedule = {};
+    const medications = await optionalRows(
+      `
+        SELECT id::text, medication_name, dosage, schedule_times
+        FROM public.vyva_user_medications
+        WHERE vyva_user_id = $1
+        ORDER BY medication_name ASC
+      `,
+      [userId],
+    );
+    const logs = await optionalRows(
+      `
+        SELECT medication_id::text, scheduled_date::text, scheduled_time, status, notes
+        FROM public.vyva_medication_logs
+        WHERE vyva_user_id = $1 AND scheduled_date BETWEEN $2 AND $3
+      `,
+      [userId, start, end],
+    );
+    const logMap = new Map(
+      logs.map((log) => [`${log.medication_id}|${log.scheduled_date}|${log.scheduled_time || ""}`, log]),
+    );
+    const today = formatDate(new Date());
+    const schedule = {};
 
-  for (const date of datesBetween(start, end)) {
-    schedule[dayName(date)] = [];
-    for (const medication of medications) {
-      const times = Array.isArray(medication.schedule_times) && medication.schedule_times.length
-        ? medication.schedule_times
-        : [""];
-      for (const time of times) {
-        const log = logMap.get(`${medication.id}|${date}|${time || ""}`);
-        let status = log?.status || (date < today ? "unconfirmed" : "upcoming");
-        if (status === "pending") status = "unconfirmed";
-        if (status === "confirmed") status = "taken";
-        schedule[dayName(date)].push({
-          medication_name: medication.medication_name,
-          dosage: medication.dosage,
-          time,
-          notes: log?.notes || null,
-          status,
-        });
+    for (const date of datesBetween(start, end)) {
+      schedule[dayName(date)] = [];
+      for (const medication of medications) {
+        const times = Array.isArray(medication.schedule_times) && medication.schedule_times.length
+          ? medication.schedule_times
+          : [""];
+        for (const time of times) {
+          const log = logMap.get(`${medication.id}|${date}|${time || ""}`);
+          let status = log?.status || (date < today ? "unconfirmed" : "upcoming");
+          if (status === "pending") status = "unconfirmed";
+          if (status === "confirmed") status = "taken";
+          schedule[dayName(date)].push({
+            medication_name: medication.medication_name,
+            dosage: medication.dosage,
+            time,
+            notes: log?.notes || null,
+            status,
+          });
+        }
       }
     }
-  }
 
-  res.json({ schedule });
-}));
+    res.json({ schedule });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.use((error, _req, res, _next) => {
   const status = error.status || (error.code === "23505" ? 409 : error.code === "DB_NOT_CONFIGURED" ? 503 : 500);
