@@ -17,6 +17,7 @@ const phoneEndpoint = "/api/v1/onboarding/phone-registration";
 const dashboardEndpoint = "/api/v1/user-dashboard/users";
 
 const payloadExample = `{
+  "organization_slug": "red-cross-leipzig",
   "first_name": "First",
   "last_name": "Last",
   "phone": "+4915123456789",
@@ -121,6 +122,8 @@ function EndpointPanel({
   icon: LucideIcon;
   title: string;
 }) {
+  const fullEndpoint = `${window.location.origin}${endpoint}`;
+
   return (
     <section className="rounded-2xl border border-border bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -133,12 +136,12 @@ function EndpointPanel({
             <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>
           </div>
         </div>
-        <Button type="button" variant="outline" className="rounded-full bg-white" onClick={() => copyText(endpoint, copyMessage)}>
+        <Button type="button" variant="outline" className="rounded-full bg-white" onClick={() => copyText(fullEndpoint, copyMessage)}>
           <Copy className="mr-2 h-4 w-4" />
           {copyLabel}
         </Button>
       </div>
-      <div className="mt-4 rounded-xl border border-border bg-muted/35 px-3 py-2 font-mono text-sm text-foreground">{endpoint}</div>
+      <div className="mt-4 overflow-auto rounded-xl border border-border bg-muted/35 px-3 py-2 font-mono text-sm text-foreground">{fullEndpoint}</div>
       {children}
     </section>
   );

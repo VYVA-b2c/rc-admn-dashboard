@@ -484,7 +484,16 @@ function normalizeOrganizationPayload(payload = {}, creating = false) {
 
 async function resolveOrganizationFromRegistration(registration) {
   const id = nullIfBlank(firstValue(registration.organization_id, registration.organizationId, registration.org_id, registration.orgId));
-  const slug = nullIfBlank(firstValue(registration.organization_slug, registration.organizationSlug, registration.org_slug, registration.orgSlug, registration.org));
+  const slug = normalizeOrganizationSlug(firstValue(
+    registration.organization_slug,
+    registration.organizationSlug,
+    registration.org_slug,
+    registration.orgSlug,
+    registration.branch_slug,
+    registration.branchSlug,
+    registration.branch,
+    registration.org,
+  ));
   const name = nullIfBlank(firstValue(registration.organization_name, registration.organizationName));
   const country = nullIfBlank(registration.country)?.toLowerCase();
   const hasExplicitOrganization = Boolean(id || slug || name);
@@ -500,8 +509,9 @@ async function resolveOrganizationFromRegistration(registration) {
 
   const inferredSlug =
     slug ||
-    (country?.includes("spain") || country?.includes("espa") ? "red-cross-zamora" : null) ||
-    (country?.includes("germany") || country?.includes("deutsch") ? "red-cross-leipzig" : null);
+    (["es", "esp"].includes(country || "") || country?.includes("spain") || country?.includes("espa") ? "red-cross-zamora" : null) ||
+    (["de", "deu"].includes(country || "") || country?.includes("germany") || country?.includes("deutsch") ? "red-cross-leipzig" : null) ||
+    inferOrganizationSlugFromPhone(registration.phone);
   if (inferredSlug) {
     const result = await query(
       "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE slug = $1 AND active = true LIMIT 1",
@@ -524,6 +534,14 @@ async function resolveOrganizationFromRegistration(registration) {
   if (Number(activeOrgs.rows[0]?.count || 0) > 1) return null;
 
   return defaultOrganization();
+}
+
+function normalizeOrganizationSlug(value) {
+  const text = nullIfBlank(value)?.toLowerCase();
+  if (!text) return null;
+  if (text.includes("zamora") || text.includes("spain") || text.includes("espana") || text.includes("españa")) return "red-cross-zamora";
+  if (text.includes("leipzig") || text.includes("germany") || text.includes("deutsch")) return "red-cross-leipzig";
+  return text.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
 async function userBelongsToOrganization(userId, context, client = { query }) {
@@ -2751,6 +2769,14 @@ function phoneDigits(value) {
   return nullIfBlank(value)?.replace(/\D/g, "") || null;
 }
 
+function inferOrganizationSlugFromPhone(value) {
+  const digits = phoneDigits(value);
+  if (!digits) return null;
+  if (digits.startsWith("34") || digits.startsWith("0034")) return "red-cross-zamora";
+  if (digits.startsWith("49") || digits.startsWith("0049")) return "red-cross-leipzig";
+  return null;
+}
+
 function onboardingSecret() {
   return process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_API_KEY || process.env.LOVABLE_API_KEY;
 }
@@ -2768,9 +2794,17 @@ function onboardingAuthorized(req) {
 function normalizePhoneRegistrationPayload(payload = {}) {
   const source = {
     ...payload,
+    ...objectValue(payload.data),
     ...objectValue(payload.user),
+    ...objectValue(payload.user_data),
+    ...objectValue(payload.userData),
     ...objectValue(payload.registration),
     ...objectValue(payload.profile),
+    ...objectValue(payload.customer),
+    ...objectValue(payload.contact),
+    ...objectValue(payload.caller),
+    ...objectValue(payload.participant),
+    ...objectValue(payload.fields),
   };
   const fullName = firstValue(source.full_name, source.fullName, source.name, source.display_name, source.displayName);
   const parsedName = splitName(fullName);
@@ -2809,7 +2843,7 @@ function normalizePhoneRegistrationPayload(payload = {}) {
       street: nullIfBlank(firstValue(source.street, source.address_street, source.addressLine1)),
       house_number: nullIfBlank(firstValue(source.house_number, source.houseNumber, source.house_no, source.houseNo)),
       post_code: nullIfBlank(firstValue(source.post_code, source.postCode, source.postal_code, source.zip)),
-      country: nullIfBlank(source.country),
+      country: nullIfBlank(firstValue(source.country, source.country_code, source.countryCode)),
       timezone: nullIfBlank(source.timezone),
       date_of_birth: dateOfBirth,
       gender: nullIfBlank(source.gender),
@@ -3018,7 +3052,7 @@ async function ingestPhoneRegistration(payload) {
   const normalized = normalizePhoneRegistrationPayload(payload);
   if (normalized.error) return normalized;
   const organization = await resolveOrganizationFromRegistration(normalized.value);
-  if (!organization) return { error: "organization is required" };
+  if (!organization) return { error: "organization is required; send organization_slug, organization_id, country, or a +34/+49 phone number" };
   normalized.value.organization_id = organization.id;
   normalized.value.country = normalized.value.country || organization.country || "Germany";
   normalized.value.timezone = normalized.value.timezone || organization.timezone || "Europe/Berlin";
