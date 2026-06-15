@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { email, password, role } = await req.json();
+    const { email, password, role, organization_id } = await req.json();
     if (!email || !password) {
       return new Response(JSON.stringify({ error: "Email and password are required" }), {
         status: 400,
@@ -54,7 +54,10 @@ Deno.serve(async (req) => {
       email,
       password,
       email_confirm: true,
-      user_metadata: { role: assignedRole },
+      user_metadata: {
+        invited_role: assignedRole,
+        organization_id: organization_id || null,
+      },
     });
     if (error) throw error;
 
@@ -65,12 +68,16 @@ Deno.serve(async (req) => {
       });
     }
 
-    return new Response(JSON.stringify({ success: true, email }), {
+    return new Response(JSON.stringify({
+      success: true,
+      user_id: data.user?.id,
+      role: assignedRole,
+    }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Create user error:", error);
+    console.error("Create team user error");
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

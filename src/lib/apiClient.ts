@@ -35,7 +35,12 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
       signal: signal ?? controller.signal,
     });
     if (!res.ok) {
-      throw new Error(`API error ${res.status}: ${res.statusText}`);
+      const contentType = res.headers.get("content-type") ?? "";
+      const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
+      const message = typeof body?.error === "string" || typeof body?.message === "string"
+        ? body.error || body.message
+        : `API error ${res.status}: ${res.statusText}`;
+      throw new Error(message);
     }
     if (res.status === 204) return undefined as T;
 

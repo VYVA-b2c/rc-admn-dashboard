@@ -27,11 +27,16 @@ const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseBaseUrl = supabaseUrl ? supabaseUrl.replace(/\/$/, "") : null;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 const supabaseServiceRoleKey =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.LOVABLE_SUPABASE_SERVICE_ROLE_KEY;
+const supabaseInviteAdminFunctionUrl =
+  process.env.SUPABASE_INVITE_ADMIN_URL ||
+  process.env.LOVABLE_INVITE_ADMIN_URL ||
+  (supabaseBaseUrl ? `${supabaseBaseUrl}/functions/v1/invite-admin` : null);
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
@@ -126,9 +131,10 @@ async function optionalRows(text, params = []) {
   }
 }
 
-function httpError(status, message) {
+function httpError(status, message, expose = status < 500) {
   const error = new Error(message);
   error.status = status;
+  error.expose = expose;
   return error;
 }
 
@@ -192,7 +198,7 @@ async function verifySupabaseToken(token) {
   const cached = tokenUserCache.get(token);
   if (cached && cached.expiresAt > Date.now()) return cached.user;
 
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/user`, {
+  const response = await fetch(`${supabaseBaseUrl}/auth/v1/user`, {
     headers: {
       apikey: supabaseAnonKey,
       Authorization: `Bearer ${token}`,
@@ -204,7 +210,60 @@ async function verifySupabaseToken(token) {
   return user;
 }
 
+async function reconcilePendingTeamMemberByEmail(userId, email) {
+  if (!email || !pool) return;
+  const pendingResult = await query(
+    "SELECT user_id FROM public.profiles WHERE LOWER(email) = LOWER($1) AND user_id <> $2",
+    [email, userId],
+  );
+  const pendingIds = pendingResult.rows.map((row) => row.user_id).filter(Boolean);
+  if (!pendingIds.length) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const pendingId of pendingIds) {
+      await client.query(
+        `
+          INSERT INTO public.profiles (user_id, organization_id, is_platform_admin, full_name, email)
+          SELECT $1, organization_id, is_platform_admin, full_name, email
+          FROM public.profiles
+          WHERE user_id = $2
+          ON CONFLICT (user_id) DO UPDATE SET
+            organization_id = COALESCE(public.profiles.organization_id, EXCLUDED.organization_id),
+            is_platform_admin = public.profiles.is_platform_admin OR EXCLUDED.is_platform_admin,
+            full_name = COALESCE(public.profiles.full_name, EXCLUDED.full_name),
+            email = COALESCE(public.profiles.email, EXCLUDED.email),
+            updated_at = now()
+        `,
+        [userId, pendingId],
+      );
+      await client.query(
+        `
+          INSERT INTO public.user_roles (user_id, organization_id, role)
+          SELECT $1, organization_id, role
+          FROM public.user_roles
+          WHERE user_id = $2
+          ON CONFLICT (user_id, role) DO UPDATE SET organization_id = EXCLUDED.organization_id
+        `,
+        [userId, pendingId],
+      );
+      await client.query("DELETE FROM public.user_roles WHERE user_id = $1", [pendingId]);
+      await client.query("DELETE FROM public.profiles WHERE user_id = $1", [pendingId]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function loadUserContext(user) {
+  const authEmail = String(user.email || "").toLowerCase();
+  if (authEmail) await reconcilePendingTeamMemberByEmail(user.id, authEmail);
+
   const rolesResult = await query(
     `
       SELECT role::text, organization_id::text
@@ -337,13 +396,14 @@ async function resolveRequestContext(req, options = {}) {
         defaultLanguage: org?.default_language || "de",
         timezone: org?.timezone || "Europe/Berlin",
       },
+      authToken: null,
     });
   }
 
   const user = await verifySupabaseToken(token);
   if (!user?.id) throw httpError(401, "Invalid session");
   const context = await loadUserContext(user);
-  return applyOrganizationOverride(req, context);
+  return applyOrganizationOverride(req, { ...context, authToken: token });
 }
 
 function requireAdmin(context) {
@@ -475,12 +535,23 @@ async function userBelongsToOrganization(userId, context, client = { query }) {
   return Boolean(result.rows[0]);
 }
 
-async function createSupabaseAuthUser({ email, password, role, organizationId }) {
-  if (!supabaseUrl || !supabaseServiceRoleKey) {
-    throw httpError(503, "Team invite service is not configured");
-  }
+function authUserIdFromInviteResponse(body) {
+  return String(
+    body?.id ||
+    body?.user_id ||
+    body?.userId ||
+    body?.user?.id ||
+    body?.data?.user?.id ||
+    "",
+  );
+}
 
-  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/admin/users`, {
+function pendingTeamUserId(email) {
+  return `pending:${String(email || "").toLowerCase()}`;
+}
+
+async function createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId }) {
+  const response = await fetch(`${supabaseBaseUrl}/auth/v1/admin/users`, {
     method: "POST",
     headers: {
       apikey: supabaseServiceRoleKey,
@@ -504,6 +575,43 @@ async function createSupabaseAuthUser({ email, password, role, organizationId })
     throw httpError(response.status === 422 ? 409 : response.status, message);
   }
   return body;
+}
+
+async function createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken }) {
+  if (!supabaseInviteAdminFunctionUrl || !supabaseAnonKey || !authToken) {
+    throw httpError(503, "Team invite service is not configured", true);
+  }
+
+  const response = await fetch(supabaseInviteAdminFunctionUrl, {
+    method: "POST",
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${authToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      role,
+      organization_id: organizationId,
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = String(body?.error || body?.message || "Team member could not be created");
+    throw httpError(response.status === 422 ? 409 : response.status, message, response.status < 500);
+  }
+
+  const userId = authUserIdFromInviteResponse(body);
+  return userId ? { ...body, id: userId, user: { ...(body.user || {}), id: userId } } : body;
+}
+
+async function createSupabaseAuthUser({ email, password, role, organizationId, authToken }) {
+  if (supabaseBaseUrl && supabaseServiceRoleKey) {
+    return createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId });
+  }
+  return createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken });
 }
 
 async function loadTeamMembers(context) {
@@ -552,8 +660,9 @@ async function createTeamMember(payload, context) {
     password: member.value.password,
     role: member.value.role,
     organizationId,
+    authToken: context.authToken,
   });
-  const userId = String(authUser.id || authUser.user?.id || "");
+  const userId = authUserIdFromInviteResponse(authUser) || pendingTeamUserId(member.value.email);
   if (!userId) throw httpError(502, "Team member auth record was not returned");
 
   const client = await pool.connect();
@@ -3600,7 +3709,7 @@ app.use((error, _req, res, _next) => {
   const status = error.status || (error.code === "23505" ? 409 : error.code === "DB_NOT_CONFIGURED" ? 503 : 500);
   if (status >= 500) console.error(error);
   res.status(status).json({
-    error: status === 409 ? "Record already exists" : status >= 500 ? "Server error" : error.message,
+    error: status === 409 ? "Record already exists" : status >= 500 && !error.expose ? "Server error" : error.message,
   });
 });
 
