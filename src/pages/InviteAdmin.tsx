@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,14 +12,20 @@ import { toast } from "sonner";
 import { UserPlus, Eye, EyeOff } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
 import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
+import { apiFetch } from "@/lib/apiClient";
 
 type AdminUserRow = {
   id: string;
   role: string;
+  user_id?: string;
   profiles?: {
     full_name?: string | null;
     email?: string | null;
   } | null;
+};
+
+type TeamMembersResponse = {
+  members: AdminUserRow[];
 };
 
 export default function InviteAdmin() {
@@ -37,13 +42,8 @@ export default function InviteAdmin() {
     queryKey: ["admin-users", organizationId],
     queryFn: async () => {
       if (authBypassEnabled || !organizationId) return [];
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("*, profiles(full_name, email)")
-        .eq("organization_id", organizationId)
-        .order("role");
-      if (error) throw error;
-      return data || [];
+      const data = await apiFetch<TeamMembersResponse>("/api/v1/team-members");
+      return data.members || [];
     },
     enabled: !authBypassEnabled && Boolean(organizationId),
     placeholderData: [],
@@ -61,10 +61,10 @@ export default function InviteAdmin() {
     if (password.length < 6) { toast.error(t("invite.passwordTooShort")); return; }
     setLoading(true);
     try {
-      const { error } = await supabase.functions.invoke("invite-admin", {
-        body: { email, password, role, organization_id: organizationId },
+      await apiFetch("/api/v1/team-members", {
+        method: "POST",
+        body: JSON.stringify({ email, password, role }),
       });
-      if (error) throw error;
       const creds = `Email: ${email}\nPassword: ${password}`;
       toast.success(t("invite.userCreated"), {
         description: t("invite.shareCredentials"),

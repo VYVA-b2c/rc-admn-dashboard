@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { ArrowLeft, Building2, Languages, Lock, Plus } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
-import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
+import { apiFetch } from "@/lib/apiClient";
 import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
 
 type OrganizationsResponse = {
@@ -40,17 +40,10 @@ export default function Settings() {
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const currentOrganization = currentUser?.organization ?? null;
-  const [selectedOrganizationId, setSelectedOrganizationId] = useState(() => localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY) || "");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [organizationForm, setOrganizationForm] = useState(emptyOrganizationForm);
-
-  useEffect(() => {
-    if (!selectedOrganizationId && currentOrganization?.id) {
-      setSelectedOrganizationId(currentOrganization.id);
-    }
-  }, [currentOrganization?.id, selectedOrganizationId]);
 
   const organizationsQuery = useQuery({
     queryKey: ["organizations"],
@@ -75,6 +68,25 @@ export default function Settings() {
     },
     onError: () => {
       toast.error(t("settings.organizationCreateFailed"));
+    },
+  });
+
+  const updateOrganization = useMutation({
+    mutationFn: ({ id, defaultLanguage }: { id: string; defaultLanguage: "en" | "de" | "es" }) =>
+      apiFetch<{ organization: OrganizationContext }>(`/api/v1/organizations/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ defaultLanguage }),
+      }),
+    onSuccess: async () => {
+      toast.success(t("settings.organizationUpdated"));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["organizations"] }),
+        queryClient.invalidateQueries({ queryKey: ["organizations", "header"] }),
+        queryClient.invalidateQueries({ queryKey: ["current-user-context"] }),
+      ]);
+    },
+    onError: () => {
+      toast.error(t("settings.organizationUpdateFailed"));
     },
   });
 
@@ -111,13 +123,6 @@ export default function Settings() {
       slug: organizationForm.slug.trim(),
       timezone: organizationForm.timezone.trim() || suggestedTimezone(organizationForm.defaultLanguage),
     });
-  };
-
-  const handleActiveOrganizationChange = async (organizationId: string) => {
-    setSelectedOrganizationId(organizationId);
-    localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, organizationId);
-    await queryClient.invalidateQueries();
-    toast.success(t("settings.organizationSwitched"));
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -174,28 +179,6 @@ export default function Settings() {
               />
               <OrgMeta label={t("settings.organizationTimezone")} value={currentOrganization?.timezone || t("settings.notAvailable")} />
             </div>
-
-            {currentUser?.isPlatformAdmin && (
-              <div className="rounded-2xl border border-border bg-white p-4">
-                <Label>{t("settings.activeOrganization")}</Label>
-                <Select
-                  value={selectedOrganizationId || currentOrganization?.id || ""}
-                  onValueChange={(value) => void handleActiveOrganizationChange(value)}
-                >
-                  <SelectTrigger className="mt-2">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(organizationsQuery.data?.organizations ?? []).filter((organization) => organization.id).map((organization) => (
-                      <SelectItem key={organization.id || organization.slug} value={organization.id!}>
-                        {organization.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="mt-2 text-xs text-muted-foreground">{t("settings.activeOrganizationDescription")}</p>
-              </div>
-            )}
 
             {currentUser?.isPlatformAdmin && (
               <form onSubmit={handleCreateOrganization} className="rounded-2xl border border-border bg-muted/30 p-4">
@@ -269,12 +252,31 @@ export default function Settings() {
                 <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
                 <div className="divide-y divide-border">
                   {(organizationsQuery.data?.organizations ?? []).map((organization) => (
-                    <div key={organization.id || organization.slug} className="grid gap-1 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_1fr]">
+                    <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_180px]">
                       <span className="font-semibold text-foreground">{organization.name}</span>
                       <span className="text-muted-foreground">{organization.country || t("settings.notAvailable")}</span>
-                      <span className="text-muted-foreground">
-                        {organization.defaultLanguage ? t(`settings.language.${organization.defaultLanguage}`) : t("settings.notAvailable")}
-                      </span>
+                      {organization.id ? (
+                        <Select
+                          value={organization.defaultLanguage || "de"}
+                          onValueChange={(value) =>
+                            updateOrganization.mutate({
+                              id: organization.id!,
+                              defaultLanguage: value as "en" | "de" | "es",
+                            })
+                          }
+                        >
+                          <SelectTrigger className="h-9 rounded-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="en">{t("settings.language.en")}</SelectItem>
+                            <SelectItem value="de">{t("settings.language.de")}</SelectItem>
+                            <SelectItem value="es">{t("settings.language.es")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-muted-foreground">{t("settings.notAvailable")}</span>
+                      )}
                     </div>
                   ))}
                   {organizationsQuery.data?.organizations?.length === 0 && (

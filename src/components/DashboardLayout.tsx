@@ -1,10 +1,17 @@
 import { ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
+import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
+import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
+
+type OrganizationsResponse = {
+  organizations: OrganizationContext[];
+};
 
 function initials(email?: string | null) {
   if (!email) return "AN";
@@ -17,8 +24,22 @@ function initials(email?: string | null) {
 export function DashboardLayout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { t } = useLanguage();
+  const queryClient = useQueryClient();
   const { data: currentContext } = useCurrentUserContext();
-  const organizationName = currentContext?.user.organization?.name || t("layout.organization");
+  const currentUser = currentContext?.user;
+  const organizationName = currentUser?.organization?.name || t("layout.organization");
+  const organizationId = currentUser?.organization?.id || "";
+  const organizationsQuery = useQuery({
+    queryKey: ["organizations", "header"],
+    enabled: Boolean(currentUser?.isPlatformAdmin),
+    queryFn: () => apiFetch<OrganizationsResponse>("/api/v1/organizations"),
+    retry: false,
+  });
+
+  const handleOrganizationChange = async (nextOrganizationId: string) => {
+    localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, nextOrganizationId);
+    await queryClient.invalidateQueries();
+  };
 
   return (
     <SidebarProvider>
@@ -34,6 +55,23 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
+              {currentUser?.isPlatformAdmin && (organizationsQuery.data?.organizations?.length ?? 0) > 1 && (
+                <Select value={organizationId} onValueChange={(value) => void handleOrganizationChange(value)}>
+                  <SelectTrigger
+                    aria-label={t("layout.switchOrganization")}
+                    className="hidden h-9 w-[210px] rounded-full border-border bg-white px-3 text-xs font-semibold shadow-sm lg:flex"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent align="end">
+                    {(organizationsQuery.data?.organizations ?? []).filter((organization) => organization.id).map((organization) => (
+                      <SelectItem key={organization.id || organization.slug} value={organization.id!}>
+                        {organization.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
               <div className="hidden items-center gap-2 rounded-full border border-border bg-white px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm lg:flex">
                 <Circle className="h-2 w-2 fill-[hsl(142,71%,45%)] text-[hsl(142,71%,45%)]" />
                 {t("layout.systemStatus")}

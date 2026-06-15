@@ -28,6 +28,10 @@ const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+const supabaseServiceRoleKey =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  process.env.LOVABLE_SUPABASE_SERVICE_ROLE_KEY;
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
@@ -367,6 +371,20 @@ function publicContext(context) {
   };
 }
 
+function teamMemberRow(row) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    role: row.role,
+    organization_id: row.organization_id,
+    profiles: {
+      full_name: row.full_name || null,
+      email: row.email || null,
+    },
+    created_at: row.created_at || null,
+  };
+}
+
 function organizationRow(row) {
   return row
     ? {
@@ -409,6 +427,7 @@ async function resolveOrganizationFromRegistration(registration) {
   const slug = nullIfBlank(firstValue(registration.organization_slug, registration.organizationSlug, registration.org_slug, registration.orgSlug, registration.org));
   const name = nullIfBlank(firstValue(registration.organization_name, registration.organizationName));
   const country = nullIfBlank(registration.country)?.toLowerCase();
+  const hasExplicitOrganization = Boolean(id || slug || name);
 
   if (id) {
     const result = await query(
@@ -416,6 +435,7 @@ async function resolveOrganizationFromRegistration(registration) {
       [id],
     );
     if (result.rows[0]) return result.rows[0];
+    return null;
   }
 
   const inferredSlug =
@@ -428,6 +448,7 @@ async function resolveOrganizationFromRegistration(registration) {
       [inferredSlug],
     );
     if (result.rows[0]) return result.rows[0];
+    if (hasExplicitOrganization) return null;
   }
 
   if (name) {
@@ -436,7 +457,11 @@ async function resolveOrganizationFromRegistration(registration) {
       [name],
     );
     if (result.rows[0]) return result.rows[0];
+    return null;
   }
+
+  const activeOrgs = await query("SELECT COUNT(*)::int AS count FROM public.organizations WHERE active = true");
+  if (Number(activeOrgs.rows[0]?.count || 0) > 1) return null;
 
   return defaultOrganization();
 }
@@ -448,6 +473,122 @@ async function userBelongsToOrganization(userId, context, client = { query }) {
     [userId, organizationId],
   );
   return Boolean(result.rows[0]);
+}
+
+async function createSupabaseAuthUser({ email, password, role, organizationId }) {
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw httpError(503, "Team invite service is not configured");
+  }
+
+  const response = await fetch(`${supabaseUrl.replace(/\/$/, "")}/auth/v1/admin/users`, {
+    method: "POST",
+    headers: {
+      apikey: supabaseServiceRoleKey,
+      Authorization: `Bearer ${supabaseServiceRoleKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        invited_role: role,
+        organization_id: organizationId,
+      },
+    }),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = String(body?.msg || body?.message || "Team member could not be created");
+    throw httpError(response.status === 422 ? 409 : response.status, message);
+  }
+  return body;
+}
+
+async function loadTeamMembers(context) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await query(
+    `
+      SELECT
+        r.id::text,
+        r.user_id,
+        r.organization_id::text,
+        r.role::text,
+        p.full_name,
+        p.email,
+        p.created_at
+      FROM public.user_roles r
+      LEFT JOIN public.profiles p ON p.user_id = r.user_id
+      WHERE r.organization_id = $1
+      ORDER BY
+        CASE r.role WHEN 'admin' THEN 0 WHEN 'coordinator' THEN 1 ELSE 2 END,
+        COALESCE(p.email, r.user_id) ASC
+    `,
+    [organizationId],
+  );
+  return result.rows.map(teamMemberRow);
+}
+
+function normalizeTeamMemberPayload(payload = {}) {
+  const email = nullIfBlank(payload.email)?.toLowerCase();
+  const password = nullIfBlank(payload.password);
+  const role = nullIfBlank(payload.role) || "operator";
+  const fullName = nullIfBlank(firstValue(payload.full_name, payload.fullName, payload.name));
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is required" };
+  if (!password || password.length < 6) return { error: "password must be at least 6 characters" };
+  if (!["admin", "operator", "coordinator"].includes(role)) return { error: "role is invalid" };
+  return { value: { email, password, role, fullName } };
+}
+
+async function createTeamMember(payload, context) {
+  requireAdmin(context);
+  const organizationId = scopeOrganizationId(context);
+  const member = normalizeTeamMemberPayload(payload);
+  if (member.error) return member;
+
+  const authUser = await createSupabaseAuthUser({
+    email: member.value.email,
+    password: member.value.password,
+    role: member.value.role,
+    organizationId,
+  });
+  const userId = String(authUser.id || authUser.user?.id || "");
+  if (!userId) throw httpError(502, "Team member auth record was not returned");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `
+        INSERT INTO public.profiles (user_id, organization_id, full_name, email)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id) DO UPDATE SET
+          organization_id = EXCLUDED.organization_id,
+          full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name),
+          email = EXCLUDED.email,
+          updated_at = now()
+      `,
+      [userId, organizationId, member.value.fullName, member.value.email],
+    );
+    await client.query(
+      `
+        INSERT INTO public.user_roles (user_id, organization_id, role)
+        VALUES ($1, $2, $3::public.app_role)
+        ON CONFLICT (user_id, role) DO UPDATE SET organization_id = EXCLUDED.organization_id
+      `,
+      [userId, organizationId, member.value.role],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const members = await loadTeamMembers(context);
+  return { value: members.find((item) => item.user_id === userId && item.role === member.value.role) || null };
 }
 
 async function initializeDatabase() {
@@ -2878,6 +3019,20 @@ app.patch("/api/v1/organizations/:id", asyncRoute(async (req, res) => {
     return;
   }
   res.json({ organization: organizationRow(result.rows[0]) });
+}));
+
+app.get("/api/v1/team-members", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
+  res.json({ members: await loadTeamMembers(req.context) });
+}));
+
+app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
+  const result = await createTeamMember(req.body, req.context);
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.status(201).json({ member: result.value });
 }));
 
 app.get("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
