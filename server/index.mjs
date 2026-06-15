@@ -64,6 +64,31 @@ const pool = databaseUrl
     })
   : null;
 
+const fallbackOrganizations = [
+  {
+    id: "red-cross-zamora",
+    slug: "red-cross-zamora",
+    name: "Red Cross Zamora",
+    country: "Spain",
+    defaultLanguage: "es",
+    timezone: "Europe/Madrid",
+    active: true,
+    createdAt: null,
+    updatedAt: null,
+  },
+  {
+    id: "red-cross-leipzig",
+    slug: "red-cross-leipzig",
+    name: "Red Cross Leipzig",
+    country: "Germany",
+    defaultLanguage: "de",
+    timezone: "Europe/Berlin",
+    active: true,
+    createdAt: null,
+    updatedAt: null,
+  },
+];
+
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
@@ -3222,12 +3247,42 @@ app.get("/api/v1/me", asyncRoute(async (req, res) => {
   res.json({ user: publicContext(req.context) });
 }));
 
-app.get("/api/v1/organizations", asyncRoute(async (req, res) => {
-  const organizations = await loadOrganizations({
-    includeInactive: req.context.isAdmin && req.query.includeInactive === "true",
-  });
-  res.json({ organizations, currentOrganization: req.context.organization });
-}));
+app.get("/api/v1/organizations", async (req, res, next) => {
+  try {
+    let context = null;
+    if (pool) {
+      try {
+        context = await resolveRequestContext(req);
+      } catch (error) {
+        if (error.status && error.status !== 401) throw error;
+      }
+    }
+
+    let organizations = fallbackOrganizations;
+    if (pool) {
+      try {
+        const databaseOrganizations = await loadOrganizations({
+          includeInactive: Boolean(context?.isAdmin) && req.query.includeInactive === "true",
+        });
+        if (databaseOrganizations.length) organizations = databaseOrganizations;
+      } catch (error) {
+        console.warn("Organization list unavailable:", error instanceof Error ? error.message : "query failed");
+      }
+    }
+
+    const requestedOrganizationId = req.get("x-organization-id") || req.query.organization_id;
+    const currentOrganization =
+      organizations.find((organization) => organization.id === requestedOrganizationId || organization.slug === requestedOrganizationId) ||
+      context?.organization ||
+      organizations.find((organization) => organization.slug === "red-cross-leipzig") ||
+      organizations[0] ||
+      null;
+
+    res.json({ organizations, currentOrganization });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
   requireAdmin(req.context);
