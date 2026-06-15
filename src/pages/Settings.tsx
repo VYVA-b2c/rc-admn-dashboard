@@ -37,9 +37,8 @@ export default function Settings() {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { data: currentContext } = useCurrentUserContext();
+  const { data: currentContext, isLoading: loadingCurrentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
-  const currentOrganization = currentUser?.organization ?? null;
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -47,10 +46,18 @@ export default function Settings() {
 
   const organizationsQuery = useQuery({
     queryKey: ["organizations"],
-    enabled: Boolean(currentUser),
+    enabled: authBypassEnabled || Boolean(user?.id) || Boolean(currentUser),
     queryFn: () => apiFetch<OrganizationsResponse>("/api/v1/organizations?includeInactive=true"),
     retry: false,
   });
+  const organizations = organizationsQuery.data?.organizations ?? [];
+  const currentOrganization =
+    currentUser?.organization ??
+    organizationsQuery.data?.currentOrganization ??
+    organizations.find((organization) => organization.id) ??
+    null;
+  const organizationPlaceholder =
+    loadingCurrentContext || organizationsQuery.isLoading ? t("settings.loadingOrganization") : t("settings.notAvailable");
 
   const createOrganization = useMutation({
     mutationFn: (payload: typeof emptyOrganizationForm) =>
@@ -171,13 +178,13 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <OrgMeta label={t("settings.organizationName")} value={currentOrganization?.name || t("settings.notAvailable")} />
-              <OrgMeta label={t("settings.organizationCountry")} value={currentOrganization?.country || t("settings.notAvailable")} />
+              <OrgMeta label={t("settings.organizationName")} value={currentOrganization?.name || organizationPlaceholder} />
+              <OrgMeta label={t("settings.organizationCountry")} value={currentOrganization?.country || organizationPlaceholder} />
               <OrgMeta
                 label={t("settings.organizationDefaultLanguage")}
-                value={currentOrganization?.defaultLanguage ? t(`settings.language.${currentOrganization.defaultLanguage}`) : t("settings.notAvailable")}
+                value={currentOrganization?.defaultLanguage ? t(`settings.language.${currentOrganization.defaultLanguage}`) : organizationPlaceholder}
               />
-              <OrgMeta label={t("settings.organizationTimezone")} value={currentOrganization?.timezone || t("settings.notAvailable")} />
+              <OrgMeta label={t("settings.organizationTimezone")} value={currentOrganization?.timezone || organizationPlaceholder} />
             </div>
 
             {currentUser?.isPlatformAdmin && (
