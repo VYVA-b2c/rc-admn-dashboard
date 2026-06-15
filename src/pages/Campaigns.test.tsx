@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import Campaigns from "@/pages/Campaigns";
 
@@ -16,9 +17,11 @@ function renderCampaigns() {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/campaigns"]}>
-        <LanguageProvider>
-          <Campaigns />
-        </LanguageProvider>
+        <AuthProvider>
+          <LanguageProvider>
+            <Campaigns />
+          </LanguageProvider>
+        </AuthProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -28,11 +31,20 @@ describe("Campaigns", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
     warnSpy.mockRestore();
+    vi.unstubAllGlobals();
   });
 
   it("creates a local campaign draft and filters the campaign queue", async () => {
@@ -50,7 +62,7 @@ describe("Campaigns", () => {
     fireEvent.change(screen.getByLabelText("Objective"), {
       target: { value: "Confirm wellbeing, heating, and service needs." },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Winter welfare check").length).toBeGreaterThan(0);

@@ -7,15 +7,21 @@ import {
   CalendarDays,
   CheckCircle2,
   ClipboardList,
+  Clock,
   CopyPlus,
   Download,
   Megaphone,
   Pencil,
   PhoneCall,
   Plus,
+  Radio,
   Search,
   Send,
+  Share2,
+  ShieldCheck,
+  Sparkles,
   Users,
+  XCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -34,11 +40,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAdminRole } from "@/hooks/useAdminRole";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
 import {
   demoOperationalUsers,
   type OperationalChannel,
@@ -50,7 +59,9 @@ import { cn } from "@/lib/utils";
 type CampaignStatus = "active" | "draft" | "scheduled" | "completed";
 type CampaignChannel = "phone" | "whatsapp" | "mixed";
 type CampaignType = "safety" | "wellbeing" | "medication" | "service";
+type CampaignExecutionType = "manual" | "vyva_call";
 type CampaignTargetStatus = "pending" | "contacted" | "confirmed" | "followUp";
+type CampaignCallRunStatus = "draft" | "scheduled" | "queued" | "running" | "completed" | "cancelled" | "failed";
 
 type Campaign = {
   id: string;
@@ -67,6 +78,12 @@ type Campaign = {
   type: CampaignType;
   status: CampaignStatus;
   channel: CampaignChannel;
+  scheduledAt?: string | null;
+  callScript?: string;
+  callWindowStart?: string;
+  callWindowEnd?: string;
+  retryLimit?: number;
+  executionType?: CampaignExecutionType;
   total: number;
   contacted: number;
   confirmed: number;
@@ -77,12 +94,17 @@ type Campaign = {
 
 type FormState = {
   name: string;
-  status: CampaignStatus;
   type: CampaignType;
   audience: string;
   city: string;
   channel: CampaignChannel;
   objective: string;
+  executionType: CampaignExecutionType;
+  scheduledAt: string;
+  callScript: string;
+  callWindowStart: string;
+  callWindowEnd: string;
+  retryLimit: number;
 };
 
 type CampaignTarget = {
@@ -101,12 +123,63 @@ type CampaignPayload = {
   audience: string;
   channel: CampaignChannel;
   city: string;
+  callScript?: string | null;
+  callWindowEnd?: string;
+  callWindowStart?: string;
   dueKey: string;
+  executionType?: CampaignExecutionType;
   name: string;
   objective: string;
   owner: string;
+  retryLimit?: number;
+  scheduledAt?: string | null;
   status: CampaignStatus;
   type: CampaignType;
+};
+
+type CampaignAssistantDraft = {
+  audience: string;
+  callScript: string;
+  name: string;
+  objective: string;
+  operatorFocus: string[];
+};
+
+type CampaignCallRun = {
+  id: string;
+  campaignId: string;
+  status: CampaignCallRunStatus;
+  scheduledAt?: string | null;
+  eligibleCount: number;
+  skippedCount: number;
+  queuedCount: number;
+  pendingCount: number;
+  callingCount: number;
+  completedCount: number;
+  failedCount: number;
+  cancelledCount: number;
+  callScript?: string;
+  callWindowStart?: string;
+  callWindowEnd?: string;
+  retryLimit?: number;
+  createdAt?: string | null;
+};
+
+type CampaignCallPreview = {
+  campaignId: string;
+  scheduledAt?: string | null;
+  callWindowStart: string;
+  callWindowEnd: string;
+  retryLimit: number;
+  callScript: string;
+  eligibleCount: number;
+  skippedCount: number;
+  skipped: {
+    noPhone: number;
+    noConsent: number;
+    outsideCallWindow: number;
+    duplicateTarget: number;
+  };
 };
 
 const initialCampaigns: Campaign[] = [
@@ -242,6 +315,28 @@ function targetStatusClasses(status: CampaignTargetStatus) {
   }
 }
 
+function callRunStatusClasses(status: CampaignCallRunStatus) {
+  switch (status) {
+    case "scheduled":
+      return "bg-primary/10 text-primary ring-primary/20";
+    case "queued":
+    case "running":
+      return "bg-orange-50 text-orange-700 ring-orange-200";
+    case "completed":
+      return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+    case "cancelled":
+    case "failed":
+      return "bg-red-50 text-red-700 ring-red-200";
+    case "draft":
+      return "bg-slate-100 text-slate-700 ring-slate-200";
+  }
+}
+
+function callRunCompletion(run?: CampaignCallRun) {
+  if (!run || run.eligibleCount <= 0) return 0;
+  return Math.round(((run.completedCount + run.failedCount + run.cancelledCount) / run.eligibleCount) * 100);
+}
+
 function targetReasonKey(campaign: Campaign, user: OperationalQueueUser) {
   if (campaign.type === "medication") {
     return (user.missedMeds7d ?? 0) > 0 ? "campaigns.targets.reason.medication" : "campaigns.targets.reason.monitor";
@@ -300,16 +395,81 @@ function campaignTargets(campaign: Campaign): CampaignTarget[] {
 
 const defaultForm: FormState = {
   name: "",
-  status: "draft",
   type: "safety",
   audience: "",
   city: "Madrid",
   channel: "phone",
   objective: "",
+  executionType: "manual",
+  scheduledAt: "",
+  callScript: "",
+  callWindowStart: "09:00",
+  callWindowEnd: "18:00",
+  retryLimit: 1,
 };
+
+const campaignAssistantKeys: Record<CampaignType, { audience: string; callScript: string; name: string; objective: string; focus: [string, string, string] }> = {
+  safety: {
+    audience: "campaigns.ai.safety.audience",
+    callScript: "campaigns.ai.safety.callScript",
+    name: "campaigns.ai.safety.name",
+    objective: "campaigns.ai.safety.objective",
+    focus: ["campaigns.ai.safety.focus1", "campaigns.ai.safety.focus2", "campaigns.ai.safety.focus3"],
+  },
+  wellbeing: {
+    audience: "campaigns.ai.wellbeing.audience",
+    callScript: "campaigns.ai.wellbeing.callScript",
+    name: "campaigns.ai.wellbeing.name",
+    objective: "campaigns.ai.wellbeing.objective",
+    focus: ["campaigns.ai.wellbeing.focus1", "campaigns.ai.wellbeing.focus2", "campaigns.ai.wellbeing.focus3"],
+  },
+  medication: {
+    audience: "campaigns.ai.medication.audience",
+    callScript: "campaigns.ai.medication.callScript",
+    name: "campaigns.ai.medication.name",
+    objective: "campaigns.ai.medication.objective",
+    focus: ["campaigns.ai.medication.focus1", "campaigns.ai.medication.focus2", "campaigns.ai.medication.focus3"],
+  },
+  service: {
+    audience: "campaigns.ai.service.audience",
+    callScript: "campaigns.ai.service.callScript",
+    name: "campaigns.ai.service.name",
+    objective: "campaigns.ai.service.objective",
+    focus: ["campaigns.ai.service.focus1", "campaigns.ai.service.focus2", "campaigns.ai.service.focus3"],
+  },
+};
+
+function fillTemplate(template: string, values: Record<string, string>) {
+  return Object.entries(values).reduce((text, [key, value]) => text.replaceAll(`{${key}}`, value), template);
+}
+
+function toDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function toIsoOrNull(value: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function formatSchedule(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
 
 export default function Campaigns() {
   const { t } = useLanguage();
+  const { isAdmin } = useAdminRole();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -320,11 +480,18 @@ export default function Campaigns() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(defaultForm);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantDraft, setAssistantDraft] = useState<CampaignAssistantDraft | null>(null);
+  const [callPreview, setCallPreview] = useState<CampaignCallPreview | null>(null);
+  const [callPreviewCampaignId, setCallPreviewCampaignId] = useState<string | null>(null);
+  const [callPreviewPayload, setCallPreviewPayload] = useState<CampaignPayload | null>(null);
+  const [callPreviewOpen, setCallPreviewOpen] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const cityRef = useRef<HTMLInputElement>(null);
   const audienceRef = useRef<HTMLInputElement>(null);
   const objectiveRef = useRef<HTMLTextAreaElement>(null);
+  const canManageCallCampaigns = isAdmin && !authBypassEnabled;
 
   const { data: campaignData } = useQuery({
     queryKey: ["campaigns-dashboard", "campaigns"],
@@ -365,8 +532,47 @@ export default function Campaigns() {
     },
   });
 
+  const previewCallRunMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: CampaignPayload }) =>
+      apiFetch<{ preview: CampaignCallPreview }>(`/api/v1/campaigns-dashboard/campaigns/${id}/call-runs/preview`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        timeoutMs: 3500,
+      }),
+  });
+
+  const createCallRunMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string; payload: CampaignPayload }) =>
+      apiFetch<{ run: CampaignCallRun; preview: CampaignCallPreview }>(`/api/v1/campaigns-dashboard/campaigns/${id}/call-runs`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+        timeoutMs: 3500,
+      }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard", "call-runs", variables.id] });
+      queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard", "campaigns"] });
+    },
+  });
+
+  const cancelCallRunMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ run: CampaignCallRun }>(`/api/v1/campaigns-dashboard/call-runs/${id}/cancel`, {
+        method: "POST",
+        timeoutMs: 3500,
+      }),
+    onSuccess: () => {
+      if (selectedCampaign?.id) {
+        queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard", "call-runs", selectedCampaign.id] });
+      }
+    },
+  });
+
   const campaigns = campaignData?.campaigns?.length ? campaignData.campaigns : localCampaigns;
-  const savingCampaign = createCampaignMutation.isPending || updateCampaignMutation.isPending;
+  const savingCampaign =
+    createCampaignMutation.isPending ||
+    updateCampaignMutation.isPending ||
+    previewCallRunMutation.isPending ||
+    createCallRunMutation.isPending;
 
   useEffect(() => {
     if (searchParams.get("create") !== "1") return;
@@ -415,10 +621,59 @@ export default function Campaigns() {
     () => (selectedCampaign?.targets?.length ? selectedCampaign.targets : selectedCampaign ? campaignTargets(selectedCampaign) : []),
     [selectedCampaign],
   );
+  const { data: callRunData } = useQuery({
+    queryKey: ["campaigns-dashboard", "call-runs", selectedCampaign?.id],
+    enabled: Boolean(selectedCampaign?.id) && !authBypassEnabled,
+    retry: false,
+    queryFn: async (): Promise<{ runs: CampaignCallRun[] }> =>
+      apiFetch<{ runs: CampaignCallRun[] }>(`/api/v1/campaigns-dashboard/campaigns/${selectedCampaign!.id}/call-runs`, {
+        timeoutMs: 3500,
+      }),
+  });
+  const callRuns = callRunData?.runs ?? [];
+  const latestCallRun = callRuns[0];
+
+  const buildAssistantDraft = (currentForm: FormState): CampaignAssistantDraft => {
+    const city = currentForm.city.trim() || "Madrid";
+    const channel = t(`campaigns.channel.${currentForm.channel}`).toLowerCase();
+    const keys = campaignAssistantKeys[currentForm.type];
+    const values = { city, channel };
+
+    return {
+      name: fillTemplate(t(keys.name), values),
+      audience: fillTemplate(t(keys.audience), values),
+      objective: fillTemplate(t(keys.objective), values),
+      callScript: fillTemplate(t(keys.callScript), values),
+      operatorFocus: keys.focus.map((key) => fillTemplate(t(key), values)),
+    };
+  };
+
+  const openAssistant = () => {
+    const draft = buildAssistantDraft(form);
+    setAssistantDraft(draft);
+    setAssistantOpen(true);
+  };
+
+  const applyAssistantDraft = () => {
+    if (!assistantDraft) return;
+    setForm((current) => ({
+      ...current,
+      name: assistantDraft.name,
+      audience: assistantDraft.audience,
+      objective: assistantDraft.objective,
+      callScript: assistantDraft.callScript,
+    }));
+    toast({
+      title: t("campaigns.ai.appliedTitle"),
+      description: t("campaigns.ai.appliedDescription"),
+    });
+  };
 
   const openCreateDialog = () => {
     setEditingId(null);
     setForm(defaultForm);
+    setAssistantOpen(false);
+    setAssistantDraft(null);
     setDialogOpen(true);
   };
 
@@ -427,13 +682,20 @@ export default function Campaigns() {
     setEditingId(selectedCampaign.id);
     setForm({
       name: itemText(selectedCampaign, "name", t),
-      status: selectedCampaign.status,
       type: selectedCampaign.type,
       audience: itemText(selectedCampaign, "audience", t),
       city: selectedCampaign.city || "Madrid",
       channel: selectedCampaign.channel,
       objective: itemText(selectedCampaign, "objective", t),
+      executionType: selectedCampaign.executionType === "vyva_call" ? "vyva_call" : "manual",
+      scheduledAt: toDateTimeLocal(selectedCampaign.scheduledAt),
+      callScript: selectedCampaign.callScript || "",
+      callWindowStart: selectedCampaign.callWindowStart || "09:00",
+      callWindowEnd: selectedCampaign.callWindowEnd || "18:00",
+      retryLimit: selectedCampaign.retryLimit ?? 1,
     });
+    setAssistantOpen(false);
+    setAssistantDraft(null);
     setDialogOpen(true);
   };
 
@@ -441,7 +703,7 @@ export default function Campaigns() {
     setForm((current) => ({ ...current, [key]: value }));
   };
 
-  const handleSubmitCampaign = async () => {
+  const buildCampaignPayload = (status: CampaignStatus): CampaignPayload | null => {
     const name = (nameRef.current?.value ?? form.name).trim();
     const audience = (audienceRef.current?.value ?? form.audience).trim();
     const city = (cityRef.current?.value ?? form.city).trim();
@@ -449,45 +711,110 @@ export default function Campaigns() {
 
     if (!name) {
       toast({ title: t("campaigns.validation.name"), variant: "destructive" });
-      return;
+      return null;
     }
 
-    const payload: CampaignPayload = {
+    const isCallCampaign = form.executionType === "vyva_call";
+    const callScript = form.callScript.trim() || objective || t("campaigns.call.defaultScript");
+    return {
       audience,
       channel: form.channel,
       city: city || "Madrid",
-      dueKey: editingId && selectedCampaign ? selectedCampaign.dueKey : "campaigns.due.draft",
+      callScript: isCallCampaign ? callScript : null,
+      callWindowEnd: form.callWindowEnd || "18:00",
+      callWindowStart: form.callWindowStart || "09:00",
+      dueKey:
+        status === "active"
+          ? "campaigns.due.today"
+          : status === "scheduled"
+            ? "campaigns.due.scheduled"
+            : editingId && selectedCampaign
+              ? selectedCampaign.dueKey
+              : "campaigns.due.draft",
+      executionType: form.executionType,
       name,
       objective: objective || t("campaigns.defaultObjective"),
       owner: t("layout.operatorName"),
-      status: form.status,
+      retryLimit: form.retryLimit,
+      scheduledAt: isCallCampaign ? toIsoOrNull(form.scheduledAt) : null,
+      status,
       type: form.type,
     };
+  };
+
+  const saveCampaign = async (status: CampaignStatus, options: { previewCalls?: boolean } = {}) => {
+    if (options.previewCalls && !canManageCallCampaigns) {
+      toast({
+        title: t("campaigns.call.adminOnlyTitle"),
+        description: t(authBypassEnabled ? "campaigns.call.previewReadOnly" : "campaigns.call.adminOnlyDescription"),
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const payload = buildCampaignPayload(status);
+    if (!payload) return;
+
+    if (options.previewCalls && payload.executionType !== "vyva_call") {
+      payload.executionType = "vyva_call";
+    }
+
+    if (options.previewCalls && !payload.callScript?.trim()) {
+      toast({ title: t("campaigns.call.scriptRequired"), variant: "destructive" });
+      return;
+    }
 
     try {
+      let savedCampaign: Campaign | undefined;
       if (editingId) {
-        await updateCampaignMutation.mutateAsync({ id: editingId, payload });
+        const result = await updateCampaignMutation.mutateAsync({ id: editingId, payload });
+        savedCampaign = result.campaign;
       } else {
-        await createCampaignMutation.mutateAsync(payload);
+        const result = await createCampaignMutation.mutateAsync(payload);
+        savedCampaign = result.campaign;
       }
+      const savedId = savedCampaign?.id ?? editingId;
+      if (savedId) setSelectedId(savedId);
       setDialogOpen(false);
       setEditingId(null);
+
+      if (options.previewCalls && savedId) {
+        const previewResult = await previewCallRunMutation.mutateAsync({ id: savedId, payload });
+        setCallPreview(previewResult.preview);
+        setCallPreviewCampaignId(savedId);
+        setCallPreviewPayload(payload);
+        setCallPreviewOpen(true);
+        return;
+      }
+
       toast({
         title: t("campaigns.action.ready"),
-        description: t(editingId ? "campaigns.action.updatedSaved" : "campaigns.action.createdSaved"),
+        description: t(
+          status === "draft"
+            ? "campaigns.action.draftSaved"
+            : status === "scheduled"
+              ? "campaigns.action.scheduledSaved"
+              : "campaigns.action.publishedSaved",
+        ),
       });
     } catch (error) {
       const fallbackCampaign: Campaign = {
         id: editingId || `local-${Date.now()}`,
-        name,
+        name: payload.name,
         objective: payload.objective,
-        audience: audience || t("campaigns.defaultAudience"),
+        audience: payload.audience || t("campaigns.defaultAudience"),
         dueKey: payload.dueKey,
         city: payload.city,
         owner: payload.owner,
         type: payload.type,
         status: payload.status,
         channel: payload.channel,
+        scheduledAt: payload.scheduledAt,
+        callScript: payload.callScript || "",
+        callWindowStart: payload.callWindowStart,
+        callWindowEnd: payload.callWindowEnd,
+        retryLimit: payload.retryLimit,
+        executionType: payload.executionType,
         total: selectedCampaign?.total ?? 0,
         contacted: selectedCampaign?.contacted ?? 0,
         confirmed: selectedCampaign?.confirmed ?? 0,
@@ -508,6 +835,85 @@ export default function Campaigns() {
         title: t("campaigns.action.ready"),
         description: t(editingId ? "campaigns.action.updatedLocal" : "campaigns.action.createdLocal"),
       });
+    }
+  };
+
+  const copyBrief = async (payload: CampaignPayload) => {
+    const brief = [
+      `${t("campaigns.share.title")}: ${payload.name}`,
+      `${t("campaigns.form.type")}: ${t(`campaigns.type.${payload.type}`)}`,
+      `${t("campaigns.form.channel")}: ${t(`campaigns.channel.${payload.channel}`)}`,
+      `${t("campaigns.form.city")}: ${payload.city}`,
+      `${t("campaigns.form.audience")}: ${payload.audience || t("campaigns.defaultAudience")}`,
+      `${t("campaigns.form.objective")}: ${payload.objective}`,
+      payload.executionType === "vyva_call" ? `${t("campaigns.call.script")}: ${payload.callScript}` : "",
+      payload.scheduledAt ? `${t("campaigns.call.schedule")}: ${formatSchedule(payload.scheduledAt)}` : "",
+    ].filter(Boolean).join("\n");
+
+    try {
+      await navigator.clipboard.writeText(brief);
+      toast({ title: t("campaigns.share.copiedTitle"), description: t("campaigns.share.copiedDescription") });
+    } catch {
+      toast({ title: t("campaigns.share.copyFailed"), variant: "destructive" });
+    }
+  };
+
+  const handleShareBrief = async () => {
+    const payload = buildCampaignPayload(editingId && selectedCampaign ? selectedCampaign.status : "draft");
+    if (!payload) return;
+    await copyBrief(payload);
+  };
+
+  const handleShareSelectedCampaign = async (campaign: Campaign) => {
+    await copyBrief({
+      audience: itemText(campaign, "audience", t),
+      channel: campaign.channel,
+      city: campaign.city,
+      callScript: campaign.callScript || "",
+      callWindowEnd: campaign.callWindowEnd,
+      callWindowStart: campaign.callWindowStart,
+      dueKey: campaign.dueKey,
+      executionType: campaign.executionType || "manual",
+      name: itemText(campaign, "name", t),
+      objective: itemText(campaign, "objective", t),
+      owner: campaign.owner,
+      retryLimit: campaign.retryLimit,
+      scheduledAt: campaign.scheduledAt,
+      status: campaign.status,
+      type: campaign.type,
+    });
+  };
+
+  const handleConfirmCallRun = async () => {
+    if (!callPreviewCampaignId || !callPreviewPayload || !callPreview) return;
+    if (!canManageCallCampaigns) {
+      toast({ title: t("campaigns.call.adminOnlyTitle"), variant: "destructive" });
+      return;
+    }
+    if (callPreview.eligibleCount < 1) {
+      toast({ title: t("campaigns.call.noEligibleTitle"), description: t("campaigns.call.noEligibleDescription"), variant: "destructive" });
+      return;
+    }
+
+    try {
+      await createCallRunMutation.mutateAsync({ id: callPreviewCampaignId, payload: callPreviewPayload });
+      setCallPreviewOpen(false);
+      setCallPreview(null);
+      setCallPreviewCampaignId(null);
+      setCallPreviewPayload(null);
+      toast({ title: t("campaigns.call.queuedTitle"), description: t("campaigns.call.queuedDescription") });
+    } catch {
+      toast({ title: t("campaigns.call.queueFailed"), variant: "destructive" });
+    }
+  };
+
+  const handleCancelLatestRun = async () => {
+    if (!latestCallRun || !canManageCallCampaigns) return;
+    try {
+      await cancelCallRunMutation.mutateAsync(latestCallRun.id);
+      toast({ title: t("campaigns.call.cancelledTitle"), description: t("campaigns.call.cancelledDescription") });
+    } catch {
+      toast({ title: t("campaigns.call.cancelFailed"), variant: "destructive" });
     }
   };
 
@@ -641,7 +1047,17 @@ export default function Campaigns() {
                           <TableCell className="text-sm text-muted-foreground">
                             {itemText(campaign, "audience", t)}
                           </TableCell>
-                          <TableCell className="text-sm">{t(`campaigns.channel.${campaign.channel}`)}</TableCell>
+                          <TableCell className="text-sm">
+                            <div className="flex flex-col gap-1">
+                              <span>{t(`campaigns.channel.${campaign.channel}`)}</span>
+                              {campaign.executionType === "vyva_call" && (
+                                <span className="inline-flex w-fit items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold text-primary">
+                                  <Radio className="h-3 w-3" />
+                                  {t("campaigns.call.badge")}
+                                </span>
+                              )}
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="space-y-1">
                               <div className="flex items-center justify-between text-xs">
@@ -688,30 +1104,75 @@ export default function Campaigns() {
                 <DetailStat label={t("campaigns.detail.contacted")} value={selectedCampaign.contacted} />
                 <DetailStat label={t("campaigns.detail.confirmed")} value={selectedCampaign.confirmed} />
                 <DetailStat label={t("campaigns.detail.followUp")} value={selectedCampaign.followUp} />
-                <DetailStat label={t("campaigns.detail.due")} value={t(selectedCampaign.dueKey)} />
+                <DetailStat
+                  label={t("campaigns.detail.due")}
+                  value={selectedCampaign.scheduledAt ? formatSchedule(selectedCampaign.scheduledAt) : t(selectedCampaign.dueKey)}
+                />
               </div>
 
-              <div className="rounded-2xl bg-primary/5 p-4">
-                <p className="text-xs font-bold uppercase tracking-[0.14em] text-primary">
-                  {t("campaigns.detail.nextAction")}
-                </p>
-                <p className="mt-2 text-sm font-semibold text-foreground">{t("campaigns.detail.nextActionBody")}</p>
-              </div>
+              {selectedCampaign.executionType === "vyva_call" || latestCallRun ? (
+                <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-primary">
+                        <Radio className="h-4 w-4" />
+                        {t("campaigns.call.queueTitle")}
+                      </p>
+                      <p className="mt-2 text-sm font-semibold text-foreground">
+                        {latestCallRun?.scheduledAt
+                          ? t("campaigns.call.scheduledFor").replace("{date}", formatSchedule(latestCallRun.scheduledAt))
+                          : t("campaigns.call.noRunYet")}
+                      </p>
+                    </div>
+                    {latestCallRun && (
+                      <Badge className={cn("rounded-full text-xs ring-1", callRunStatusClasses(latestCallRun.status))}>
+                        {t(`campaigns.call.status.${latestCallRun.status}`)}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {latestCallRun ? (
+                    <div className="mt-4 space-y-3">
+                      <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                        <MiniStat label={t("campaigns.call.eligible")} value={latestCallRun.eligibleCount} />
+                        <MiniStat label={t("campaigns.call.pending")} value={latestCallRun.pendingCount + latestCallRun.queuedCount} />
+                        <MiniStat label={t("campaigns.call.completed")} value={latestCallRun.completedCount} />
+                        <MiniStat label={t("campaigns.call.skipped")} value={latestCallRun.skippedCount} />
+                      </div>
+                      <Progress value={callRunCompletion(latestCallRun)} className="h-2 bg-white [&>div]:bg-primary" />
+                      {canManageCallCampaigns && ["scheduled", "queued"].includes(latestCallRun.status) && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-9 rounded-full border-red-200 bg-white text-xs font-bold text-red-600 hover:bg-red-50 hover:text-red-700"
+                          onClick={handleCancelLatestRun}
+                          disabled={cancelCallRunMutation.isPending}
+                        >
+                          <XCircle className="mr-2 h-4 w-4" />
+                          {t("campaigns.call.cancelRun")}
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-muted-foreground">{t("campaigns.call.noRunDescription")}</p>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-2xl bg-primary/5 p-4">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-primary">
+                    {t("campaigns.detail.nextAction")}
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-foreground">{t("campaigns.detail.nextActionBody")}</p>
+                </div>
+              )}
 
               <div className="space-y-2">
-                <Button className="w-full rounded-xl" onClick={() => handleLocalAction("campaigns.action.startLocal")}>
-                  <Send className="mr-2 h-4 w-4" />
-                  {t("campaigns.action.start")}
+                <Button className="w-full rounded-xl" onClick={openEditDialog}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  {t("campaigns.action.edit")}
                 </Button>
                 <div className="grid gap-2 sm:grid-cols-3">
-                  <Button
-                    variant="outline"
-                    className="rounded-xl"
-                    onClick={openEditDialog}
-                  >
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t("campaigns.action.edit")}
-                  </Button>
                   <Button
                     variant="outline"
                     className="rounded-xl"
@@ -719,6 +1180,14 @@ export default function Campaigns() {
                   >
                     <CopyPlus className="mr-2 h-4 w-4" />
                     {t("campaigns.action.duplicate")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => handleShareSelectedCampaign(selectedCampaign)}
+                  >
+                    <Share2 className="mr-2 h-4 w-4" />
+                    {t("campaigns.share.button")}
                   </Button>
                   <Button
                     variant="outline"
@@ -888,10 +1357,14 @@ export default function Campaigns() {
         open={dialogOpen}
         onOpenChange={(open) => {
           setDialogOpen(open);
-          if (!open) setEditingId(null);
+          if (!open) {
+            setEditingId(null);
+            setAssistantOpen(false);
+            setAssistantDraft(null);
+          }
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t(editingId ? "campaigns.form.editTitle" : "campaigns.form.title")}</DialogTitle>
             <DialogDescription>
@@ -904,9 +1377,61 @@ export default function Campaigns() {
             className="grid gap-4 py-2"
             onSubmit={(event) => {
               event.preventDefault();
-              handleSubmitCampaign();
+              saveCampaign("draft");
             }}
           >
+            <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white">
+                    <Sparkles className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-foreground">{t("campaigns.ai.title")}</p>
+                    <p className="mt-1 text-sm leading-5 text-muted-foreground">{t("campaigns.ai.description")}</p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-9 shrink-0 rounded-full border-primary/20 bg-white px-3 text-xs font-bold text-primary hover:bg-primary/10 hover:text-primary"
+                  onClick={openAssistant}
+                >
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  {t(assistantOpen ? "campaigns.ai.regenerate" : "campaigns.ai.open")}
+                </Button>
+              </div>
+
+              {assistantOpen && assistantDraft && (
+                <div className="mt-4 grid gap-3 rounded-xl border border-primary/10 bg-white p-4 shadow-sm">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <AssistantSuggestion label={t("campaigns.form.name")} value={assistantDraft.name} />
+                    <AssistantSuggestion label={t("campaigns.form.audience")} value={assistantDraft.audience} />
+                    <AssistantSuggestion label={t("campaigns.form.objective")} value={assistantDraft.objective} />
+                  </div>
+                  <AssistantSuggestion label={t("campaigns.call.script")} value={assistantDraft.callScript} />
+                  <div className="rounded-xl bg-muted/45 p-3">
+                    <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                      {t("campaigns.ai.operatorFocus")}
+                    </p>
+                    <ul className="mt-2 grid gap-2 text-sm text-muted-foreground md:grid-cols-3">
+                      {assistantDraft.operatorFocus.map((item) => (
+                        <li key={item} className="flex gap-2">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button type="button" className="h-9 rounded-full px-4 text-xs font-bold" onClick={applyAssistantDraft}>
+                      {t("campaigns.ai.apply")}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
               <Input
@@ -920,21 +1445,6 @@ export default function Campaigns() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-3">
-              <div className="space-y-2">
-                <Label>{t("campaigns.form.status")}</Label>
-                <Select value={form.status} onValueChange={(value) => updateForm("status", value as CampaignStatus)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="draft">{t("campaigns.status.draft")}</SelectItem>
-                    <SelectItem value="scheduled">{t("campaigns.status.scheduled")}</SelectItem>
-                    <SelectItem value="active">{t("campaigns.status.active")}</SelectItem>
-                    <SelectItem value="completed">{t("campaigns.status.completed")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
               <div className="space-y-2">
                 <Label>{t("campaigns.form.type")}</Label>
                 <Select value={form.type} onValueChange={(value) => updateForm("type", value as CampaignType)}>
@@ -1000,17 +1510,245 @@ export default function Campaigns() {
               />
             </div>
 
-            <DialogFooter>
+            <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <Radio className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-foreground">{t("campaigns.call.panelTitle")}</p>
+                    <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                      {canManageCallCampaigns ? t("campaigns.call.panelDescription") : t("campaigns.call.adminOnlyDescription")}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">
+                    {t("campaigns.call.enable")}
+                  </span>
+                  <Switch
+                    checked={form.executionType === "vyva_call"}
+                    disabled={!canManageCallCampaigns}
+                    onCheckedChange={(checked) => updateForm("executionType", checked ? "vyva_call" : "manual")}
+                  />
+                </div>
+              </div>
+
+              {authBypassEnabled && (
+                <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-800">
+                  {t("campaigns.call.previewReadOnly")}
+                </div>
+              )}
+
+              {form.executionType === "vyva_call" && (
+                <div className="mt-4 grid gap-4">
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-scheduled-at">{t("campaigns.call.schedule")}</Label>
+                      <Input
+                        id="campaign-scheduled-at"
+                        type="datetime-local"
+                        value={form.scheduledAt}
+                        onChange={(event) => updateForm("scheduledAt", event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-retry-limit">{t("campaigns.call.retryLimit")}</Label>
+                      <Input
+                        id="campaign-retry-limit"
+                        type="number"
+                        min={0}
+                        max={5}
+                        value={form.retryLimit}
+                        onChange={(event) => updateForm("retryLimit", Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-window-start">{t("campaigns.call.windowStart")}</Label>
+                      <Input
+                        id="campaign-window-start"
+                        type="time"
+                        value={form.callWindowStart}
+                        onChange={(event) => updateForm("callWindowStart", event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-window-end">{t("campaigns.call.windowEnd")}</Label>
+                      <Input
+                        id="campaign-window-end"
+                        type="time"
+                        value={form.callWindowEnd}
+                        onChange={(event) => updateForm("callWindowEnd", event.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="campaign-call-script">{t("campaigns.call.script")}</Label>
+                    <Textarea
+                      id="campaign-call-script"
+                      value={form.callScript}
+                      onChange={(event) => updateForm("callScript", event.target.value)}
+                      placeholder={t("campaigns.call.scriptPlaceholder")}
+                      rows={4}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                  </div>
+
+                  <div className="grid gap-3 rounded-xl bg-muted/40 p-3 text-sm sm:grid-cols-3">
+                    <div className="flex items-center gap-2 font-semibold text-foreground">
+                      <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                      {t("campaigns.call.consentOnly")}
+                    </div>
+                    <div className="flex items-center gap-2 font-semibold text-foreground">
+                      <Clock className="h-4 w-4 text-primary" />
+                      {t("campaigns.call.windowGuard")}
+                    </div>
+                    <div className="flex items-center gap-2 font-semibold text-foreground">
+                      <XCircle className="h-4 w-4 text-red-500" />
+                      {t("campaigns.call.noRealCalls")}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="gap-2 sm:justify-between">
               <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
                 {t("campaigns.form.cancel")}
               </Button>
-              <Button type="button" onClick={handleSubmitCampaign} disabled={savingCampaign}>
-                {t(editingId ? "campaigns.form.save" : "campaigns.form.create")}
-              </Button>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button type="button" variant="outline" onClick={handleShareBrief}>
+                  <Share2 className="mr-2 h-4 w-4" />
+                  {t("campaigns.share.button")}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => saveCampaign("draft")} disabled={savingCampaign}>
+                  {t("campaigns.action.saveDraft")}
+                </Button>
+                {form.executionType === "vyva_call" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => saveCampaign("scheduled", { previewCalls: true })}
+                    disabled={savingCampaign || !canManageCallCampaigns}
+                  >
+                    <CalendarDays className="mr-2 h-4 w-4" />
+                    {t("campaigns.action.scheduleCalls")}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  onClick={() => saveCampaign("active", { previewCalls: form.executionType === "vyva_call" })}
+                  disabled={savingCampaign || (form.executionType === "vyva_call" && !canManageCallCampaigns)}
+                >
+                  <Send className="mr-2 h-4 w-4" />
+                  {form.executionType === "vyva_call" ? t("campaigns.action.publishQueue") : t("campaigns.action.publish")}
+                </Button>
+              </div>
             </DialogFooter>
           </form>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={callPreviewOpen} onOpenChange={setCallPreviewOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{t("campaigns.call.confirmTitle")}</DialogTitle>
+            <DialogDescription>{t("campaigns.call.confirmDescription")}</DialogDescription>
+          </DialogHeader>
+
+          {callPreview && (
+            <div className="space-y-4 py-2">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <PreviewStat tone="green" label={t("campaigns.call.eligible")} value={callPreview.eligibleCount} />
+                <PreviewStat tone="red" label={t("campaigns.call.skipped")} value={callPreview.skippedCount} />
+                <PreviewStat
+                  tone="purple"
+                  label={t("campaigns.call.schedule")}
+                  value={callPreview.scheduledAt ? formatSchedule(callPreview.scheduledAt) : t("campaigns.call.immediateQueue")}
+                />
+              </div>
+
+              <div className="rounded-2xl border bg-muted/30 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                  {t("campaigns.call.skipReasons")}
+                </p>
+                <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+                  <MiniStat label={t("campaigns.call.noPhone")} value={callPreview.skipped.noPhone} />
+                  <MiniStat label={t("campaigns.call.noConsent")} value={callPreview.skipped.noConsent} />
+                  <MiniStat label={t("campaigns.call.outsideWindow")} value={callPreview.skipped.outsideCallWindow} />
+                  <MiniStat label={t("campaigns.call.duplicateTarget")} value={callPreview.skipped.duplicateTarget} />
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-primary">
+                  {t("campaigns.call.scriptPreview")}
+                </p>
+                <p className="mt-2 whitespace-pre-line text-sm leading-6 text-foreground">
+                  {callPreview.callScript || t("campaigns.call.defaultScript")}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm font-medium text-amber-900">
+                {t("campaigns.call.noRealCalls")}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setCallPreviewOpen(false)}>
+              {t("campaigns.form.cancel")}
+            </Button>
+            <Button
+              type="button"
+              onClick={handleConfirmCallRun}
+              disabled={!callPreview || callPreview.eligibleCount < 1 || createCallRunMutation.isPending}
+            >
+              <Radio className="mr-2 h-4 w-4" />
+              {t("campaigns.call.confirmQueue")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function AssistantSuggestion({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-muted/30 p-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-sm font-semibold leading-5 text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-xl bg-white/75 px-3 py-2">
+      <p className="text-[11px] font-bold uppercase tracking-[0.12em] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-base font-extrabold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function PreviewStat({ label, tone, value }: { label: string; tone: "green" | "purple" | "red"; value: number | string }) {
+  return (
+    <div
+      className={cn(
+        "rounded-2xl border p-4",
+        tone === "green" && "border-emerald-200 bg-emerald-50 text-emerald-700",
+        tone === "purple" && "border-primary/20 bg-primary/5 text-primary",
+        tone === "red" && "border-red-200 bg-red-50 text-red-700",
+      )}
+    >
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] opacity-80">{label}</p>
+      <p className="mt-2 text-2xl font-extrabold leading-tight">{value}</p>
     </div>
   );
 }

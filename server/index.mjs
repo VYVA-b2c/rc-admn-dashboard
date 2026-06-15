@@ -425,6 +425,12 @@ function normalizeCampaign(row, targets = []) {
     type: row.type,
     status: row.status,
     channel: row.channel,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+    callScript: row.call_script || "",
+    callWindowStart: row.call_window_start || "",
+    callWindowEnd: row.call_window_end || "",
+    retryLimit: Number(row.retry_limit || 0),
+    executionType: row.execution_type || "manual",
     total: hasTargets ? targets.length : Number(row.target_total || 0),
     contacted: hasTargets
       ? targets.filter((target) => ["contacted", "confirmed", "followUp"].includes(target.status)).length
@@ -453,6 +459,12 @@ async function loadCampaigns() {
       type,
       status,
       channel,
+      scheduled_at,
+      call_script,
+      call_window_start,
+      call_window_end,
+      retry_limit,
+      execution_type,
       target_total,
       contacted_count,
       confirmed_count,
@@ -520,11 +532,277 @@ function validateCampaignPayload(payload) {
   const type = String(payload?.type || "safety");
   const channel = String(payload?.channel || "phone");
   const status = String(payload?.status || "draft");
+  const executionType = String(payload?.executionType || payload?.execution_type || "manual");
+  const retryLimit = Number(payload?.retryLimit ?? payload?.retry_limit ?? 0);
   if (!name) return "name is required";
   if (!["safety", "wellbeing", "medication", "service"].includes(type)) return "type is invalid";
   if (!["phone", "whatsapp", "mixed"].includes(channel)) return "channel is invalid";
   if (!["active", "draft", "scheduled", "completed"].includes(status)) return "status is invalid";
+  if (!["manual", "vyva_call"].includes(executionType)) return "execution_type is invalid";
+  if (!Number.isInteger(retryLimit) || retryLimit < 0 || retryLimit > 5) return "retry_limit is invalid";
   return null;
+}
+
+function normalizeCampaignCallSettings(payload = {}) {
+  const retryLimit = Number(payload.retryLimit ?? payload.retry_limit ?? 0);
+  return {
+    scheduledAt: nullIfBlank(payload.scheduledAt ?? payload.scheduled_at),
+    callScript: nullIfBlank(payload.callScript ?? payload.call_script),
+    callWindowStart: normalizeTimeValue(payload.callWindowStart ?? payload.call_window_start) || "09:00",
+    callWindowEnd: normalizeTimeValue(payload.callWindowEnd ?? payload.call_window_end) || "18:00",
+    retryLimit: Number.isInteger(retryLimit) && retryLimit >= 0 ? Math.min(retryLimit, 5) : 0,
+    createdBy: nullIfBlank(payload.createdBy ?? payload.created_by ?? payload.owner),
+  };
+}
+
+function normalizeTimeValue(value) {
+  const text = nullIfBlank(value);
+  if (!text) return null;
+  return /^\d{2}:\d{2}$/.test(text) ? text : null;
+}
+
+function timestampInsideCallWindow(scheduledAt, start, end) {
+  if (!scheduledAt || !start || !end) return true;
+  const date = new Date(scheduledAt);
+  if (Number.isNaN(date.getTime())) return true;
+  const minutes = date.getHours() * 60 + date.getMinutes();
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+  if (startMinutes <= endMinutes) return minutes >= startMinutes && minutes <= endMinutes;
+  return minutes >= startMinutes || minutes <= endMinutes;
+}
+
+function normalizeCallRun(row) {
+  return {
+    id: row.id,
+    campaignId: row.campaign_id,
+    status: row.status,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+    eligibleCount: Number(row.eligible_count || 0),
+    skippedCount: Number(row.skipped_count || 0),
+    queuedCount: Number(row.queued_count || 0),
+    pendingCount: Number(row.pending_count || 0),
+    callingCount: Number(row.calling_count || 0),
+    completedCount: Number(row.completed_count || 0),
+    failedCount: Number(row.failed_count || 0),
+    cancelledCount: Number(row.cancelled_count || 0),
+    callScript: row.call_script || "",
+    callWindowStart: row.call_window_start || "",
+    callWindowEnd: row.call_window_end || "",
+    retryLimit: Number(row.retry_limit || 0),
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null,
+  };
+}
+
+async function buildCampaignCallPreview(campaignId, payload = {}) {
+  const settings = normalizeCampaignCallSettings(payload);
+  const campaignResult = await query(
+    `
+      SELECT id::text, city, call_script, call_window_start, call_window_end, retry_limit
+      FROM public.campaigns
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [campaignId],
+  );
+  const campaign = campaignResult.rows[0];
+  if (!campaign) return null;
+
+  const city = nullIfBlank(payload.city) ?? nullIfBlank(campaign.city);
+  const scheduledAt = settings.scheduledAt ?? null;
+  const callWindowStart = settings.callWindowStart || campaign.call_window_start || "09:00";
+  const callWindowEnd = settings.callWindowEnd || campaign.call_window_end || "18:00";
+  const outsideWindow = !timestampInsideCallWindow(scheduledAt, callWindowStart, callWindowEnd);
+
+  const candidates = await query(
+    `
+      SELECT
+        u.id::text AS user_id,
+        u.phone,
+        COALESCE(c.consent_given, false) AS consent_given,
+        EXISTS (
+          SELECT 1
+          FROM public.campaign_call_jobs j
+          WHERE j.campaign_id = $1
+            AND j.vyva_user_id = u.id
+            AND j.status IN ('pending', 'queued', 'calling')
+        ) AS duplicate_target
+      FROM public.vyva_users u
+      LEFT JOIN public.vyva_user_consent c ON c.vyva_user_id = u.id
+      WHERE ($2::text IS NULL OR LOWER(COALESCE(u.city, '')) = LOWER($2::text))
+      ORDER BY u.created_at DESC
+    `,
+    [campaignId, city],
+  );
+
+  const skipped = {
+    noPhone: 0,
+    noConsent: 0,
+    outsideCallWindow: 0,
+    duplicateTarget: 0,
+  };
+  const targets = candidates.rows.map((row) => {
+    let status = "eligible";
+    let skipReason = null;
+    if (!nullIfBlank(row.phone)) {
+      status = "skipped";
+      skipReason = "no_phone";
+      skipped.noPhone += 1;
+    } else if (!row.consent_given) {
+      status = "skipped";
+      skipReason = "no_consent";
+      skipped.noConsent += 1;
+    } else if (outsideWindow) {
+      status = "skipped";
+      skipReason = "outside_call_window";
+      skipped.outsideCallWindow += 1;
+    } else if (row.duplicate_target) {
+      status = "skipped";
+      skipReason = "duplicate_target";
+      skipped.duplicateTarget += 1;
+    }
+
+    return {
+      userId: row.user_id,
+      status,
+      skipReason,
+    };
+  });
+  const eligibleCount = targets.filter((target) => target.status === "eligible").length;
+
+  return {
+    campaignId,
+    scheduledAt,
+    callWindowStart,
+    callWindowEnd,
+    retryLimit: settings.retryLimit,
+    callScript: settings.callScript || campaign.call_script || "",
+    eligibleCount,
+    skippedCount: targets.length - eligibleCount,
+    skipped,
+    targets,
+  };
+}
+
+async function createCampaignCallRun(campaignId, payload = {}) {
+  const preview = await buildCampaignCallPreview(campaignId, payload);
+  if (!preview) return null;
+
+  const scheduledAt = preview.scheduledAt ?? null;
+  const scheduledDate = scheduledAt ? new Date(scheduledAt) : null;
+  const isFuture = scheduledDate && !Number.isNaN(scheduledDate.getTime()) && scheduledDate.getTime() > Date.now();
+  const runStatus = isFuture ? "scheduled" : "queued";
+  const eligibleJobStatus = isFuture ? "pending" : "queued";
+  const queuedCount = eligibleJobStatus === "queued" ? preview.eligibleCount : 0;
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const runResult = await client.query(
+      `
+        INSERT INTO public.campaign_call_runs (
+          campaign_id,
+          status,
+          scheduled_at,
+          eligible_count,
+          skipped_count,
+          queued_count,
+          call_script,
+          call_window_start,
+          call_window_end,
+          retry_limit,
+          created_by
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id::text
+      `,
+      [
+        campaignId,
+        runStatus,
+        scheduledAt,
+        preview.eligibleCount,
+        preview.skippedCount,
+        queuedCount,
+        preview.callScript,
+        preview.callWindowStart,
+        preview.callWindowEnd,
+        preview.retryLimit,
+        normalizeCampaignCallSettings(payload).createdBy,
+      ],
+    );
+    const runId = runResult.rows[0].id;
+
+    for (const target of preview.targets) {
+      const status = target.status === "eligible" ? eligibleJobStatus : "skipped";
+      await client.query(
+        `
+          INSERT INTO public.campaign_call_jobs (
+            run_id,
+            campaign_id,
+            vyva_user_id,
+            status,
+            skip_reason,
+            scheduled_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT (run_id, vyva_user_id) DO NOTHING
+        `,
+        [
+          runId,
+          campaignId,
+          target.userId,
+          status,
+          target.skipReason,
+          scheduledAt,
+        ],
+      );
+    }
+
+    await client.query("COMMIT");
+    return runId;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function loadCampaignCallRuns(campaignId) {
+  const result = await query(
+    `
+      SELECT
+        r.id::text,
+        r.campaign_id::text,
+        r.status,
+        r.scheduled_at,
+        r.eligible_count,
+        r.skipped_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'queued')::int AS queued_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'pending')::int AS pending_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'calling')::int AS calling_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'completed')::int AS completed_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'failed')::int AS failed_count,
+        COUNT(j.id) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_count,
+        r.call_script,
+        r.call_window_start,
+        r.call_window_end,
+        r.retry_limit,
+        r.created_at,
+        r.updated_at
+      FROM public.campaign_call_runs r
+      LEFT JOIN public.campaign_call_jobs j ON j.run_id = r.id
+      WHERE r.campaign_id = $1
+      GROUP BY r.id
+      ORDER BY r.created_at DESC
+    `,
+    [campaignId],
+  );
+
+  return result.rows.map(normalizeCallRun);
 }
 
 function normalizeCheckin(row) {
@@ -2176,6 +2454,8 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
 
   const type = String(req.body.type || "safety");
   const status = String(req.body.status || "draft");
+  const callSettings = normalizeCampaignCallSettings(req.body);
+  const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   const result = await query(
     `
       INSERT INTO public.campaigns (
@@ -2188,9 +2468,15 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         type,
         status,
         channel,
+        scheduled_at,
+        call_script,
+        call_window_start,
+        call_window_end,
+        retry_limit,
+        execution_type,
         tone
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING id::text
     `,
     [
@@ -2203,6 +2489,12 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
       type,
       status,
       String(req.body.channel || "phone"),
+      callSettings.scheduledAt,
+      callSettings.callScript,
+      callSettings.callWindowStart,
+      callSettings.callWindowEnd,
+      callSettings.retryLimit,
+      executionType,
       campaignTone(type, status),
     ],
   );
@@ -2220,6 +2512,8 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
 
   const type = String(req.body.type || "safety");
   const status = String(req.body.status || "draft");
+  const callSettings = normalizeCampaignCallSettings(req.body);
+  const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   await query(
     `
       UPDATE public.campaigns
@@ -2236,7 +2530,13 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
         type = $8,
         status = $9,
         channel = $10,
-        tone = $11
+        scheduled_at = $11,
+        call_script = $12,
+        call_window_start = $13,
+        call_window_end = $14,
+        retry_limit = $15,
+        execution_type = $16,
+        tone = $17
       WHERE id = $1
     `,
     [
@@ -2250,6 +2550,12 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
       type,
       status,
       String(req.body.channel || "phone"),
+      callSettings.scheduledAt,
+      callSettings.callScript,
+      callSettings.callWindowStart,
+      callSettings.callWindowEnd,
+      callSettings.retryLimit,
+      executionType,
       campaignTone(type, status),
     ],
   );
@@ -2257,6 +2563,79 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
   await query("DELETE FROM public.campaign_targets WHERE campaign_id = $1", [req.params.id]);
   const campaigns = await loadCampaigns();
   res.json({ campaign: campaigns.find((campaign) => campaign.id === req.params.id) || null });
+}));
+
+app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs/preview", asyncRoute(async (req, res) => {
+  const preview = await buildCampaignCallPreview(req.params.id, req.body);
+  if (!preview) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  res.json({ preview });
+}));
+
+app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async (req, res) => {
+  const preview = await buildCampaignCallPreview(req.params.id, req.body);
+  if (!preview) {
+    res.status(404).json({ error: "Campaign not found" });
+    return;
+  }
+  if (preview.eligibleCount < 1) {
+    res.status(400).json({ error: "No eligible call targets" });
+    return;
+  }
+
+  const runId = await createCampaignCallRun(req.params.id, req.body);
+  const runs = await loadCampaignCallRuns(req.params.id);
+  res.status(201).json({ run: runs.find((run) => run.id === runId) || null, preview });
+}));
+
+app.get("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async (req, res) => {
+  res.json({ runs: await loadCampaignCallRuns(req.params.id) });
+}));
+
+app.post("/api/v1/campaigns-dashboard/call-jobs/:id/cancel", asyncRoute(async (req, res) => {
+  const result = await query(
+    `
+      UPDATE public.campaign_call_jobs
+      SET status = 'cancelled', updated_at = now()
+      WHERE id = $1 AND status IN ('pending', 'queued')
+      RETURNING id::text
+    `,
+    [req.params.id],
+  );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "Queued call job not found" });
+    return;
+  }
+  res.json({ ok: true });
+}));
+
+app.post("/api/v1/campaigns-dashboard/call-runs/:id/cancel", asyncRoute(async (req, res) => {
+  const runResult = await query(
+    `
+      UPDATE public.campaign_call_runs
+      SET status = 'cancelled', updated_at = now()
+      WHERE id = $1 AND status IN ('scheduled', 'queued')
+      RETURNING id::text, campaign_id::text
+    `,
+    [req.params.id],
+  );
+  const run = runResult.rows[0];
+  if (!run) {
+    res.status(404).json({ error: "Scheduled call run not found" });
+    return;
+  }
+  await query(
+    `
+      UPDATE public.campaign_call_jobs
+      SET status = 'cancelled', updated_at = now()
+      WHERE run_id = $1 AND status IN ('pending', 'queued')
+    `,
+    [req.params.id],
+  );
+  const runs = await loadCampaignCallRuns(run.campaign_id);
+  res.json({ run: runs.find((item) => item.id === req.params.id) || null });
 }));
 
 app.get("/api/v1/operational/offices", asyncRoute(async (_req, res) => {

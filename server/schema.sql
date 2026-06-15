@@ -245,6 +245,12 @@ CREATE TABLE IF NOT EXISTS public.campaigns (
   type TEXT NOT NULL DEFAULT 'safety' CHECK (type IN ('safety', 'wellbeing', 'medication', 'service')),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('active', 'draft', 'scheduled', 'completed')),
   channel TEXT NOT NULL DEFAULT 'phone' CHECK (channel IN ('phone', 'whatsapp', 'mixed')),
+  scheduled_at TIMESTAMPTZ,
+  call_script TEXT,
+  call_window_start TEXT,
+  call_window_end TEXT,
+  retry_limit INTEGER NOT NULL DEFAULT 0,
+  execution_type TEXT NOT NULL DEFAULT 'manual' CHECK (execution_type IN ('manual', 'vyva_call')),
   target_total INTEGER NOT NULL DEFAULT 0,
   contacted_count INTEGER NOT NULL DEFAULT 0,
   confirmed_count INTEGER NOT NULL DEFAULT 0,
@@ -268,10 +274,50 @@ CREATE TABLE IF NOT EXISTS public.campaign_targets (
   UNIQUE(campaign_id, vyva_user_id)
 );
 
+CREATE TABLE IF NOT EXISTS public.campaign_call_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  campaign_id UUID NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('draft', 'scheduled', 'queued', 'running', 'completed', 'cancelled', 'failed')),
+  scheduled_at TIMESTAMPTZ,
+  eligible_count INTEGER NOT NULL DEFAULT 0,
+  skipped_count INTEGER NOT NULL DEFAULT 0,
+  queued_count INTEGER NOT NULL DEFAULT 0,
+  completed_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  call_script TEXT,
+  call_window_start TEXT,
+  call_window_end TEXT,
+  retry_limit INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.campaign_call_jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id UUID NOT NULL REFERENCES public.campaign_call_runs(id) ON DELETE CASCADE,
+  campaign_id UUID NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
+  vyva_user_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'queued', 'calling', 'completed', 'failed', 'skipped', 'cancelled')),
+  skip_reason TEXT CHECK (skip_reason IS NULL OR skip_reason IN ('no_phone', 'no_consent', 'outside_call_window', 'duplicate_target')),
+  scheduled_at TIMESTAMPTZ,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(run_id, vyva_user_id)
+);
+
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS target_total INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS contacted_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS confirmed_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_script TEXT;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_start TEXT;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_end TEXT;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS retry_limit INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS execution_type TEXT NOT NULL DEFAULT 'manual';
 
 CREATE INDEX IF NOT EXISTS idx_vyva_user_checkins_user ON public.vyva_user_checkins(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_user_medications_user ON public.vyva_user_medications(vyva_user_id);
@@ -304,6 +350,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_care_provider_primary_field_staff
   WHERE provider_type = 'field_staff' AND is_primary = true;
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON public.campaign_targets(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_user ON public.campaign_targets(vyva_user_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_call_runs_campaign ON public.campaign_call_runs(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_call_jobs_run ON public.campaign_call_jobs(run_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_call_jobs_campaign ON public.campaign_call_jobs(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_campaign_call_jobs_user ON public.campaign_call_jobs(vyva_user_id);
 
 WITH caregiver_phone_groups AS (
   SELECT
@@ -499,3 +549,9 @@ CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON public.campaigns FOR
 
 DROP TRIGGER IF EXISTS update_campaign_targets_updated_at ON public.campaign_targets;
 CREATE TRIGGER update_campaign_targets_updated_at BEFORE UPDATE ON public.campaign_targets FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_campaign_call_runs_updated_at ON public.campaign_call_runs;
+CREATE TRIGGER update_campaign_call_runs_updated_at BEFORE UPDATE ON public.campaign_call_runs FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_campaign_call_jobs_updated_at ON public.campaign_call_jobs;
+CREATE TRIGGER update_campaign_call_jobs_updated_at BEFORE UPDATE ON public.campaign_call_jobs FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
