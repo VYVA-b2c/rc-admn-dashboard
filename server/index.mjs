@@ -1292,6 +1292,48 @@ async function upsertCareProviderContactWithClient(client, payload) {
   return { value: result.rows[0] };
 }
 
+async function createCareProviderContact(payload) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const contact = await upsertCareProviderContactWithClient(client, payload);
+    if (contact.error) {
+      await client.query("ROLLBACK");
+      return contact;
+    }
+
+    const result = await client.query(
+      `
+        SELECT
+          c.id::text AS id,
+          'caregiver' AS provider_type,
+          c.id::text AS provider_id,
+          c.full_name AS display_name,
+          c.phone,
+          NULL::text AS role,
+          NULL::text AS team,
+          CASE WHEN c.active THEN 'active' ELSE 'inactive' END AS status,
+          c.active,
+          0::int AS assignment_count,
+          '[]'::json AS linked_users,
+          c.created_at,
+          c.updated_at
+        FROM public.care_provider_contacts c
+        WHERE c.id = $1
+        LIMIT 1
+      `,
+      [contact.value.id],
+    );
+    await client.query("COMMIT");
+    return result.rows[0] ? { value: careProviderAssignmentRow(result.rows[0]) } : { notFound: true };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function shouldMakePrimaryWithClient(client, userId, providerType, requestedPrimary) {
   if (requestedPrimary !== undefined) return Boolean(requestedPrimary);
   const existing = await client.query(
@@ -2369,6 +2411,10 @@ app.get("/api/v1/care-providers", asyncRoute(async (req, res) => {
       type: req.query.type,
     }),
   });
+}));
+
+app.post("/api/v1/care-providers", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await createCareProviderContact(req.body), 201);
 }));
 
 app.post("/api/v1/user-dashboard/users/:id/care-providers", asyncRoute(async (req, res) => {

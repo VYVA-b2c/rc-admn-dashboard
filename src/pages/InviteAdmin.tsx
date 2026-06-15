@@ -30,7 +30,7 @@ export default function InviteAdmin() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const { data: admins, refetch } = useQuery({
+  const { data: admins, isLoading: loadingAdmins, isError: adminsError, refetch } = useQuery({
     queryKey: ["admin-users"],
     queryFn: async () => {
       if (authBypassEnabled) return [];
@@ -45,6 +45,7 @@ export default function InviteAdmin() {
     placeholderData: [],
     retry: false,
   });
+  const adminRows: AdminUserRow[] = Array.isArray(admins) ? (admins as AdminUserRow[]) : [];
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -172,14 +173,14 @@ export default function InviteAdmin() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {admins?.length === 0 ? (
+              {adminRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
-                    {t("invite.noUsersYet")}
+                    {loadingAdmins ? t("invite.loadingUsers") : adminsError ? t("invite.loadFailed") : t("invite.noUsersYet")}
                   </TableCell>
                 </TableRow>
               ) : (
-                (admins as AdminUserRow[]).map((admin) => (
+                adminRows.map((admin) => (
                   <TableRow key={admin.id}>
                     <TableCell className="font-medium">{admin.profiles?.full_name || "—"}</TableCell>
                     <TableCell className="text-muted-foreground">{admin.profiles?.email || "—"}</TableCell>

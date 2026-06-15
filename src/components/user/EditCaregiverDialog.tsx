@@ -12,7 +12,7 @@ import { toast } from "@/hooks/use-toast";
 interface EditCaregiverDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  vyvaUserId: string;
+  vyvaUserId?: string;
   caregiver?: OperationalCaregiver | null;
 }
 
@@ -44,20 +44,27 @@ export function EditCaregiverDialog({ open, onOpenChange, vyvaUserId, caregiver 
       return;
     }
     const payload = {
-      vyva_user_id: vyvaUserId,
+      ...(vyvaUserId ? { vyva_user_id: vyvaUserId } : {}),
       caretaker_name: form.caretaker_name.trim(),
       caretaker_phone: form.caretaker_phone.trim() || null,
     };
 
     setSaving(true);
     try {
-      await apiFetch(caregiver ? `/api/v1/user-dashboard/caregivers/${caregiver.id}` : "/api/v1/user-dashboard/caregivers", {
+      const endpoint = caregiver
+        ? `/api/v1/user-dashboard/caregivers/${caregiver.id}`
+        : vyvaUserId
+          ? "/api/v1/user-dashboard/caregivers"
+          : "/api/v1/care-providers";
+      await apiFetch(endpoint, {
         method: caregiver ? "PUT" : "POST",
         body: JSON.stringify(payload),
       });
 
       toast({ title: t("careProviders.saved") });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
+      if (vyvaUserId) {
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
+      }
       queryClient.invalidateQueries({ queryKey: ["gis-data"] });
       queryClient.invalidateQueries({ queryKey: ["care-providers"] });
       queryClient.invalidateQueries({ queryKey: ["emergency-contacts"] });

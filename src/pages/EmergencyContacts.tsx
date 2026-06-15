@@ -1,10 +1,12 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BriefcaseMedical, Search, UsersRound } from "lucide-react";
+import { BriefcaseMedical, Plus, Search, UsersRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -26,6 +28,7 @@ async function fetchCareProviders() {
 
 export default function EmergencyContacts() {
   const [search, setSearch] = useState("");
+  const [addCaregiverOpen, setAddCaregiverOpen] = useState(false);
   const navigate = useNavigate();
   const { t } = useLanguage();
 
@@ -66,11 +69,22 @@ export default function EmergencyContacts() {
             </div>
           </div>
         </div>
-        {authBypassEnabled && (
-          <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-            {t("usersList.previewData")}
-          </Badge>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {authBypassEnabled && (
+            <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              {t("usersList.previewData")}
+            </Badge>
+          )}
+          <Button
+            type="button"
+            className="h-10 rounded-full px-4 text-sm font-bold shadow-sm"
+            disabled={authBypassEnabled}
+            onClick={() => setAddCaregiverOpen(true)}
+          >
+            <Plus className="mr-2 h-4 w-4" />
+            {t("careProviders.addCaregiver")}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
@@ -180,6 +194,8 @@ export default function EmergencyContacts() {
           </div>
         </CardContent>
       </Card>
+
+      <EditCaregiverDialog open={addCaregiverOpen} onOpenChange={setAddCaregiverOpen} />
     </div>
   );
 }
