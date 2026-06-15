@@ -39,6 +39,58 @@ ON CONFLICT (slug) DO UPDATE SET
   active = true,
   updated_at = now();
 
+CREATE OR REPLACE FUNCTION public.resolve_vyva_user_organization_id(user_country TEXT, user_phone TEXT)
+RETURNS UUID AS $$
+DECLARE
+  normalized_country TEXT := lower(COALESCE(user_country, ''));
+  phone_digits TEXT := regexp_replace(COALESCE(user_phone, ''), '[^0-9]', '', 'g');
+  target_slug TEXT := 'red-cross-leipzig';
+  target_organization_id UUID;
+BEGIN
+  IF
+    normalized_country IN ('es', 'esp')
+    OR normalized_country LIKE '%spain%'
+    OR normalized_country LIKE '%espa%'
+    OR phone_digits LIKE '34%'
+    OR phone_digits LIKE '0034%'
+  THEN
+    target_slug := 'red-cross-zamora';
+  ELSIF
+    normalized_country IN ('de', 'deu')
+    OR normalized_country LIKE '%germany%'
+    OR normalized_country LIKE '%deutsch%'
+    OR phone_digits LIKE '49%'
+    OR phone_digits LIKE '0049%'
+  THEN
+    target_slug := 'red-cross-leipzig';
+  END IF;
+
+  SELECT id INTO target_organization_id
+  FROM public.organizations
+  WHERE slug = target_slug AND active = true
+  LIMIT 1;
+
+  IF target_organization_id IS NULL THEN
+    SELECT id INTO target_organization_id
+    FROM public.organizations
+    WHERE slug = 'red-cross-leipzig'
+    LIMIT 1;
+  END IF;
+
+  RETURN target_organization_id;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION public.set_vyva_user_organization_id()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.organization_id IS NULL THEN
+    NEW.organization_id := public.resolve_vyva_user_organization_id(NEW.country, NEW.phone);
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id TEXT NOT NULL UNIQUE,
@@ -375,10 +427,24 @@ WITH default_org AS (
 )
 UPDATE public.user_roles SET organization_id = default_org.id FROM default_org WHERE organization_id IS NULL;
 
-WITH default_org AS (
-  SELECT id FROM public.organizations WHERE slug = 'red-cross-leipzig' LIMIT 1
-)
-UPDATE public.vyva_users SET organization_id = default_org.id FROM default_org WHERE organization_id IS NULL;
+UPDATE public.vyva_users
+SET organization_id = public.resolve_vyva_user_organization_id(country, phone)
+WHERE organization_id IS NULL;
+
+UPDATE public.vyva_users
+SET organization_id = public.resolve_vyva_user_organization_id(country, phone)
+WHERE organization_id IS DISTINCT FROM public.resolve_vyva_user_organization_id(country, phone)
+  AND (
+    lower(COALESCE(country, '')) IN ('es', 'esp', 'de', 'deu')
+    OR lower(COALESCE(country, '')) LIKE '%spain%'
+    OR lower(COALESCE(country, '')) LIKE '%espa%'
+    OR lower(COALESCE(country, '')) LIKE '%germany%'
+    OR lower(COALESCE(country, '')) LIKE '%deutsch%'
+    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '34%'
+    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '0034%'
+    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '49%'
+    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '0049%'
+  );
 
 WITH default_org AS (
   SELECT id FROM public.organizations WHERE slug = 'red-cross-leipzig' LIMIT 1
@@ -638,6 +704,11 @@ CREATE TRIGGER update_profiles_updated_at BEFORE UPDATE ON public.profiles FOR E
 
 DROP TRIGGER IF EXISTS update_vyva_users_updated_at ON public.vyva_users;
 CREATE TRIGGER update_vyva_users_updated_at BEFORE UPDATE ON public.vyva_users FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS set_vyva_user_organization_id ON public.vyva_users;
+CREATE TRIGGER set_vyva_user_organization_id
+BEFORE INSERT OR UPDATE OF country, phone, organization_id ON public.vyva_users
+FOR EACH ROW EXECUTE FUNCTION public.set_vyva_user_organization_id();
 
 DROP TRIGGER IF EXISTS update_vyva_user_consent_updated_at ON public.vyva_user_consent;
 CREATE TRIGGER update_vyva_user_consent_updated_at BEFORE UPDATE ON public.vyva_user_consent FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
