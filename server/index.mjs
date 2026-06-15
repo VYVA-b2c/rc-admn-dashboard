@@ -3092,14 +3092,9 @@ app.get("/api/v1/me", asyncRoute(async (req, res) => {
 }));
 
 app.get("/api/v1/organizations", asyncRoute(async (req, res) => {
-  if (!req.context.isAdmin) {
-    res.json({
-      organizations: req.context.organization ? [req.context.organization] : [],
-      currentOrganization: req.context.organization,
-    });
-    return;
-  }
-  const organizations = await loadOrganizations({ includeInactive: req.query.includeInactive === "true" });
+  const organizations = await loadOrganizations({
+    includeInactive: req.context.isAdmin && req.query.includeInactive === "true",
+  });
   res.json({ organizations, currentOrganization: req.context.organization });
 }));
 

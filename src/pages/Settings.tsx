@@ -344,44 +344,44 @@ export default function Settings() {
               </form>
             )}
 
-            {canManageOrganizations && (
-              <div className="rounded-2xl border border-border bg-white">
-                <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
-                <div className="divide-y divide-border">
-                  {(organizationsQuery.data?.organizations ?? []).map((organization) => (
-                    <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_180px]">
-                      <span className="font-semibold text-foreground">{organization.name}</span>
-                      <span className="text-muted-foreground">{organization.country || t("settings.notAvailable")}</span>
-                      {organization.id ? (
-                        <Select
-                          value={organization.defaultLanguage || "de"}
-                          onValueChange={(value) =>
-                            updateOrganization.mutate({
-                              id: organization.id!,
-                              defaultLanguage: value as LanguageCode,
-                            })
-                          }
-                        >
-                          <SelectTrigger className="h-9 rounded-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="en">{t("settings.language.en")}</SelectItem>
-                            <SelectItem value="de">{t("settings.language.de")}</SelectItem>
-                            <SelectItem value="es">{t("settings.language.es")}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <span className="text-muted-foreground">{t("settings.notAvailable")}</span>
-                      )}
-                    </div>
-                  ))}
-                  {organizationsQuery.data?.organizations?.length === 0 && (
-                    <div className="px-4 py-6 text-center text-sm text-muted-foreground">{t("settings.noOrganizations")}</div>
-                  )}
-                </div>
+            <div className="rounded-2xl border border-border bg-white">
+              <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
+              <div className="divide-y divide-border">
+                {(organizationsQuery.data?.organizations ?? []).map((organization) => (
+                  <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_180px]">
+                    <span className="font-semibold text-foreground">{organization.name}</span>
+                    <span className="text-muted-foreground">{organization.country || t("settings.notAvailable")}</span>
+                    {canManageOrganizations && organization.id ? (
+                      <Select
+                        value={organization.defaultLanguage || "de"}
+                        onValueChange={(value) =>
+                          updateOrganization.mutate({
+                            id: organization.id!,
+                            defaultLanguage: value as LanguageCode,
+                          })
+                        }
+                      >
+                        <SelectTrigger className="h-9 rounded-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="en">{t("settings.language.en")}</SelectItem>
+                          <SelectItem value="de">{t("settings.language.de")}</SelectItem>
+                          <SelectItem value="es">{t("settings.language.es")}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        {organization.defaultLanguage ? t(`settings.language.${organization.defaultLanguage}`) : t("settings.notAvailable")}
+                      </span>
+                    )}
+                  </div>
+                ))}
+                {organizationsQuery.data?.organizations?.length === 0 && (
+                  <div className="px-4 py-6 text-center text-sm text-muted-foreground">{t("settings.noOrganizations")}</div>
+                )}
               </div>
-            )}
+            </div>
           </CardContent>
         </Card>
 
