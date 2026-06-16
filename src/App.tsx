@@ -24,7 +24,6 @@ import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
 import MedicationMonitoring from "@/pages/MedicationMonitoring";
 import BrainCoachMonitoring from "@/pages/BrainCoachMonitoring";
-import SymptomsMonitoring from "@/pages/SymptomsMonitoring";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -141,16 +140,7 @@ const App = () => (
               }
             />
             <Route path="/wellbeing" element={<Navigate to="/" replace />} />
-            <Route
-              path="/symptoms"
-              element={
-                <ProtectedRoute>
-                  <DashboardLayout>
-                    <SymptomsMonitoring />
-                  </DashboardLayout>
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/symptoms" element={<Navigate to="/" replace />} />
             <Route
               path="/alerts"
               element={

@@ -63,7 +63,6 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
       { titleKey: "sidebar.checkins", url: "/checkin-monitoring", icon: CalendarCheck },
       { titleKey: "sidebar.medication", url: "/medication", icon: Pill },
       { titleKey: "sidebar.brainCoach", url: "/brain-coach", icon: Brain },
-      { titleKey: "sidebar.symptoms", url: "/symptoms", icon: Activity },
     ],
   },
   {
