@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditUserDialog } from "@/components/user/EditUserDialog";
 import { UserApiIntakeDialog } from "@/components/user/UserApiIntakeDialog";
@@ -41,6 +42,7 @@ import { computeRiskScore } from "@/lib/riskScore";
 import { cn } from "@/lib/utils";
 
 type FilterKey = "all" | "urgent" | "review" | "no-response" | "medication" | "checkins" | "unassigned";
+type MetricKey = "active" | "urgent" | "review" | "checkins";
 
 type QueueRow = {
   id: string;
@@ -59,6 +61,7 @@ type QueueRow = {
   primaryProfessionalName?: string | null;
   careProviderNames: string[];
   nextActionKey: string;
+  checkinEnabled: boolean;
   hasMedicationIssue: boolean;
   hasCheckinIssue: boolean;
   hasNoResponse: boolean;
@@ -134,6 +137,7 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     nextActionKey:
       meta?.nextActionKey ??
       (status === "urgent" ? "usersList.nextAction.callNow" : status === "review" ? "usersList.nextAction.review" : "usersList.nextAction.monitor"),
+    checkinEnabled: user.checkinEnabled ?? false,
     hasMedicationIssue: (user.missedMeds7d ?? 0) > 0 || meta?.reasonKey === "usersList.reason.medication",
     hasCheckinIssue: !(user.checkinEnabled ?? false),
     hasNoResponse: Boolean(meta?.noResponse),
@@ -173,6 +177,7 @@ export default function UsersList() {
   const [csvImportOpen, setCsvImportOpen] = useState(false);
   const [apiIntakeOpen, setApiIntakeOpen] = useState(false);
   const [assignTarget, setAssignTarget] = useState<QueueRow | null>(null);
+  const [metricModal, setMetricModal] = useState<MetricKey | null>(null);
   const navigate = useNavigate();
   const { data: gisData, isLoading } = useGISData();
   const { isAdmin } = useAdminRole();
@@ -218,7 +223,17 @@ export default function UsersList() {
   const activePeople = queueRows.length;
   const urgentCases = queueRows.filter((user) => user.status === "urgent").length;
   const reviewCases = queueRows.filter((user) => user.status === "review").length;
-  const checkinEnabled = sourceUsers.filter((user) => user.checkinEnabled).length;
+  const checkinEnabled = queueRows.filter((user) => user.checkinEnabled).length;
+  const metricRows = useMemo<Record<MetricKey, QueueRow[]>>(
+    () => ({
+      active: queueRows,
+      urgent: queueRows.filter((user) => user.status === "urgent"),
+      review: queueRows.filter((user) => user.status === "review"),
+      checkins: queueRows.filter((user) => user.checkinEnabled),
+    }),
+    [queueRows],
+  );
+  const selectedMetricRows = metricModal ? metricRows[metricModal] : [];
   const canManageUsers = isAdmin && !authBypassEnabled;
   const canAssignProviders = !authBypassEnabled && !usingPreviewData;
 
@@ -285,10 +300,38 @@ export default function UsersList() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard accent="border-t-primary" icon={Users} label={t("usersList.activePeople")} value={activePeople} />
-        <MetricCard accent="border-t-red-500" icon={AlertTriangle} label={t("usersList.urgentCases")} value={urgentCases} />
-        <MetricCard accent="border-t-orange-500" icon={Clock} label={t("usersList.operatorReview")} value={reviewCases} />
-        <MetricCard accent="border-t-emerald-500" icon={CheckCircle2} label={t("usersList.checkinsReady")} value={`${checkinEnabled}/${activePeople}`} />
+        <MetricCard
+          accent="border-t-primary"
+          icon={Users}
+          label={t("usersList.activePeople")}
+          metricKey="active"
+          onClick={() => setMetricModal("active")}
+          value={activePeople}
+        />
+        <MetricCard
+          accent="border-t-red-500"
+          icon={AlertTriangle}
+          label={t("usersList.urgentCases")}
+          metricKey="urgent"
+          onClick={() => setMetricModal("urgent")}
+          value={urgentCases}
+        />
+        <MetricCard
+          accent="border-t-orange-500"
+          icon={Clock}
+          label={t("usersList.operatorReview")}
+          metricKey="review"
+          onClick={() => setMetricModal("review")}
+          value={reviewCases}
+        />
+        <MetricCard
+          accent="border-t-emerald-500"
+          icon={CheckCircle2}
+          label={t("usersList.checkinsReady")}
+          metricKey="checkins"
+          onClick={() => setMetricModal("checkins")}
+          value={`${checkinEnabled}/${activePeople}`}
+        />
       </div>
 
       <Card className="overflow-hidden rounded-2xl border-border bg-white shadow-sm">
@@ -497,6 +540,91 @@ export default function UsersList() {
           userName={assignTarget.name}
         />
       )}
+      <Dialog open={Boolean(metricModal)} onOpenChange={(open) => !open && setMetricModal(null)}>
+        <DialogContent className="max-w-3xl rounded-2xl border-border bg-white p-0 shadow-xl">
+          <DialogHeader className="border-b border-border px-6 py-5 text-left">
+            <DialogTitle className="font-display text-xl font-bold text-foreground">
+              {metricModal ? t(`usersList.metricModal.${metricModal}`) : t("usersList.title")}
+            </DialogTitle>
+            <DialogDescription className="text-sm text-muted-foreground">
+              {t("usersList.metricModal.description")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[62vh] overflow-y-auto p-4" data-testid="users-metric-modal">
+            {selectedMetricRows.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-muted/35 px-4 py-10 text-center">
+                <UserRound className="mx-auto mb-3 h-9 w-9 text-muted-foreground/60" />
+                <p className="text-sm font-semibold text-foreground">{t("usersList.metricModal.empty")}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{t("usersList.metricModal.emptyHint")}</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {selectedMetricRows.map((user) => {
+                  const ChannelIcon = channelIcon(user.channel);
+                  return (
+                    <button
+                      key={user.id}
+                      type="button"
+                      className="w-full rounded-2xl border border-border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/5 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                      onClick={() => {
+                        setMetricModal(null);
+                        navigate(`/users/${user.id}`);
+                      }}
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
+                            {user.initials}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-foreground">{user.name}</p>
+                            <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                              {user.age ? <span>{user.age} {t("profile.yearsShort")}</span> : null}
+                              {user.age && user.city ? <span>·</span> : null}
+                              {user.city ? <span>{user.city}</span> : null}
+                              {user.livingContextKey ? (
+                                <>
+                                  <span>·</span>
+                                  <span>{t(user.livingContextKey)}</span>
+                                </>
+                              ) : null}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold ring-1", statusClasses(user.status))}>
+                            {t(`usersList.status.${user.status}`)}
+                          </span>
+                          <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-bold text-muted-foreground">
+                            {t("usersList.risk")} {user.score}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-3 border-t border-border pt-3 text-sm sm:grid-cols-3">
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{t("usersList.reason")}</p>
+                          <p className="mt-1 font-medium text-foreground">{t(user.reasonKey)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{t("usersList.channel")}</p>
+                          <p className="mt-1 flex items-center gap-2 font-medium text-foreground">
+                            <ChannelIcon className="h-4 w-4 text-primary" />
+                            {t(channelKey(user.channel))}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{t("careProviders.coverage")}</p>
+                          <p className="mt-1 font-medium text-foreground">{user.assignedTo ?? t("usersList.unassigned")}</p>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -505,15 +633,36 @@ function MetricCard({
   accent,
   icon: Icon,
   label,
+  metricKey,
+  onClick,
   value,
 }: {
   accent: string;
   icon: typeof Users;
   label: string;
+  metricKey: MetricKey;
+  onClick: () => void;
   value: number | string;
 }) {
   return (
-    <Card className={cn("rounded-2xl border-border bg-white shadow-sm", "border-t-4", accent)}>
+    <Card
+      role="button"
+      tabIndex={0}
+      data-testid={`users-metric-${metricKey}`}
+      aria-label={label}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      }}
+      className={cn(
+        "rounded-2xl border-border bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
+        "border-t-4 cursor-pointer",
+        accent,
+      )}
+    >
       <CardContent className="flex h-28 items-center justify-between p-5">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
