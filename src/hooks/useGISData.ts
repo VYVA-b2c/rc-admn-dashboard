@@ -8,6 +8,7 @@ export interface GISUser {
   first_name: string;
   last_name: string;
   city: string | null;
+  country?: string | null;
   phone: string | null;
   date_of_birth: string | null;
   coords: [number, number] | null;
