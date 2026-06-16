@@ -10,6 +10,7 @@ import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
@@ -28,6 +29,7 @@ async function fetchCareProviders() {
 
 export default function EmergencyContacts() {
   const [search, setSearch] = useState("");
+  const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [addCaregiverOpen, setAddCaregiverOpen] = useState(false);
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -79,10 +81,10 @@ export default function EmergencyContacts() {
             type="button"
             className="h-10 rounded-full px-4 text-sm font-bold shadow-sm"
             disabled={authBypassEnabled}
-            onClick={() => setAddCaregiverOpen(true)}
+            onClick={() => setAddProviderOpen(true)}
           >
             <Plus className="mr-2 h-4 w-4" />
-            {t("careProviders.addContact")}
+            {t("careProviders.addProvider")}
           </Button>
         </div>
       </div>
@@ -200,6 +202,46 @@ export default function EmergencyContacts() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={addProviderOpen} onOpenChange={setAddProviderOpen}>
+        <DialogContent className="max-w-2xl rounded-2xl border-border bg-white">
+          <DialogHeader>
+            <DialogTitle>{t("careProviders.addProviderTitle")}</DialogTitle>
+            <DialogDescription>{t("careProviders.addProviderDescription")}</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 pt-2 md:grid-cols-2">
+            <div className="rounded-2xl border border-border bg-muted/20 p-5">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <UsersRound className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-bold text-foreground">{t("careProviders.addEmergencyContactTitle")}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("careProviders.addEmergencyContactDescription")}</p>
+              <Button
+                type="button"
+                className="mt-5 rounded-full"
+                onClick={() => {
+                  setAddProviderOpen(false);
+                  setAddCaregiverOpen(true);
+                }}
+              >
+                {t("careProviders.addEmergencyContactAction")}
+              </Button>
+            </div>
+
+            <div className="rounded-2xl border border-border bg-muted/20 p-5">
+              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <BriefcaseMedical className="h-5 w-5" />
+              </div>
+              <h3 className="text-base font-bold text-foreground">{t("careProviders.addRedCrossStaffTitle")}</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("careProviders.addRedCrossStaffDescription")}</p>
+              <div className="mt-5 rounded-xl border border-dashed border-border bg-white px-4 py-3 text-sm text-muted-foreground">
+                {t("careProviders.addRedCrossStaffNote")}
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <EditCaregiverDialog open={addCaregiverOpen} onOpenChange={setAddCaregiverOpen} />
     </div>
