@@ -1909,6 +1909,72 @@ function normalizeCheckin(row) {
   };
 }
 
+function extractUpstreamList(payload, keys = []) {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== "object") return [];
+  for (const key of keys) {
+    if (Array.isArray(payload[key])) return payload[key];
+  }
+  return [];
+}
+
+function normalizeServiceType(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+function isBrainCoachType(value) {
+  const normalized = normalizeServiceType(value);
+  return normalized === "brain_coach" || normalized === "braincoach";
+}
+
+function filterUpstreamCheckins(payload) {
+  const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
+  const filtered = list.filter((item) => !isBrainCoachType(item?.type));
+
+  if (Array.isArray(payload)) return filtered;
+  if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.checkins)) return { ...payload, checkins: filtered };
+    if (Array.isArray(payload.data)) return { ...payload, data: filtered };
+  }
+  return { checkins: filtered };
+}
+
+function mapUpstreamBrainCoachSessions(payload) {
+  const list = extractUpstreamList(payload, ["sessions", "data", "checkins"]);
+
+  return list
+    .filter((item) => isBrainCoachType(item?.type))
+    .map((item, index) => {
+      const nestedUser = item?.user ?? item?.vyva_users ?? {};
+      const firstName = item?.first_name ?? nestedUser?.first_name ?? null;
+      const lastName = item?.last_name ?? nestedUser?.last_name ?? null;
+      const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+      const frequency = item?.frequency ?? item?.frequency_days ?? item?.cadence ?? null;
+
+      return {
+        id: String(item?.id ?? `brain-coach-${item?.user_id ?? nestedUser?.id ?? index}`),
+        user_id: String(item?.user_id ?? item?.vyva_user_id ?? nestedUser?.id ?? ""),
+        userName: item?.userName || item?.user_name || item?.name || nestedUser?.name || fullName || "Unknown",
+        userPhone: item?.userPhone || item?.user_phone || item?.phone || nestedUser?.phone || null,
+        city: item?.city || nestedUser?.city || null,
+        enabled:
+          typeof item?.enabled === "boolean"
+            ? item.enabled
+            : typeof item?.is_active === "boolean"
+              ? item.is_active
+              : typeof item?.active === "boolean"
+                ? item.active
+                : true,
+        frequency: frequency == null ? null : String(frequency),
+        preferred_time: item?.preferred_time ?? item?.preferredTime ?? null,
+      };
+    })
+    .filter((item) => item.user_id);
+}
+
 async function loadCheckins(context) {
   const organizationId = scopeOrganizationId(context);
   const result = await query(`
@@ -4262,7 +4328,12 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (req, res) => {
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
     const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
-    if (handleVyvaBackendResponse(res, upstream)) {
+    if (upstream?.ok) {
+      res.json(filterUpstreamCheckins(upstream.data));
+      return;
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
       return;
     }
     if (!pool) {
@@ -4348,9 +4419,34 @@ app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res
   res.status(204).end();
 }));
 
-app.get("/api/v1/brain-coach-dashboard/sessions", asyncRoute(async (req, res) => {
-  res.json({ sessions: await loadBrainCoachSessions(req.context) });
-}));
+app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
+  try {
+    const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+    if (upstream?.ok) {
+      res.json(upstream.data);
+      return;
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
+      return;
+    }
+
+    const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    if (checkinsUpstream?.ok) {
+      res.json({ sessions: mapUpstreamBrainCoachSessions(checkinsUpstream.data) });
+      return;
+    }
+    if (!pool) {
+      dbUnavailable(res);
+      return;
+    }
+
+    req.context = await resolveRequestContext(req);
+    res.json({ sessions: await loadBrainCoachSessions(req.context) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
   try {
