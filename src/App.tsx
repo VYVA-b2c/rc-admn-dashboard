@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -24,7 +24,6 @@ import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
 import MedicationMonitoring from "@/pages/MedicationMonitoring";
 import BrainCoachMonitoring from "@/pages/BrainCoachMonitoring";
-import WellbeingMonitoring from "@/pages/WellbeingMonitoring";
 import SymptomsMonitoring from "@/pages/SymptomsMonitoring";
 import NotFound from "@/pages/NotFound";
 
@@ -141,16 +140,7 @@ const App = () => (
                 </ProtectedRoute>
               }
             />
-            <Route
-              path="/wellbeing"
-              element={
-                <ProtectedRoute>
-                  <DashboardLayout>
-                    <WellbeingMonitoring />
-                  </DashboardLayout>
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/wellbeing" element={<Navigate to="/" replace />} />
             <Route
               path="/symptoms"
               element={
