@@ -16,6 +16,7 @@ export type OrganizationContext = {
 
 export type CurrentUserContext = {
   email: string | null;
+  fullName: string | null;
   isAdmin: boolean;
   isPlatformAdmin: boolean;
   organization: OrganizationContext | null;
@@ -26,6 +27,7 @@ export type CurrentUserContext = {
 
 const previewUserContext: CurrentUserContext = {
   email: null,
+  fullName: "Preview Admin",
   isAdmin: true,
   isPlatformAdmin: true,
   organization: {

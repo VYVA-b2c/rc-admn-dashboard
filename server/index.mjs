@@ -757,6 +757,7 @@ async function loadUserContext(user) {
   return {
     userId: user.id,
     email,
+    fullName: profile?.full_name || null,
     roles,
     role: primaryRole,
     isAdmin: roles.includes("admin") || isPlatformAdmin,

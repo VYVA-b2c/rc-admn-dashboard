@@ -13,12 +13,28 @@ type OrganizationsResponse = {
   organizations: OrganizationContext[];
 };
 
-function initials(email?: string | null) {
-  if (!email) return "AN";
-  const name = email.split("@")[0] ?? "";
-  const parts = name.split(/[._-]+/).filter(Boolean);
+function nameSeed(fullName?: string | null, email?: string | null) {
+  if (fullName?.trim()) return fullName.trim();
+  return email?.split("@")[0]?.trim() || "";
+}
+
+function formatDisplayName(fullName?: string | null, email?: string | null) {
+  if (fullName?.trim()) return fullName.trim();
+  const seed = nameSeed(undefined, email);
+  if (!seed) return "Account";
+  return seed
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function initials(fullName?: string | null, email?: string | null) {
+  const name = nameSeed(fullName, email);
+  if (!name) return "AC";
+  const parts = name.split(/[\s._-]+/).filter(Boolean);
   if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
-  return name.slice(0, 2).toUpperCase() || "AN";
+  return name.slice(0, 2).toUpperCase() || "AC";
 }
 
 export function DashboardLayout({ children }: { children: ReactNode }) {
@@ -29,6 +45,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
   const currentUser = currentContext?.user;
   const organizationName = currentUser?.organization?.name || t("layout.organization");
   const organizationId = currentUser?.organization?.id || "";
+  const displayName = formatDisplayName(currentUser?.fullName, currentUser?.email || user?.email);
   const organizationsQuery = useQuery({
     queryKey: ["organizations", "header"],
     enabled: Boolean(currentUser?.isAdmin),
@@ -78,9 +95,9 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
               </div>
               <div className="flex items-center gap-2 rounded-full bg-primary/10 px-2 py-1 text-sm font-semibold text-primary max-[420px]:hidden">
                 <span className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">
-                  {initials(user?.email)}
+                  {initials(currentUser?.fullName, currentUser?.email || user?.email)}
                 </span>
-                <span className="hidden sm:inline">{t("layout.operatorName")}</span>
+                <span className="hidden sm:inline">{displayName}</span>
               </div>
             </div>
           </header>
