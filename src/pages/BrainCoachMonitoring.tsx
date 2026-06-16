@@ -45,6 +45,50 @@ type BrainCoachSessionResponse =
       data?: BrainCoachSession[];
     };
 
+type ScheduledCallFallbackItem = {
+  id?: string | number;
+  user_id?: string | number;
+  vyva_user_id?: string | number;
+  userName?: string;
+  user_name?: string;
+  name?: string | null;
+  phone?: string | null;
+  userPhone?: string | null;
+  user_phone?: string | null;
+  city?: string | null;
+  type?: string | null;
+  enabled?: boolean;
+  active?: boolean;
+  is_active?: boolean;
+  frequency?: string | number | null;
+  frequency_days?: string | number | null;
+  preferred_time?: string | null;
+  preferredTime?: string | null;
+  user?: {
+    id?: string | number;
+    first_name?: string | null;
+    last_name?: string | null;
+    name?: string | null;
+    phone?: string | null;
+    city?: string | null;
+  } | null;
+  vyva_users?: {
+    id?: string | number;
+    first_name?: string | null;
+    last_name?: string | null;
+    name?: string | null;
+    phone?: string | null;
+    city?: string | null;
+  } | null;
+};
+
+type ScheduledCallFallbackResponse =
+  | ScheduledCallFallbackItem[]
+  | {
+      checkins?: ScheduledCallFallbackItem[];
+      data?: ScheduledCallFallbackItem[];
+    };
+
 type FormState = {
   enabled: boolean;
   frequency: string;
@@ -57,6 +101,51 @@ const frequencyOptions = ["daily", "weekly", "biweekly", "monthly"] as const;
 
 function normalizeResponse(response: BrainCoachSessionResponse): BrainCoachSession[] {
   return Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+}
+
+function pickString(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "string" && item.trim().length > 0);
+  return typeof value === "string" ? value : undefined;
+}
+
+function pickId(...values: unknown[]) {
+  const value = values.find((item) => typeof item === "string" || typeof item === "number");
+  return value == null ? "" : String(value);
+}
+
+function fullName(firstName?: string | null, lastName?: string | null) {
+  return [firstName, lastName].filter(Boolean).join(" ").trim();
+}
+
+function normalizeFallbackResponse(response: ScheduledCallFallbackResponse): BrainCoachSession[] {
+  const list = Array.isArray(response) ? response : response.checkins ?? response.data ?? [];
+  return list.map((item) => {
+    const nestedUser = item.user ?? item.vyva_users;
+    return {
+      id: pickId(item.id, `brain-coach-${pickId(item.user_id, item.vyva_user_id, nestedUser?.id)}`),
+      user_id: pickId(item.user_id, item.vyva_user_id, nestedUser?.id),
+      userName:
+        pickString(
+          item.userName,
+          item.user_name,
+          item.name,
+          nestedUser?.name,
+          fullName(nestedUser?.first_name, nestedUser?.last_name),
+        ) ?? "Unknown",
+      userPhone: pickString(item.userPhone, item.user_phone, item.phone, nestedUser?.phone) ?? null,
+      city: pickString(item.city, nestedUser?.city) ?? null,
+      enabled:
+        typeof item.enabled === "boolean"
+          ? item.enabled
+          : typeof item.is_active === "boolean"
+            ? item.is_active
+            : typeof item.active === "boolean"
+              ? item.active
+              : true,
+      frequency: pickString(item.frequency, item.frequency_days) ?? null,
+      preferred_time: item.preferred_time ?? item.preferredTime ?? null,
+    };
+  }).filter((item) => item.user_id);
 }
 
 function formatFrequency(value: string | null | undefined, t: (key: string) => string) {
@@ -89,10 +178,18 @@ export default function BrainCoachMonitoring() {
   } = useQuery({
     queryKey: ["brain-coach-monitoring"],
     queryFn: async (): Promise<BrainCoachSession[]> => {
-      const response = await apiFetch<BrainCoachSessionResponse>("/api/v1/brain-coach-dashboard/sessions", {
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      return normalizeResponse(response);
+      try {
+        const response = await apiFetch<BrainCoachSessionResponse>("/api/v1/brain-coach-dashboard/sessions", {
+          timeoutMs: REQUEST_TIMEOUT_MS,
+        });
+        return normalizeResponse(response);
+      } catch (error) {
+        if (authBypassEnabled) return [];
+        const fallbackResponse = await apiFetch<ScheduledCallFallbackResponse>("/api/v1/checkins-dashboard/checkins?service_type=brain_coach", {
+          timeoutMs: REQUEST_TIMEOUT_MS,
+        });
+        return normalizeFallbackResponse(fallbackResponse);
+      }
     },
     retry: false,
   });

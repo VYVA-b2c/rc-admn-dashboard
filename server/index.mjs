@@ -1930,9 +1930,14 @@ function isBrainCoachType(value) {
   return normalized === "brain_coach" || normalized === "braincoach";
 }
 
-function filterUpstreamCheckins(payload) {
+function filterUpstreamCheckins(payload, mode = "standard") {
   const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
-  const filtered = list.filter((item) => !isBrainCoachType(item?.type));
+  const filtered = list.filter((item) => {
+    const isBrainCoach = isBrainCoachType(item?.type);
+    if (mode === "brain_coach") return isBrainCoach;
+    if (mode === "all") return true;
+    return !isBrainCoach;
+  });
 
   if (Array.isArray(payload)) return filtered;
   if (payload && typeof payload === "object") {
@@ -4327,9 +4332,10 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (req, res) => {
 
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
+    const mode = String(req.query.service_type || "").toLowerCase() === "brain_coach" ? "brain_coach" : "standard";
     const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
     if (upstream?.ok) {
-      res.json(filterUpstreamCheckins(upstream.data));
+      res.json(filterUpstreamCheckins(upstream.data, mode));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
