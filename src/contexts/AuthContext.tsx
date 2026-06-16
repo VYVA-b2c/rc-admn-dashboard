@@ -26,6 +26,22 @@ function authRedirectUrl(path?: string) {
   return `${window.location.origin}${safeRedirectPath(path)}`;
 }
 
+function hasPendingAuthCallback() {
+  if (typeof window === "undefined") return false;
+
+  const url = new URL(window.location.href);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+  return (
+    url.searchParams.has("code") ||
+    url.searchParams.has("token_hash") ||
+    url.searchParams.has("type") ||
+    hashParams.has("access_token") ||
+    hashParams.has("refresh_token") ||
+    hashParams.has("type")
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -49,21 +65,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Listen first, then restore
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      console.log("[Auth] onAuthStateChange:", event);
       applySession(s);
       setLoading(false);
     });
 
-    supabase.auth.getSession().then(({ data: { session: s }, error }) => {
-      if (error) {
-        console.warn("[Auth] getSession error:", error.message);
-        applySession(null);
-      } else {
-        console.log("[Auth] getSession restored:", s ? "has session" : "no session");
-        applySession(s);
+    const restoreSession = async () => {
+      const pendingCallback = hasPendingAuthCallback();
+      const attempts = pendingCallback ? 8 : 1;
+
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const { data: { session: s }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          applySession(null);
+          setLoading(false);
+          return;
+        }
+
+        if (s) {
+          applySession(s);
+          setLoading(false);
+          return;
+        }
+
+        if (!pendingCallback) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
+
+      applySession(null);
       setLoading(false);
-    });
+    };
+
+    void restoreSession();
 
     return () => subscription.unsubscribe();
   }, []);
