@@ -1390,18 +1390,73 @@ function targetRiskStatus(user) {
   return "stable";
 }
 
-function targetReasonKey(campaign, user) {
-  if (campaign.type === "medication") {
-    return Number(user.missedMeds7d || 0) > 0 ? "campaigns.targets.reason.medication" : "campaigns.targets.reason.monitor";
+const CAMPAIGN_TEMPLATE_KEYS = [
+  "general_announcement",
+  "heatwave_alert",
+  "medication_reminder",
+  "wellbeing_check",
+  "service_update",
+];
+
+function isCampaignTemplateKey(value) {
+  return CAMPAIGN_TEMPLATE_KEYS.includes(String(value || ""));
+}
+
+function defaultTemplateKeyForType(type) {
+  if (type === "medication") return "medication_reminder";
+  if (type === "wellbeing") return "wellbeing_check";
+  if (type === "service") return "service_update";
+  return "general_announcement";
+}
+
+function campaignTemplateType(templateKey) {
+  if (templateKey === "medication_reminder") return "medication";
+  if (templateKey === "wellbeing_check") return "wellbeing";
+  if (templateKey === "service_update") return "service";
+  return "safety";
+}
+
+function resolveCampaignTemplateKey(rowOrPayload) {
+  const templateKey = String(rowOrPayload?.templateKey || rowOrPayload?.template_key || "");
+  if (isCampaignTemplateKey(templateKey)) return templateKey;
+
+  const nameText = `${rowOrPayload?.name || ""} ${rowOrPayload?.name_key || ""}`.toLowerCase();
+  if (nameText.includes("heatwave") || nameText.includes("calor") || nameText.includes("hitze")) {
+    return "heatwave_alert";
   }
-  if (campaign.type === "wellbeing") {
+
+  return defaultTemplateKeyForType(String(rowOrPayload?.type || "safety"));
+}
+
+function callTemplateReasonKey(templateKey, user) {
+  if (templateKey === "medication_reminder") return "campaigns.targets.reason.medication";
+  if (templateKey === "service_update") return "campaigns.targets.reason.service";
+  if (templateKey === "wellbeing_check") {
     if (!user.checkinEnabled) return "campaigns.targets.reason.noResponse";
+    if (Number(user.careProviderCount || 0) === 0) return "campaigns.targets.reason.support";
     return "campaigns.targets.reason.isolation";
   }
-  if (campaign.type === "service") return "campaigns.targets.reason.service";
-  if (Number(user.criticalAlerts || 0) > 0) return "campaigns.targets.reason.safetyCritical";
-  if (Number(user.activeAlerts || 0) > 0) return "campaigns.targets.reason.safetyReview";
-  return "campaigns.targets.reason.safetyCheck";
+  if (templateKey === "heatwave_alert") {
+    if (Number(user.criticalAlerts || 0) > 0) return "campaigns.targets.reason.safetyCritical";
+    if (Number(user.activeAlerts || 0) > 0 || targetRiskStatus(user) === "review") return "campaigns.targets.reason.safetyReview";
+    return "campaigns.targets.reason.heatwave";
+  }
+  return "campaigns.targets.reason.generalAnnouncement";
+}
+
+function campaignUserMatchesTemplate(templateKey, user) {
+  if (templateKey === "medication_reminder") return Number(user.missedMeds7d || 0) > 0;
+  if (templateKey === "wellbeing_check") {
+    return !user.checkinEnabled || Number(user.careProviderCount || 0) === 0 || targetRiskStatus(user) !== "stable";
+  }
+  if (templateKey === "service_update") {
+    return Number(user.careProviderCount || 0) === 0 || targetRiskStatus(user) !== "stable";
+  }
+  return true;
+}
+
+function targetReasonKey(campaign, user) {
+  return callTemplateReasonKey(resolveCampaignTemplateKey(campaign), user);
 }
 
 function targetStatusForCampaign(campaign, user, index) {
@@ -1415,13 +1470,13 @@ function targetStatusForCampaign(campaign, user, index) {
 }
 
 function campaignTargetCandidates(campaign, users) {
+  const templateKey = resolveCampaignTemplateKey(campaign);
+  const city = nullIfBlank(campaign.city);
   const matches = users.filter((user) => {
-    if (campaign.type === "medication") return Number(user.missedMeds7d || 0) > 0;
-    if (campaign.type === "wellbeing") return !user.checkinEnabled || targetRiskStatus(user) !== "stable";
-    if (campaign.type === "service") return user.city === campaign.city || targetRiskStatus(user) !== "stable";
-    return user.city === campaign.city || Number(user.criticalAlerts || 0) > 0 || Number(user.activeAlerts || 0) > 0;
+    if (city && String(user.city || "").toLowerCase() !== city.toLowerCase()) return false;
+    return campaignUserMatchesTemplate(templateKey, user);
   });
-  return (matches.length ? matches : users)
+  return matches
     .slice()
     .sort((a, b) => Number(b.riskScore || 0) - Number(a.riskScore || 0))
     .slice(0, 20);
@@ -1477,7 +1532,7 @@ async function ensureCampaignTargets(campaigns, dashboardUsers) {
   }
 }
 
-function normalizeCampaign(row, targets = []) {
+function normalizeCampaign(row, targets = [], latestRun = null) {
   const hasTargets = targets.length > 0;
   return {
     id: row.id,
@@ -1489,10 +1544,11 @@ function normalizeCampaign(row, targets = []) {
     objectiveKey: row.objective_key,
     audience: row.audience,
     audienceKey: row.audience_key,
+    templateKey: resolveCampaignTemplateKey(row),
     dueKey: row.due_key || "campaigns.due.draft",
     city: row.city || "",
     owner: row.owner || "",
-    type: row.type,
+    type: campaignTemplateType(resolveCampaignTemplateKey(row)),
     status: row.status,
     channel: row.channel,
     scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
@@ -1508,6 +1564,7 @@ function normalizeCampaign(row, targets = []) {
     confirmed: hasTargets ? targets.filter((target) => target.status === "confirmed").length : Number(row.confirmed_count || 0),
     followUp: hasTargets ? targets.filter((target) => target.status === "followUp").length : Number(row.follow_up_count || 0),
     tone: row.tone || campaignTone(row.type, row.status),
+    latestRun,
     targets,
   };
 }
@@ -1525,6 +1582,7 @@ async function loadCampaigns(context) {
       objective_key,
       audience,
       audience_key,
+      template_key,
       due_key,
       city,
       owner,
@@ -1576,6 +1634,67 @@ async function loadCampaigns(context) {
       )
     : { rows: [] };
 
+  const latestRunRows = campaigns.length
+    ? await query(
+        `
+          WITH latest_runs AS (
+            SELECT DISTINCT ON (r.campaign_id)
+              r.id,
+              r.campaign_id,
+              r.status,
+              r.scheduled_at,
+              r.eligible_count,
+              r.skipped_count,
+              r.call_script,
+              r.call_window_start,
+              r.call_window_end,
+              r.retry_limit,
+              r.created_at,
+              r.updated_at
+            FROM public.campaign_call_runs r
+            WHERE r.organization_id = $2 AND r.campaign_id = ANY($1::uuid[])
+            ORDER BY r.campaign_id, r.created_at DESC
+          )
+          SELECT
+            lr.id::text,
+            lr.campaign_id::text,
+            lr.status,
+            lr.scheduled_at,
+            lr.eligible_count,
+            lr.skipped_count,
+            COUNT(*) FILTER (WHERE j.status = 'queued')::int AS queued_count,
+            COUNT(*) FILTER (WHERE j.status = 'pending')::int AS pending_count,
+            COUNT(*) FILTER (WHERE j.status = 'calling')::int AS calling_count,
+            COUNT(*) FILTER (WHERE j.status = 'completed')::int AS completed_count,
+            COUNT(*) FILTER (WHERE j.status = 'failed')::int AS failed_count,
+            COUNT(*) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_count,
+            lr.call_script,
+            lr.call_window_start,
+            lr.call_window_end,
+            lr.retry_limit,
+            lr.created_at,
+            lr.updated_at
+          FROM latest_runs lr
+          LEFT JOIN public.campaign_call_jobs j ON j.run_id = lr.id
+          GROUP BY
+            lr.id,
+            lr.campaign_id,
+            lr.status,
+            lr.scheduled_at,
+            lr.eligible_count,
+            lr.skipped_count,
+            lr.call_script,
+            lr.call_window_start,
+            lr.call_window_end,
+            lr.retry_limit,
+            lr.created_at,
+            lr.updated_at
+        `,
+        [campaigns.map((campaign) => campaign.id), organizationId],
+      )
+    : { rows: [] };
+  const latestRunByCampaign = new Map(latestRunRows.rows.map((row) => [row.campaign_id, normalizeCallRun(row)]));
+
   const targetsByCampaign = new Map();
   for (const target of targetRows.rows) {
     const user = usersById.get(target.vyva_user_id);
@@ -1597,17 +1716,19 @@ async function loadCampaigns(context) {
     targetsByCampaign.set(target.campaign_id, bucket);
   }
 
-  return campaigns.map((campaign) => normalizeCampaign(campaign, targetsByCampaign.get(campaign.id) || []));
+  return campaigns.map((campaign) => normalizeCampaign(campaign, targetsByCampaign.get(campaign.id) || [], latestRunByCampaign.get(campaign.id) || null));
 }
 
 function validateCampaignPayload(payload) {
   const name = String(payload?.name || "").trim();
-  const type = String(payload?.type || "safety");
+  const templateKey = resolveCampaignTemplateKey(payload);
+  const type = campaignTemplateType(templateKey);
   const channel = String(payload?.channel || "phone");
   const status = String(payload?.status || "draft");
   const executionType = String(payload?.executionType || payload?.execution_type || "manual");
   const retryLimit = Number(payload?.retryLimit ?? payload?.retry_limit ?? 0);
   if (!name) return "name is required";
+  if (!isCampaignTemplateKey(templateKey)) return "template_key is invalid";
   if (!["safety", "wellbeing", "medication", "service"].includes(type)) return "type is invalid";
   if (!["phone", "whatsapp", "mixed"].includes(channel)) return "channel is invalid";
   if (!["active", "draft", "scheduled", "completed"].includes(status)) return "status is invalid";
@@ -1673,9 +1794,10 @@ function normalizeCallRun(row) {
 async function buildCampaignCallPreview(campaignId, payload = {}, context) {
   const organizationId = scopeOrganizationId(context);
   const settings = normalizeCampaignCallSettings(payload);
+  const templateKey = resolveCampaignTemplateKey(payload);
   const campaignResult = await query(
     `
-      SELECT id::text, organization_id::text, city, call_script, call_window_start, call_window_end, retry_limit
+      SELECT id::text, organization_id::text, city, template_key, type, call_script, call_window_start, call_window_end, retry_limit
       FROM public.campaigns
       WHERE id = $1 AND organization_id = $2
       LIMIT 1
@@ -1685,16 +1807,22 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
   const campaign = campaignResult.rows[0];
   if (!campaign) return null;
 
+  const resolvedTemplateKey = isCampaignTemplateKey(templateKey) ? templateKey : resolveCampaignTemplateKey(campaign);
   const city = nullIfBlank(payload.city) ?? nullIfBlank(campaign.city);
   const scheduledAt = settings.scheduledAt ?? null;
   const callWindowStart = settings.callWindowStart || campaign.call_window_start || "09:00";
   const callWindowEnd = settings.callWindowEnd || campaign.call_window_end || "18:00";
   const outsideWindow = !timestampInsideCallWindow(scheduledAt, callWindowStart, callWindowEnd);
+  const dashboardData = await loadDashboardUsers(context);
+  const usersById = new Map(dashboardData.gisUsers.map((user) => [user.id, user]));
 
   const candidates = await query(
     `
       SELECT
         u.id::text AS user_id,
+        u.first_name,
+        u.last_name,
+        u.city,
         u.phone,
         COALESCE(c.consent_given, false) AS consent_given,
         EXISTS (
@@ -1719,7 +1847,25 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
     outsideCallWindow: 0,
     duplicateTarget: 0,
   };
-  const targets = candidates.rows.map((row) => {
+  const recipients = [];
+  for (const row of candidates.rows) {
+    const dashboardUserRow = usersById.get(row.user_id);
+    const candidateUser = dashboardUserRow || {
+      id: row.user_id,
+      first_name: row.first_name || "",
+      last_name: row.last_name || "",
+      city: row.city || "",
+      phone: row.phone || "",
+      activeAlerts: 0,
+      criticalAlerts: 0,
+      offlineSensors: 0,
+      missedMeds7d: 0,
+      checkinEnabled: false,
+      riskScore: 0,
+      careProviderCount: 0,
+    };
+    if (!campaignUserMatchesTemplate(resolvedTemplateKey, candidateUser)) continue;
+
     let status = "eligible";
     let skipReason = null;
     if (!nullIfBlank(row.phone)) {
@@ -1740,26 +1886,31 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
       skipped.duplicateTarget += 1;
     }
 
-    return {
+    recipients.push({
       userId: row.user_id,
+      displayName: `${row.first_name || ""} ${row.last_name || ""}`.trim() || "Unknown user",
+      city: row.city || "",
+      riskStatus: targetRiskStatus(candidateUser),
+      reasonKey: callTemplateReasonKey(resolvedTemplateKey, candidateUser),
       status,
       skipReason,
-    };
-  });
-  const eligibleCount = targets.filter((target) => target.status === "eligible").length;
+    });
+  }
+  const eligibleCount = recipients.filter((target) => target.status === "eligible").length;
 
   return {
     campaignId,
     organizationId,
+    templateKey: resolvedTemplateKey,
     scheduledAt,
     callWindowStart,
     callWindowEnd,
     retryLimit: settings.retryLimit,
     callScript: settings.callScript || campaign.call_script || "",
     eligibleCount,
-    skippedCount: targets.length - eligibleCount,
+    skippedCount: recipients.length - eligibleCount,
     skipped,
-    targets,
+    recipients,
   };
 }
 
@@ -1813,7 +1964,7 @@ async function createCampaignCallRun(campaignId, payload = {}, context) {
     );
     const runId = runResult.rows[0].id;
 
-    for (const target of preview.targets) {
+    for (const target of preview.recipients) {
       const status = target.status === "eligible" ? eligibleJobStatus : "skipped";
       await client.query(
         `
@@ -1884,6 +2035,60 @@ async function loadCampaignCallRuns(campaignId, context) {
   );
 
   return result.rows.map(normalizeCallRun);
+}
+
+async function loadCampaignCallJobs(runId, context) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await query(
+    `
+      SELECT
+        j.id::text,
+        j.run_id::text,
+        j.campaign_id::text,
+        j.vyva_user_id::text,
+        j.status,
+        j.skip_reason,
+        j.scheduled_at,
+        j.attempt_count,
+        u.first_name,
+        u.last_name,
+        u.city,
+        t.reason_key
+      FROM public.campaign_call_jobs j
+      JOIN public.vyva_users u ON u.id = j.vyva_user_id
+      LEFT JOIN public.campaign_targets t
+        ON t.campaign_id = j.campaign_id
+       AND t.vyva_user_id = j.vyva_user_id
+      WHERE j.run_id = $1 AND j.organization_id = $2
+      ORDER BY
+        CASE j.status
+          WHEN 'calling' THEN 0
+          WHEN 'queued' THEN 1
+          WHEN 'pending' THEN 2
+          WHEN 'completed' THEN 3
+          WHEN 'skipped' THEN 4
+          WHEN 'cancelled' THEN 5
+          ELSE 6
+        END,
+        u.last_name ASC,
+        u.first_name ASC
+    `,
+    [runId, organizationId],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    runId: row.run_id,
+    campaignId: row.campaign_id,
+    userId: row.vyva_user_id,
+    displayName: `${row.first_name || ""} ${row.last_name || ""}`.trim() || "Unknown user",
+    city: row.city || "",
+    status: row.status,
+    skipReason: row.skip_reason,
+    scheduledAt: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
+    attemptCount: Number(row.attempt_count || 0),
+    reasonKey: row.reason_key || "campaigns.targets.reason.monitor",
+  }));
 }
 
 function normalizeCheckin(row) {
@@ -4058,7 +4263,8 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
     return;
   }
 
-  const type = String(req.body.type || "safety");
+  const templateKey = resolveCampaignTemplateKey(req.body);
+  const type = campaignTemplateType(templateKey);
   const status = String(req.body.status || "draft");
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
@@ -4070,6 +4276,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         name,
         objective,
         audience,
+        template_key,
         due_key,
         city,
         owner,
@@ -4084,7 +4291,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         execution_type,
         tone
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
       RETURNING id::text
     `,
     [
@@ -4092,6 +4299,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
       String(req.body.name || "").trim(),
       String(req.body.objective || "").trim() || null,
       String(req.body.audience || "").trim() || null,
+      templateKey,
       String(req.body.dueKey || "campaigns.due.draft"),
       String(req.body.city || "").trim() || null,
       String(req.body.owner || "Ana Novak").trim(),
@@ -4120,7 +4328,8 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
     return;
   }
 
-  const type = String(req.body.type || "safety");
+  const templateKey = resolveCampaignTemplateKey(req.body);
+  const type = campaignTemplateType(templateKey);
   const status = String(req.body.status || "draft");
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
@@ -4135,20 +4344,21 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
         objective_key = NULL,
         audience = $4,
         audience_key = NULL,
-        due_key = $5,
-        city = $6,
-        owner = $7,
-        type = $8,
-        status = $9,
-        channel = $10,
-        scheduled_at = $11,
-        call_script = $12,
-        call_window_start = $13,
-        call_window_end = $14,
-        retry_limit = $15,
-        execution_type = $16,
-        tone = $17
-      WHERE id = $1 AND organization_id = $18
+        template_key = $5,
+        due_key = $6,
+        city = $7,
+        owner = $8,
+        type = $9,
+        status = $10,
+        channel = $11,
+        scheduled_at = $12,
+        call_script = $13,
+        call_window_start = $14,
+        call_window_end = $15,
+        retry_limit = $16,
+        execution_type = $17,
+        tone = $18
+      WHERE id = $1 AND organization_id = $19
       RETURNING id::text
     `,
     [
@@ -4156,6 +4366,7 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
       String(req.body.name || "").trim(),
       String(req.body.objective || "").trim() || null,
       String(req.body.audience || "").trim() || null,
+      templateKey,
       String(req.body.dueKey || "campaigns.due.draft"),
       String(req.body.city || "").trim() || null,
       String(req.body.owner || "Ana Novak").trim(),
@@ -4211,6 +4422,10 @@ app.post("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async
 
 app.get("/api/v1/campaigns-dashboard/campaigns/:id/call-runs", asyncRoute(async (req, res) => {
   res.json({ runs: await loadCampaignCallRuns(req.params.id, req.context) });
+}));
+
+app.get("/api/v1/campaigns-dashboard/call-runs/:id/jobs", asyncRoute(async (req, res) => {
+  res.json({ jobs: await loadCampaignCallJobs(req.params.id, req.context) });
 }));
 
 app.post("/api/v1/campaigns-dashboard/call-jobs/:id/cancel", asyncRoute(async (req, res) => {

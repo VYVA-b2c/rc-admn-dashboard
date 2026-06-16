@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,8 +28,6 @@ function renderCampaigns() {
 }
 
 describe("Campaigns", () => {
-  let warnSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -39,40 +37,65 @@ describe("Campaigns", () => {
         disconnect() {}
       },
     );
-    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+
+      if (url.includes("/api/v1/campaigns-dashboard/campaigns/1/call-runs")) {
+        return new Response(JSON.stringify({ runs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url.includes("/api/v1/campaigns-dashboard/campaigns")) {
+        return new Response(JSON.stringify({
+          campaigns: [
+            {
+              id: "1",
+              name: "Heatwave alert - Madrid",
+              templateKey: "heatwave_alert",
+              city: "Madrid",
+              status: "draft",
+              objective: "Warn clients and confirm cooling support.",
+              audience: "Consented clients with a phone number in Madrid.",
+              latestRun: null,
+            },
+          ],
+        }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (url.includes("/api/v1/campaigns-dashboard/call-runs/")) {
+        return new Response(JSON.stringify({ jobs: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
   });
 
   afterEach(() => {
-    warnSpy.mockRestore();
     vi.unstubAllGlobals();
   });
 
-  it("creates a local campaign draft and filters the campaign queue", async () => {
+  it("renders the call-first campaign workspace", async () => {
     renderCampaigns();
 
-    expect(screen.getByRole("heading", { name: "Campaigns" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "New campaign" }));
-    fireEvent.change(screen.getByLabelText("Campaign name"), {
-      target: { value: "Winter welfare check" },
-    });
-    fireEvent.change(screen.getByLabelText("Audience"), {
-      target: { value: "People needing cold weather calls" },
-    });
-    fireEvent.change(screen.getByLabelText("Objective"), {
-      target: { value: "Confirm wellbeing, heating, and service needs." },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    expect(screen.getByRole("heading", { name: "VYVA Call Campaigns" })).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Winter welfare check").length).toBeGreaterThan(0);
+      expect(screen.getByText("Heatwave alert - Madrid")).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByPlaceholderText("Search by campaign, audience, city, owner..."), {
-      target: { value: "Heatwave" },
-    });
-
-    expect(screen.getByText("Heatwave")).toBeInTheDocument();
-    expect(screen.queryByText("Medication confidence")).not.toBeInTheDocument();
+    expect(screen.getByText("Geographic scope")).toBeInTheDocument();
+    expect(screen.getByText("Recent call runs")).toBeInTheDocument();
   });
 });

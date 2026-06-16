@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS public.campaigns (
   objective_key TEXT,
   audience TEXT,
   audience_key TEXT,
+  template_key TEXT NOT NULL DEFAULT 'general_announcement',
   due_key TEXT NOT NULL DEFAULT 'campaigns.due.draft',
   city TEXT,
   owner TEXT,
@@ -402,6 +403,7 @@ ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS target_total INTEGER NOT N
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS contacted_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS confirmed_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS template_key TEXT NOT NULL DEFAULT 'general_announcement';
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_script TEXT;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_start TEXT;
