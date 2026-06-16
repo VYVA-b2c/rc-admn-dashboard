@@ -95,7 +95,7 @@ describe("Campaigns", () => {
       expect(screen.getByText("Heatwave alert - Madrid")).toBeInTheDocument();
     });
 
-    expect(screen.getByText("Geographic scope")).toBeInTheDocument();
-    expect(screen.getByText("Recent call runs")).toBeInTheDocument();
+    expect(screen.getByText("Drafts")).toBeInTheDocument();
+    expect(screen.getByText("Queued runs")).toBeInTheDocument();
   });
 });

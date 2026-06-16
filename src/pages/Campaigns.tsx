@@ -12,6 +12,7 @@ import {
   Pill,
   Plus,
   Search,
+  Sparkles,
   ShieldAlert,
 } from "lucide-react";
 
@@ -159,13 +160,26 @@ type JobsResponse = {
 
 type CampaignFormState = {
   id?: string;
+  name: string;
   templateKey: TemplateKey;
+  audience: string;
   city: string;
+  objective: string;
   scheduledAt: string;
   callWindowStart: string;
   callWindowEnd: string;
   retryLimit: string;
   callScript: string;
+  aiPrompt: string;
+};
+
+type CampaignAiSuggestion = {
+  templateKey: TemplateKey;
+  name: string;
+  audience: string;
+  objective: string;
+  callScript: string;
+  focus: string[];
 };
 
 type OpportunityUser = GISUser;
@@ -189,13 +203,17 @@ function templateType(templateKey: TemplateKey) {
 
 function defaultForm(templateKey: TemplateKey, getTemplateScript: (key: TemplateKey) => string): CampaignFormState {
   return {
+    name: "",
     templateKey,
+    audience: "",
     city: "",
+    objective: "",
     scheduledAt: "",
     callWindowStart: "09:00",
     callWindowEnd: "18:00",
     retryLimit: "1",
     callScript: getTemplateScript(templateKey),
+    aiPrompt: "",
   };
 }
 
@@ -335,6 +353,7 @@ export default function Campaigns() {
   const [form, setForm] = useState<CampaignFormState | null>(null);
   const [previewAction, setPreviewAction] = useState<PreviewAction>("preview");
   const [previewData, setPreviewData] = useState<CallPreview | null>(null);
+  const [aiSuggestion, setAiSuggestion] = useState<CampaignAiSuggestion | null>(null);
   const queryClient = useQueryClient();
   const { t, language } = useLanguage();
   const { user } = useAuth();
@@ -371,6 +390,80 @@ export default function Campaigns() {
     const translated = t(`campaigns.template.${templateKey}.script`);
     if (translated === `campaigns.template.${templateKey}.script`) return t("campaigns.call.defaultScript");
     return translated;
+  };
+
+  const aiTemplateName = (templateKey: TemplateKey, city: string) => {
+    const cityLabel = city || t("campaigns.scope.allCities");
+    const key =
+      templateKey === "general_announcement"
+        ? "campaigns.ai.general.name"
+        : templateKey === "heatwave_alert"
+          ? "campaigns.ai.safety.name"
+          : templateKey === "medication_reminder"
+            ? "campaigns.ai.medication.name"
+            : templateKey === "wellbeing_check"
+              ? "campaigns.ai.wellbeing.name"
+              : "campaigns.ai.service.name";
+    return t(key).replace("{city}", cityLabel);
+  };
+
+  const aiTemplateAudience = (templateKey: TemplateKey, city: string) => {
+    const cityLabel = city || t("campaigns.scope.allCities");
+    const key =
+      templateKey === "general_announcement"
+        ? "campaigns.ai.general.audience"
+        : templateKey === "heatwave_alert"
+          ? "campaigns.ai.safety.audience"
+          : templateKey === "medication_reminder"
+            ? "campaigns.ai.medication.audience"
+            : templateKey === "wellbeing_check"
+              ? "campaigns.ai.wellbeing.audience"
+              : "campaigns.ai.service.audience";
+    return t(key).replace("{city}", cityLabel);
+  };
+
+  const aiTemplateObjective = (templateKey: TemplateKey, city: string) => {
+    const cityLabel = city || t("campaigns.scope.allCities");
+    const channel = t("campaigns.channel.phone");
+    const key =
+      templateKey === "general_announcement"
+        ? "campaigns.ai.general.objective"
+        : templateKey === "heatwave_alert"
+          ? "campaigns.ai.safety.objective"
+          : templateKey === "medication_reminder"
+            ? "campaigns.ai.medication.objective"
+            : templateKey === "wellbeing_check"
+              ? "campaigns.ai.wellbeing.objective"
+              : "campaigns.ai.service.objective";
+    return t(key).replace("{city}", cityLabel).replace("{channel}", channel);
+  };
+
+  const aiTemplateScript = (templateKey: TemplateKey) => {
+    const key =
+      templateKey === "general_announcement"
+        ? "campaigns.ai.general.callScript"
+        : templateKey === "heatwave_alert"
+          ? "campaigns.ai.safety.callScript"
+          : templateKey === "medication_reminder"
+            ? "campaigns.ai.medication.callScript"
+            : templateKey === "wellbeing_check"
+              ? "campaigns.ai.wellbeing.callScript"
+              : "campaigns.ai.service.callScript";
+    return t(key);
+  };
+
+  const aiTemplateFocus = (templateKey: TemplateKey) => {
+    const prefix =
+      templateKey === "general_announcement"
+        ? "campaigns.ai.general"
+        : templateKey === "heatwave_alert"
+          ? "campaigns.ai.safety"
+          : templateKey === "medication_reminder"
+            ? "campaigns.ai.medication"
+            : templateKey === "wellbeing_check"
+              ? "campaigns.ai.wellbeing"
+              : "campaigns.ai.service";
+    return [t(`${prefix}.focus1`), t(`${prefix}.focus2`), t(`${prefix}.focus3`)];
   };
 
   const formatDateTime = (value?: string | null) => {
@@ -513,22 +606,62 @@ export default function Campaigns() {
     return { missingPhone, checkinsOff, medicationSignals, unassignedCoverage, urgentSignals };
   }, [opportunityUsers]);
 
+  const inferAiTemplate = (prompt: string, fallback: TemplateKey): TemplateKey => {
+    const normalized = prompt.toLowerCase();
+    if (/(heat|hot|dehydrat|summer|weather)/.test(normalized)) return "heatwave_alert";
+    if (/(medication|medicine|dose|pill|tablet|prescription|vaccine|shot)/.test(normalized)) return "medication_reminder";
+    if (/(wellbeing|lonely|alone|check in|check-in|support|reassur|mental|companionship)/.test(normalized)) return "wellbeing_check";
+    if (/(service|transport|pharmacy|update|hours|closure|appointment|referral)/.test(normalized)) return "service_update";
+    if (/(announce|announcement|inform|remind|warning|alert|campaign)/.test(normalized)) return "general_announcement";
+    return fallback;
+  };
+
+  const buildAiSuggestion = (draft: CampaignFormState): CampaignAiSuggestion => {
+    const suggestedTemplate = inferAiTemplate(draft.aiPrompt, draft.templateKey);
+    const city = draft.city.trim();
+    const freeText = draft.aiPrompt.trim();
+    const baseScript = aiTemplateScript(suggestedTemplate);
+    const objective = freeText
+      ? `${aiTemplateObjective(suggestedTemplate, city)} ${freeText}`
+      : aiTemplateObjective(suggestedTemplate, city);
+
+    return {
+      templateKey: suggestedTemplate,
+      name: aiTemplateName(suggestedTemplate, city),
+      audience: aiTemplateAudience(suggestedTemplate, city),
+      objective,
+      callScript: freeText ? `${baseScript}\n\nOperational emphasis: ${freeText}` : baseScript,
+      focus: aiTemplateFocus(suggestedTemplate),
+    };
+  };
+
   const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
-    setForm(defaultForm(templateKey, templateScript));
+    setForm({
+      ...defaultForm(templateKey, templateScript),
+      name: templateLabel(templateKey),
+      objective: templateObjective(templateKey, ""),
+      audience: templateAudience(templateKey, ""),
+    });
+    setAiSuggestion(null);
     setEditorOpen(true);
   };
 
   const openEditDialog = (campaign: Campaign) => {
     setForm({
       id: campaign.id,
+      name: campaign.name,
       templateKey: campaign.templateKey ?? "general_announcement",
+      audience: campaign.audience ?? templateAudience(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       city: campaign.city ?? "",
+      objective: campaign.objective ?? templateObjective(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       scheduledAt: toDateTimeLocal(campaign.scheduledAt),
       callWindowStart: campaign.callWindowStart ?? "09:00",
       callWindowEnd: campaign.callWindowEnd ?? "18:00",
       retryLimit: String(campaign.retryLimit ?? 1),
       callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+      aiPrompt: "",
     });
+    setAiSuggestion(null);
     setEditorOpen(true);
   };
 
@@ -537,9 +670,9 @@ export default function Campaigns() {
     const scheduledAt = options?.queueNow ? null : toIsoOrNull(draft.scheduledAt);
     return {
       templateKey: draft.templateKey,
-      name: `${templateLabel(draft.templateKey)}${draft.city.trim() ? ` - ${draft.city.trim()}` : ""}`,
-      objective: templateObjective(draft.templateKey, draft.city.trim()),
-      audience: templateAudience(draft.templateKey, draft.city.trim()),
+      name: draft.name.trim() || `${templateLabel(draft.templateKey)}${draft.city.trim() ? ` - ${draft.city.trim()}` : ""}`,
+      objective: draft.objective.trim() || templateObjective(draft.templateKey, draft.city.trim()),
+      audience: draft.audience.trim() || templateAudience(draft.templateKey, draft.city.trim()),
       city: draft.city.trim(),
       channel: "phone",
       executionType: "vyva_call",
@@ -728,6 +861,20 @@ export default function Campaigns() {
           {canDraftCampaigns && (
             <Button
               type="button"
+              variant="outline"
+              className="h-10 rounded-full px-4 text-sm font-bold"
+              onClick={() => {
+                openCreateDialog();
+                setForm((current) => current ? { ...current, aiPrompt: "" } : current);
+              }}
+            >
+              <Sparkles className="mr-2 h-4 w-4 text-primary" />
+              {t("campaigns.ai.open")}
+            </Button>
+          )}
+          {canDraftCampaigns && (
+            <Button
+              type="button"
               className="h-10 rounded-full bg-primary px-4 text-sm font-bold text-primary-foreground hover:bg-primary/90"
               onClick={openCreateDialog}
             >
@@ -848,12 +995,20 @@ export default function Campaigns() {
                       <p className="text-sm font-semibold text-foreground">{t("campaigns.newCampaign")}</p>
                       <p className="text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
                     </div>
-                    {canDraftCampaigns && (
-                      <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
-                        <Plus className="mr-2 h-4 w-4" />
-                        {t("campaigns.newCampaign")}
-                      </Button>
-                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {canDraftCampaigns && (
+                        <Button type="button" variant="outline" className="rounded-full" onClick={() => openCreateDialog()}>
+                          <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                          {t("campaigns.ai.open")}
+                        </Button>
+                      )}
+                      {canDraftCampaigns && (
+                        <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
+                          <Plus className="mr-2 h-4 w-4" />
+                          {t("campaigns.newCampaign")}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1265,6 +1420,101 @@ export default function Campaigns() {
 
           {form && (
             <div className="space-y-6 p-6">
+              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="rounded-2xl border border-border bg-white p-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
+                    <Input
+                      id="campaign-name"
+                      value={form.name}
+                      onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
+                      placeholder={t("campaigns.form.namePlaceholder")}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/5 to-white p-5">
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-primary/10 p-2 text-primary">
+                        <Sparkles className="h-4 w-4" />
+                      </span>
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
+                    </div>
+                    <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="campaign-ai-prompt">{t("campaigns.ai.promptLabel")}</Label>
+                    <Textarea
+                      id="campaign-ai-prompt"
+                      value={form.aiPrompt}
+                      onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
+                      placeholder={t("campaigns.ai.promptPlaceholder")}
+                      className="min-h-[110px]"
+                    />
+                    <p className="text-xs text-muted-foreground">{t("campaigns.ai.helper")}</p>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full rounded-full"
+                    onClick={() => {
+                      const suggestion = buildAiSuggestion(form);
+                      setAiSuggestion(suggestion);
+                    }}
+                  >
+                    <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                    {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                  </Button>
+
+                  {aiSuggestion && (
+                    <div className="space-y-4 rounded-2xl border border-border bg-white p-4">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                          {templateLabel(aiSuggestion.templateKey)}
+                        </Badge>
+                        <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
+                          {t("campaigns.ai.operatorFocus")}
+                        </Badge>
+                      </div>
+                      <div className="space-y-2">
+                        <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
+                        <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
+                      </div>
+                      <div className="space-y-2">
+                        {aiSuggestion.focus.map((item) => (
+                          <div key={item} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-foreground">
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                      <Button
+                        type="button"
+                        className="w-full rounded-full bg-primary hover:bg-primary/90"
+                        onClick={() => {
+                          setForm((current) => current ? {
+                            ...current,
+                            templateKey: aiSuggestion.templateKey,
+                            name: aiSuggestion.name,
+                            audience: aiSuggestion.audience,
+                            objective: aiSuggestion.objective,
+                            callScript: aiSuggestion.callScript,
+                          } : current);
+                          toast({
+                            title: t("campaigns.ai.appliedTitle"),
+                            description: t("campaigns.ai.appliedDescription"),
+                          });
+                        }}
+                      >
+                        {t("campaigns.ai.apply")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </section>
+
               <section className="rounded-2xl border border-border bg-white p-5">
                 <div className="mb-4">
                   <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
@@ -1281,6 +1531,9 @@ export default function Campaigns() {
                         onClick={() => setForm((current) => current ? {
                           ...current,
                           templateKey,
+                          name: templateLabel(templateKey),
+                          audience: templateAudience(templateKey, current.city),
+                          objective: templateObjective(templateKey, current.city),
                           callScript: templateScript(templateKey),
                         } : current)}
                         className={cn(
@@ -1357,6 +1610,24 @@ export default function Campaigns() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
+                    <Textarea
+                      id="campaign-audience"
+                      value={form.audience}
+                      onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
+                      className="min-h-[96px]"
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
+                    <Textarea
+                      id="campaign-objective"
+                      value={form.objective}
+                      onChange={(event) => setForm((current) => current ? { ...current, objective: event.target.value } : current)}
+                      className="min-h-[96px]"
+                    />
+                  </div>
                 </div>
               </section>
 
@@ -1376,10 +1647,10 @@ export default function Campaigns() {
                 </div>
                 <div className="space-y-4 rounded-2xl border border-border bg-white p-5">
                   <DetailBlock title={t("campaigns.detail.audience")}>
-                    <p className="text-sm leading-6 text-foreground">{templateAudience(form.templateKey, form.city)}</p>
+                    <p className="text-sm leading-6 text-foreground">{form.audience || templateAudience(form.templateKey, form.city)}</p>
                   </DetailBlock>
                   <DetailBlock title={t("campaigns.detail.objective")}>
-                    <p className="text-sm leading-6 text-foreground">{templateObjective(form.templateKey, form.city)}</p>
+                    <p className="text-sm leading-6 text-foreground">{form.objective || templateObjective(form.templateKey, form.city)}</p>
                   </DetailBlock>
                   <DetailBlock title={t("campaigns.call.panelDescription")}>
                     <div className="space-y-2 text-sm text-muted-foreground">
