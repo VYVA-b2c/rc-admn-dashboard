@@ -784,13 +784,13 @@ export default function Campaigns() {
           </div>
         </div>
 
-        <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
+        <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
           <div className="space-y-3">
             {campaignsQuery.isLoading ? (
               Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-36 rounded-2xl" />)
             ) : noCampaignsCreated ? (
               <div className="rounded-2xl border border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-white p-6">
-                <div className="max-w-2xl space-y-5">
+                <div className="space-y-5">
                   <div className="space-y-2">
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
                       {t("campaigns.empty.eyebrow")}
@@ -799,7 +799,7 @@ export default function Campaigns() {
                     <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.description")}</p>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2">
                     {templateOpportunities.map(({ templateKey, matching }) => {
                       const Icon = templateIcon(templateKey);
                       return (
@@ -810,82 +810,42 @@ export default function Campaigns() {
                           onClick={() => canManageCampaigns && openCreateDialog(templateKey)}
                           disabled={!canManageCampaigns}
                         >
-                          <div className="flex items-start gap-3">
-                            <span className="rounded-full bg-primary/10 p-2 text-primary">
-                              <Icon className="h-4 w-4" />
-                            </span>
-                            <div className="min-w-0 space-y-1">
-                              <div className="flex items-center justify-between gap-3">
-                                <p className="font-semibold text-foreground">{templateLabel(templateKey)}</p>
-                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                                  {t("campaigns.empty.peopleCount").replace("{count}", String(matching.length))}
-                                </span>
-                              </div>
-                              <p className="text-sm text-muted-foreground">{templateDescription(templateKey)}</p>
-                              <p className="text-xs text-muted-foreground">
-                                {matching.length > 0
-                                  ? t("campaigns.empty.topCity").replace("{city}", matching[0].city || t("campaigns.scope.allCities"))
-                                  : t("campaigns.empty.noneReady")}
-                              </p>
+                          <div className="space-y-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <span className="rounded-full bg-primary/10 p-2 text-primary">
+                                <Icon className="h-4 w-4" />
+                              </span>
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                                {t("campaigns.empty.peopleCount").replace("{count}", String(matching.length))}
+                              </span>
                             </div>
+
+                            <div className="space-y-2">
+                              <p className="text-lg font-semibold leading-7 text-foreground">{templateLabel(templateKey)}</p>
+                              <p className="min-h-[72px] text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</p>
+                            </div>
+
+                            <p className="text-xs font-medium leading-5 text-muted-foreground">
+                              {matching.length > 0
+                                ? t("campaigns.empty.topCity").replace("{city}", matching[0].city || t("campaigns.scope.allCities"))
+                                : t("campaigns.empty.noneReady")}
+                            </p>
                           </div>
                         </button>
                       );
                     })}
                   </div>
 
-                  <div className="flex flex-wrap gap-3">
+                  <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-foreground">{t("campaigns.newCampaign")}</p>
+                      <p className="text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
+                    </div>
                     {canManageCampaigns && (
                       <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
                         <Plus className="mr-2 h-4 w-4" />
                         {t("campaigns.newCampaign")}
                       </Button>
-                    )}
-                    <p className="self-center text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
-                  </div>
-
-                  <div className="rounded-2xl border border-border bg-white p-5">
-                    <div className="mb-4 flex items-center justify-between gap-3">
-                      <div>
-                        <h3 className="text-base font-bold text-foreground">{t("campaigns.empty.likelyRecipientsTitle")}</h3>
-                        <p className="text-sm text-muted-foreground">{t("campaigns.empty.likelyRecipientsDescription")}</p>
-                      </div>
-                    </div>
-                    {likelyRecipients.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {likelyRecipients.map((user) => {
-                          const templateKey =
-                            Number(user.missedMeds7d || 0) > 0
-                              ? "medication_reminder"
-                              : !user.checkinEnabled
-                                ? "wellbeing_check"
-                                : Number(user.criticalAlerts || 0) > 0
-                                  ? "heatwave_alert"
-                                  : "general_announcement";
-                          return (
-                            <div key={user.id} className="flex flex-col gap-3 rounded-2xl border border-border bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
-                              <div>
-                                <p className="font-semibold text-foreground">{`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown"}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {[user.city || t("campaigns.scope.allCities"), t(campaignOpportunityReasonKey(user, templateKey))]
-                                    .filter(Boolean)
-                                    .join(" · ")}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
-                                  {templateLabel(templateKey)}
-                                </Badge>
-                                <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
-                                  {t("campaigns.empty.riskScore").replace("{score}", String(user.riskScore ?? 0))}
-                                </Badge>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
                     )}
                   </div>
                 </div>
@@ -968,24 +928,13 @@ export default function Campaigns() {
                         <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.panelTitle")}</h3>
                         <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.panelDescription")}</p>
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <CompactStat title={t("campaigns.empty.stepOneTitle")} value="1" />
-                        <CompactStat title={t("campaigns.empty.stepTwoTitle")} value="2" />
-                        <CompactStat title={t("campaigns.empty.stepThreeTitle")} value="3" />
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <DetailBlock title={t("campaigns.empty.stepOneTitle")}>
-                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepOneDescription")}</p>
-                        </DetailBlock>
-                        <DetailBlock title={t("campaigns.empty.stepTwoTitle")}>
-                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepTwoDescription")}</p>
-                        </DetailBlock>
-                        <DetailBlock title={t("campaigns.empty.stepThreeTitle")}>
-                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepThreeDescription")}</p>
-                        </DetailBlock>
+                      <div className="space-y-3">
+                        <StepLine number="1" title={t("campaigns.empty.stepOneTitle")} description={t("campaigns.empty.stepOneDescription")} />
+                        <StepLine number="2" title={t("campaigns.empty.stepTwoTitle")} description={t("campaigns.empty.stepTwoDescription")} />
+                        <StepLine number="3" title={t("campaigns.empty.stepThreeTitle")} description={t("campaigns.empty.stepThreeDescription")} />
                       </div>
 
-                      <div className="grid gap-4 xl:grid-cols-2">
+                      <div className="grid gap-4">
                         <DetailBlock title={t("campaigns.empty.snapshotTitle")}>
                           <div className="space-y-3">
                             <SnapshotLine
@@ -1004,6 +953,42 @@ export default function Campaigns() {
                               detail={t("campaigns.empty.snapshotWellbeing")}
                             />
                           </div>
+                        </DetailBlock>
+
+                        <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
+                          {likelyRecipients.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                          ) : (
+                            <div className="space-y-3">
+                              {likelyRecipients.slice(0, 3).map((user) => {
+                                const templateKey =
+                                  Number(user.missedMeds7d || 0) > 0
+                                    ? "medication_reminder"
+                                    : !user.checkinEnabled
+                                      ? "wellbeing_check"
+                                      : Number(user.criticalAlerts || 0) > 0
+                                        ? "heatwave_alert"
+                                        : "general_announcement";
+                                return (
+                                  <div key={user.id} className="rounded-2xl bg-slate-50 px-4 py-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <p className="font-semibold text-foreground">{`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown"}</p>
+                                        <p className="text-sm text-muted-foreground">
+                                          {[user.city || t("campaigns.scope.allCities"), t(campaignOpportunityReasonKey(user, templateKey))]
+                                            .filter(Boolean)
+                                            .join(" · ")}
+                                        </p>
+                                      </div>
+                                      <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                                        {templateLabel(templateKey)}
+                                      </Badge>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </DetailBlock>
 
                         <DetailBlock title={t("campaigns.empty.gapsTitle")}>
@@ -1552,6 +1537,20 @@ function CompactStat({ title, value }: { title: string; value: string }) {
     <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
       <p className="mt-2 text-xl font-bold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function StepLine({ number, title, description }: { number: string; title: string; description: string }) {
+  return (
+    <div className="flex items-start gap-4 rounded-2xl border border-border bg-white px-4 py-4">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+        {number}
+      </div>
+      <div className="space-y-1">
+        <p className="text-sm font-bold text-foreground">{title}</p>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+      </div>
     </div>
   );
 }
