@@ -155,6 +155,7 @@ function typeLabel(type: string | undefined, t: (key: string) => string) {
 }
 
 export default function CheckInMonitoring() {
+  const CHECKIN_REQUEST_TIMEOUT_MS = 10_000;
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterTab>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -175,7 +176,9 @@ export default function CheckInMonitoring() {
     queryKey: ["checkin-monitoring"],
     queryFn: async (): Promise<ScheduledCall[]> => {
       try {
-        const response = await apiFetch<ScheduledCallsResponse>("/api/v1/checkins-dashboard/checkins");
+        const response = await apiFetch<ScheduledCallsResponse>("/api/v1/checkins-dashboard/checkins", {
+          timeoutMs: CHECKIN_REQUEST_TIMEOUT_MS,
+        });
         return normalizeScheduledCalls(response);
       } catch (error) {
         if (authBypassEnabled) return [];
@@ -202,7 +205,9 @@ export default function CheckInMonitoring() {
     retry: false,
     queryFn: async (): Promise<ScheduledCallUser[]> => {
       try {
-        const response = await apiFetch<UserDashboardResponse | ScheduledCallUser[]>("/api/v1/user-dashboard/users");
+        const response = await apiFetch<UserDashboardResponse | ScheduledCallUser[]>("/api/v1/user-dashboard/users", {
+          timeoutMs: CHECKIN_REQUEST_TIMEOUT_MS,
+        });
         if (Array.isArray(response)) return response;
         return (response.gisUsers ?? []).map((user) => ({
           id: user.id,
