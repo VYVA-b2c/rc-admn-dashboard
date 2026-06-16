@@ -1,0 +1,399 @@
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { Brain, Pencil, Power, PowerOff, Search, UserRound } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { StatCard } from "@/components/StatCard";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { useAdminRole } from "@/hooks/useAdminRole";
+import { toast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
+
+type FilterTab = "all" | "active" | "inactive";
+
+type BrainCoachSession = {
+  id: string;
+  user_id: string;
+  userName: string;
+  userPhone?: string | null;
+  city?: string | null;
+  enabled: boolean;
+  frequency?: string | null;
+  preferred_time?: string | null;
+};
+
+type BrainCoachSessionResponse =
+  | BrainCoachSession[]
+  | {
+      sessions?: BrainCoachSession[];
+      data?: BrainCoachSession[];
+    };
+
+type FormState = {
+  enabled: boolean;
+  frequency: string;
+  preferred_time: string;
+};
+
+const REQUEST_TIMEOUT_MS = 10_000;
+const validTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+const frequencyOptions = ["daily", "weekly", "biweekly", "monthly"] as const;
+
+function normalizeResponse(response: BrainCoachSessionResponse): BrainCoachSession[] {
+  return Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+}
+
+function formatFrequency(value: string | null | undefined, t: (key: string) => string) {
+  if (!value) return "-";
+  const key = `userForm.frequency.${value}`;
+  const translated = t(key);
+  return translated === key ? value : translated;
+}
+
+function statusLabel(enabled: boolean, t: (key: string) => string) {
+  return enabled ? t("brainCoach.active") : t("brainCoach.inactive");
+}
+
+export default function BrainCoachMonitoring() {
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<FilterTab>("all");
+  const [editingSession, setEditingSession] = useState<BrainCoachSession | null>(null);
+  const [form, setForm] = useState<FormState>({ enabled: false, frequency: "weekly", preferred_time: "10:00" });
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { t } = useLanguage();
+  const { isAdmin } = useAdminRole();
+  const canEdit = isAdmin && !authBypassEnabled;
+
+  const {
+    data: sessionsData,
+    error,
+    isError,
+    isLoading,
+  } = useQuery({
+    queryKey: ["brain-coach-monitoring"],
+    queryFn: async (): Promise<BrainCoachSession[]> => {
+      const response = await apiFetch<BrainCoachSessionResponse>("/api/v1/brain-coach-dashboard/sessions", {
+        timeoutMs: REQUEST_TIMEOUT_MS,
+      });
+      return normalizeResponse(response);
+    },
+    retry: false,
+  });
+
+  const sessions = useMemo(() => sessionsData ?? [], [sessionsData]);
+
+  useEffect(() => {
+    if (!isError) return;
+    toast({
+      title: t("brainCoach.loadFailed"),
+      description: error instanceof Error ? error.message : undefined,
+      variant: "destructive",
+    });
+  }, [error, isError, t]);
+
+  useEffect(() => {
+    if (!editingSession) return;
+    setForm({
+      enabled: editingSession.enabled,
+      frequency: editingSession.frequency || "weekly",
+      preferred_time: editingSession.preferred_time || "10:00",
+    });
+  }, [editingSession]);
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: { session: BrainCoachSession; form: FormState }) =>
+      apiFetch(`/api/v1/user-dashboard/brain-coach/${payload.session.user_id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: payload.form.enabled,
+          frequency: payload.form.frequency,
+          preferred_time: payload.form.preferred_time || null,
+        }),
+      }),
+    onSuccess: () => {
+      toast({ title: t("brainCoach.updated") });
+      setEditingSession(null);
+      queryClient.invalidateQueries({ queryKey: ["brain-coach-monitoring"] });
+    },
+    onError: (mutationError) => {
+      toast({
+        title: t("brainCoach.saveFailed"),
+        description: mutationError instanceof Error ? mutationError.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: (session: BrainCoachSession) =>
+      apiFetch(`/api/v1/user-dashboard/brain-coach/${session.user_id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: !session.enabled,
+          frequency: session.frequency || "weekly",
+          preferred_time: session.preferred_time || null,
+        }),
+      }),
+    onSuccess: (_data, session) => {
+      toast({ title: session.enabled ? t("brainCoach.disabled") : t("brainCoach.enabled") });
+      queryClient.invalidateQueries({ queryKey: ["brain-coach-monitoring"] });
+    },
+    onError: (mutationError) => {
+      toast({
+        title: t("brainCoach.saveFailed"),
+        description: mutationError instanceof Error ? mutationError.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const stats = useMemo(() => ({
+    total: sessions.length,
+    active: sessions.filter((session) => session.enabled).length,
+    inactive: sessions.filter((session) => !session.enabled).length,
+  }), [sessions]);
+
+  const filtered = useMemo(() => {
+    let list = sessions;
+    if (filter === "active") list = list.filter((session) => session.enabled);
+    if (filter === "inactive") list = list.filter((session) => !session.enabled);
+    if (!search.trim()) return list;
+
+    const query = search.toLowerCase();
+    return list.filter((session) =>
+      session.userName.toLowerCase().includes(query) ||
+      (session.userPhone ?? "").toLowerCase().includes(query) ||
+      (session.city ?? "").toLowerCase().includes(query),
+    );
+  }, [filter, search, sessions]);
+
+  const tabs: { key: FilterTab; label: string }[] = [
+    { key: "all", label: `${t("brainCoach.all")} (${stats.total})` },
+    { key: "active", label: `${t("brainCoach.active")} (${stats.active})` },
+    { key: "inactive", label: `${t("brainCoach.inactive")} (${stats.inactive})` },
+  ];
+
+  const actionColSpan = canEdit ? 6 : 5;
+
+  const handleSave = async () => {
+    if (!editingSession) return;
+    if (!form.frequency) {
+      toast({ title: t("brainCoach.validation.frequency"), variant: "destructive" });
+      return;
+    }
+    if (form.preferred_time && !validTimePattern.test(form.preferred_time)) {
+      toast({ title: t("brainCoach.validation.time"), variant: "destructive" });
+      return;
+    }
+
+    await saveMutation.mutateAsync({ session: editingSession, form });
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <div className="rounded-lg bg-secondary/10 p-2">
+          <Brain className="h-5 w-5 text-secondary" />
+        </div>
+        <div>
+          <h1 className="font-display text-2xl font-bold text-foreground">{t("brainCoach.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("brainCoach.subtitle")}</p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatCard title={t("brainCoach.totalScheduled")} value={isLoading ? "-" : stats.total} icon={<Brain className="h-5 w-5" />} gradient="bg-gradient-to-br from-primary to-primary/70" />
+        <StatCard title={t("brainCoach.activeSessions")} value={isLoading ? "-" : stats.active} icon={<Power className="h-5 w-5" />} gradient="bg-gradient-to-br from-emerald-500 to-emerald-600" />
+        <StatCard title={t("brainCoach.inactiveSessions")} value={isLoading ? "-" : stats.inactive} icon={<PowerOff className="h-5 w-5" />} gradient="bg-gradient-to-br from-orange-500 to-orange-600" />
+      </div>
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-1 rounded-lg border bg-muted/50 p-1">
+          {tabs.map((tab) => (
+            <Button key={tab.key} variant={filter === tab.key ? "default" : "ghost"} size="sm" onClick={() => setFilter(tab.key)} className="text-xs">
+              {tab.label}
+            </Button>
+          ))}
+        </div>
+        <div className="relative w-full sm:w-80">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input placeholder={t("brainCoach.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" />
+        </div>
+      </div>
+
+      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/50">
+              <TableHead>{t("brainCoach.userName")}</TableHead>
+              <TableHead>{t("brainCoach.phone")}</TableHead>
+              <TableHead>{t("brainCoach.status")}</TableHead>
+              <TableHead>{t("brainCoach.frequency")}</TableHead>
+              <TableHead>{t("brainCoach.preferredTime")}</TableHead>
+              {canEdit && <TableHead className="text-right">{t("brainCoach.actions")}</TableHead>}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              Array.from({ length: 5 }).map((_, index) => (
+                <TableRow key={index}>
+                  {Array.from({ length: actionColSpan }).map((_, cellIndex) => (
+                    <TableCell key={cellIndex}><Skeleton className="h-4 w-24" /></TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : isError ? (
+              <TableRow>
+                <TableCell colSpan={actionColSpan} className="py-12 text-center text-destructive">
+                  {t("brainCoach.loadFailed")}
+                </TableCell>
+              </TableRow>
+            ) : filtered.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={actionColSpan} className="py-12 text-center text-muted-foreground">
+                  {sessions.length === 0 ? t("brainCoach.noDataYet") : t("brainCoach.noMatch")}
+                </TableCell>
+              </TableRow>
+            ) : (
+              filtered.map((session) => (
+                <TableRow
+                  key={session.id}
+                  className="cursor-pointer"
+                  onClick={() => navigate(`/users/${session.user_id}`)}
+                >
+                  <TableCell>
+                    <div className="font-medium text-foreground">{session.userName}</div>
+                    {session.city && <div className="text-xs text-muted-foreground">{session.city}</div>}
+                  </TableCell>
+                  <TableCell>{session.userPhone || "-"}</TableCell>
+                  <TableCell>{statusLabel(session.enabled, t)}</TableCell>
+                  <TableCell>{formatFrequency(session.frequency, t)}</TableCell>
+                  <TableCell>{session.preferred_time || "-"}</TableCell>
+                  {canEdit && (
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEditingSession(session);
+                          }}
+                          aria-label={t("brainCoach.edit")}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleMutation.mutate(session);
+                          }}
+                          aria-label={session.enabled ? t("brainCoach.disable") : t("brainCoach.enable")}
+                        >
+                          {session.enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            navigate(`/users/${session.user_id}`);
+                          }}
+                          aria-label={t("brainCoach.openProfile")}
+                        >
+                          <UserRound className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <Dialog open={Boolean(editingSession)} onOpenChange={(open) => !open && setEditingSession(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t("brainCoach.dialogTitle")}</DialogTitle>
+            <DialogDescription>{t("brainCoach.dialogDescription")}</DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-2">
+            <div className="space-y-2">
+              <Label>{t("brainCoach.client")}</Label>
+              <div className="rounded-xl border bg-muted/40 px-3 py-2 text-sm text-foreground">
+                {editingSession?.userName || "-"}
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="brain-coach-frequency">{t("brainCoach.frequencyLabel")}</Label>
+                <Select value={form.frequency} onValueChange={(value) => setForm((current) => ({ ...current, frequency: value }))}>
+                  <SelectTrigger id="brain-coach-frequency">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {frequencyOptions.map((option) => (
+                      <SelectItem key={option} value={option}>
+                        {t(`userForm.frequency.${option}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="brain-coach-time">{t("brainCoach.preferredTime")}</Label>
+                <Input
+                  id="brain-coach-time"
+                  type="time"
+                  value={form.preferred_time}
+                  onChange={(event) => setForm((current) => ({ ...current, preferred_time: event.target.value }))}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-xl border px-3 py-2">
+              <div>
+                <Label>{t("brainCoach.statusLabel")}</Label>
+                <p className="text-xs text-muted-foreground">{statusLabel(form.enabled, t)}</p>
+              </div>
+              <Switch checked={form.enabled} onCheckedChange={(checked) => setForm((current) => ({ ...current, enabled: checked }))} />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingSession(null)} disabled={saveMutation.isPending}>
+              {t("brainCoach.cancel")}
+            </Button>
+            <Button onClick={handleSave} disabled={saveMutation.isPending}>
+              {saveMutation.isPending ? t("brainCoach.saving") : t("brainCoach.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

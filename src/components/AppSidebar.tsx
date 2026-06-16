@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   Bell,
+  Brain,
   CalendarCheck,
   Heart,
   Home,
@@ -62,6 +63,7 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     items: [
       { titleKey: "sidebar.checkins", url: "/checkin-monitoring", icon: CalendarCheck },
       { titleKey: "sidebar.medication", url: "/medication", icon: Pill },
+      { titleKey: "sidebar.brainCoach", url: "/brain-coach", icon: Brain },
       { titleKey: "sidebar.wellbeing", url: "/wellbeing", icon: Heart },
       { titleKey: "sidebar.symptoms", url: "/symptoms", icon: Activity },
     ],

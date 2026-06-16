@@ -23,6 +23,7 @@ import Sensors from "@/pages/Sensors";
 import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
 import MedicationMonitoring from "@/pages/MedicationMonitoring";
+import BrainCoachMonitoring from "@/pages/BrainCoachMonitoring";
 import WellbeingMonitoring from "@/pages/WellbeingMonitoring";
 import SymptomsMonitoring from "@/pages/SymptomsMonitoring";
 import NotFound from "@/pages/NotFound";
@@ -126,6 +127,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <MedicationMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/brain-coach"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <BrainCoachMonitoring />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

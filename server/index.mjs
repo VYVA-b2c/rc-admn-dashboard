@@ -1923,6 +1923,42 @@ async function loadCheckins(context) {
   return result.rows.map(normalizeCheckin);
 }
 
+function normalizeBrainCoachSession(row) {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    userName: row.user_name,
+    userPhone: row.user_phone,
+    city: row.city,
+    enabled: Boolean(row.enabled),
+    frequency: row.frequency,
+    preferred_time: row.preferred_time,
+  };
+}
+
+async function loadBrainCoachSessions(context) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await query(`
+    SELECT
+      bc.id::text,
+      bc.vyva_user_id::text AS user_id,
+      bc.enabled,
+      bc.frequency,
+      bc.preferred_time,
+      u.first_name,
+      u.last_name,
+      u.first_name || ' ' || u.last_name AS user_name,
+      u.phone AS user_phone,
+      u.city
+    FROM public.vyva_user_brain_coach bc
+    JOIN public.vyva_users u ON u.id = bc.vyva_user_id
+    WHERE u.organization_id = $1
+    ORDER BY bc.enabled DESC, u.last_name ASC, u.first_name ASC
+  `, [organizationId]);
+
+  return result.rows.map(normalizeBrainCoachSession);
+}
+
 function validateCheckinPayload(payload, creating = false) {
   const userId = payload?.user_id;
   const frequencyDays = Number(payload?.frequency_days);
@@ -4289,6 +4325,10 @@ app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res
     [req.params.id, organizationId],
   );
   res.status(204).end();
+}));
+
+app.get("/api/v1/brain-coach-dashboard/sessions", asyncRoute(async (req, res) => {
+  res.json({ sessions: await loadBrainCoachSessions(req.context) });
 }));
 
 app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
