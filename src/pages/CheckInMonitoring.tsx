@@ -187,7 +187,7 @@ function typeLabel(type: string | undefined, t: (key: string) => string) {
   return type.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatFrequency(call: ScheduledCallRow, t: (key: string) => string) {
+function formatFrequencyLabel(call: ScheduledCallRow, t: (key: string) => string) {
   if (call.displayFrequency) {
     const key = `userForm.frequency.${call.displayFrequency}`;
     const translated = t(key);
@@ -204,6 +204,11 @@ function lastOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
   const key = `checkin.outcome.${call.lastOutcome}`;
   const translated = t(key);
   return translated !== key ? translated : call.lastOutcome;
+}
+
+function formatPreferredTime(value?: string | null) {
+  if (!value) return "—";
+  return value.slice(0, 5);
 }
 
 export default function CheckInMonitoring() {
@@ -353,12 +358,6 @@ export default function CheckInMonitoring() {
     };
   }, [checkins]);
 
-  function formatFrequency(days?: number) {
-    if (!days) return "—";
-    if (days === 1) return t("checkin.everyDay");
-    return t("checkin.everyDays").replace("{count}", String(days));
-  }
-
   const filtered = useMemo(() => {
     let list = checkins;
     if (filter === "active") list = list.filter((c) => c.is_active);
@@ -495,15 +494,16 @@ export default function CheckInMonitoring() {
                     }}
                   >
                     <TableCell className="font-medium">{c.userName}</TableCell>
-                    <TableCell className="text-muted-foreground">{c.userPhone || "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{c.userPhone || "?"}</TableCell>
                     <TableCell>{typeLabel(c.type, t)}</TableCell>
                     <TableCell>
                       <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
                         {c.is_active ? t("checkin.active") : t("checkin.inactive")}
                       </Badge>
                     </TableCell>
-                    <TableCell>{formatFrequency(c.frequency_days)}</TableCell>
-                    <TableCell>{c.preferred_time || "—"}</TableCell>
+                    <TableCell>{lastOutcomeLabel(c, t)}</TableCell>
+                    <TableCell>{formatFrequencyLabel(c, t)}</TableCell>
+                    <TableCell>{formatPreferredTime(c.preferred_time)}</TableCell>
                     {canEdit && (
                       <TableCell onClick={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-1">
