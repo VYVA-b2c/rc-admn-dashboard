@@ -4,13 +4,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { ArrowLeft, Building2, Languages, Lock, Plus } from "lucide-react";
+import { ArrowLeft, Building2, Languages, Lock, Pencil, Plus, ShieldCheck } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
 import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
 import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
@@ -23,6 +26,7 @@ type OrganizationsResponse = {
 type LanguageCode = "en" | "de" | "es";
 
 const emptyOrganizationForm = {
+  active: true,
   country: "",
   defaultLanguage: "de" as LanguageCode,
   name: "",
@@ -66,6 +70,8 @@ export default function Settings() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [organizationForm, setOrganizationForm] = useState(emptyOrganizationForm);
+  const [organizationDialogMode, setOrganizationDialogMode] = useState<"create" | "edit" | null>(null);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [branchLanguage, setBranchLanguage] = useState<LanguageCode>("de");
   const [branchTimezone, setBranchTimezone] = useState("Europe/Berlin");
   const [activeOrganizationId, setActiveOrganizationId] = useState(() => localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY) || "");
@@ -96,7 +102,17 @@ export default function Settings() {
     null;
   const organizationPlaceholder =
     loadingCurrentContext || organizationsQuery.isLoading ? t("settings.loadingOrganization") : t("settings.notAvailable");
-  const canManageOrganizations = Boolean(currentUser?.isAdmin);
+  const canManageOrganizations = Boolean(currentUser?.isPlatformAdmin || currentUser?.isAdmin);
+  const roleLabel = loadingCurrentContext
+    ? t("settings.loadingOrganization")
+    : currentUser?.isPlatformAdmin
+      ? t("settings.role.superAdmin")
+      : currentUser?.isAdmin
+        ? t("settings.role.admin")
+        : t("settings.role.noOrgAdmin");
+  const roleBadgeClass = currentUser?.isPlatformAdmin || currentUser?.isAdmin
+    ? "border-primary/20 bg-primary/10 text-primary"
+    : "border-orange-200 bg-orange-50 text-orange-700";
 
   useEffect(() => {
     if (!currentOrganization) return;
@@ -110,11 +126,18 @@ export default function Settings() {
         method: "POST",
         body: JSON.stringify(payload),
       }),
-    onSuccess: async () => {
+    onSuccess: async ({ organization }) => {
       toast.success(t("settings.organizationCreated"));
       setOrganizationForm(emptyOrganizationForm);
+      setOrganizationDialogMode(null);
+      setEditingOrganizationId(null);
+      if (organization.id) {
+        setActiveOrganizationId(organization.id);
+        localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, organization.id);
+      }
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["organizations"] }),
+        queryClient.invalidateQueries({ queryKey: ["organizations", "header"] }),
         queryClient.invalidateQueries({ queryKey: ["current-user-context"] }),
       ]);
     },
@@ -124,13 +147,15 @@ export default function Settings() {
   });
 
   const updateOrganization = useMutation({
-    mutationFn: ({ id, defaultLanguage, timezone }: { id: string; defaultLanguage?: LanguageCode; timezone?: string }) =>
+    mutationFn: ({ id, ...payload }: { id: string } & Partial<typeof emptyOrganizationForm>) =>
       apiFetch<{ organization: OrganizationContext }>(`/api/v1/organizations/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({ defaultLanguage, timezone }),
+        body: JSON.stringify(payload),
       }),
     onSuccess: async () => {
       toast.success(t("settings.organizationUpdated"));
+      setOrganizationDialogMode(null);
+      setEditingOrganizationId(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["organizations"] }),
         queryClient.invalidateQueries({ queryKey: ["organizations", "header"] }),
@@ -142,24 +167,46 @@ export default function Settings() {
     },
   });
 
-  const updateOrganizationForm = (key: keyof typeof organizationForm, value: string) => {
+  const updateOrganizationForm = (key: keyof typeof organizationForm, value: string | boolean) => {
     setOrganizationForm((current) => {
       if (key === "defaultLanguage") {
+        const language = String(value) as LanguageCode;
         return {
           ...current,
-          defaultLanguage: value as LanguageCode,
-          timezone: current.timezone || suggestedTimezone(value),
+          defaultLanguage: language,
+          timezone: current.timezone || suggestedTimezone(language),
         };
       }
       if (key === "name" && !current.slug) {
+        const name = String(value);
         return {
           ...current,
-          name: value,
-          slug: value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+          name,
+          slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
         };
       }
       return { ...current, [key]: value };
     });
+  };
+
+  const openCreateOrganization = () => {
+    setOrganizationForm(emptyOrganizationForm);
+    setEditingOrganizationId(null);
+    setOrganizationDialogMode("create");
+  };
+
+  const openEditOrganization = (organization: OrganizationContext) => {
+    if (!organization.id) return;
+    setOrganizationForm({
+      active: organization.active ?? true,
+      country: organization.country ?? "",
+      defaultLanguage: organization.defaultLanguage || "de",
+      name: organization.name ?? "",
+      slug: organization.slug ?? "",
+      timezone: organization.timezone || suggestedTimezone(organization.defaultLanguage || "de"),
+    });
+    setEditingOrganizationId(organization.id);
+    setOrganizationDialogMode("edit");
   };
 
   const handleSwitchOrganization = async (nextOrganizationId: string) => {
@@ -180,19 +227,31 @@ export default function Settings() {
     });
   };
 
-  const handleCreateOrganization = (event: React.FormEvent) => {
+  const handleSaveOrganizationDialog = (event: React.FormEvent) => {
     event.preventDefault();
     if (!organizationForm.name.trim() || !organizationForm.slug.trim()) {
       toast.error(t("settings.organizationRequired"));
       return;
     }
-    createOrganization.mutate({
+    const payload = {
       ...organizationForm,
       country: organizationForm.country.trim(),
       name: organizationForm.name.trim(),
       slug: organizationForm.slug.trim(),
       timezone: organizationForm.timezone.trim() || suggestedTimezone(organizationForm.defaultLanguage),
-    });
+    };
+    if (organizationDialogMode === "edit" && editingOrganizationId) {
+      updateOrganization.mutate({
+        id: editingOrganizationId,
+        active: payload.active,
+        country: payload.country,
+        defaultLanguage: payload.defaultLanguage,
+        name: payload.name,
+        timezone: payload.timezone,
+      });
+      return;
+    }
+    createOrganization.mutate(payload);
   };
 
   const handleChangePassword = async (e: React.FormEvent) => {
@@ -232,12 +291,29 @@ export default function Settings() {
       </div>
       <div className="grid max-w-4xl gap-6">
         <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building2 className="h-5 w-5" />
-              {t("settings.organization")}
-            </CardTitle>
-            <CardDescription>{t("settings.organizationDescription")}</CardDescription>
+          <CardHeader className="gap-4 space-y-0 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="h-5 w-5" />
+                {t("settings.organization")}
+              </CardTitle>
+              <CardDescription>{t("settings.organizationDescription")}</CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className={roleBadgeClass}>
+                <ShieldCheck className="mr-1 h-3.5 w-3.5" />
+                {roleLabel}
+              </Badge>
+              <Button
+                type="button"
+                className="rounded-full"
+                disabled={!canManageOrganizations}
+                onClick={openCreateOrganization}
+              >
+                <Plus className="h-4 w-4" />
+                {t("settings.newOrganization")}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -317,104 +393,40 @@ export default function Settings() {
               </div>
             </div>
 
-            {canManageOrganizations && (
-              <form onSubmit={handleCreateOrganization} className="rounded-2xl border border-border bg-muted/30 p-4">
-                <div className="mb-4">
-                  <h3 className="text-sm font-bold text-foreground">{t("settings.createOrganization")}</h3>
-                  <p className="mt-1 text-xs text-muted-foreground">{t("settings.createOrganizationDescription")}</p>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="organization-name">{t("settings.organizationName")}</Label>
-                    <Input
-                      id="organization-name"
-                      value={organizationForm.name}
-                      onChange={(event) => updateOrganizationForm("name", event.target.value)}
-                      placeholder="Red Cross Zamora"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="organization-slug">{t("settings.organizationSlug")}</Label>
-                    <Input
-                      id="organization-slug"
-                      value={organizationForm.slug}
-                      onChange={(event) => updateOrganizationForm("slug", event.target.value)}
-                      placeholder="red-cross-zamora"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="organization-country">{t("settings.organizationCountry")}</Label>
-                    <Input
-                      id="organization-country"
-                      value={organizationForm.country}
-                      onChange={(event) => updateOrganizationForm("country", event.target.value)}
-                      placeholder="Spain"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t("settings.organizationDefaultLanguage")}</Label>
-                    <Select
-                      value={organizationForm.defaultLanguage}
-                      onValueChange={(value) => updateOrganizationForm("defaultLanguage", value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="en">{t("settings.language.en")}</SelectItem>
-                        <SelectItem value="de">{t("settings.language.de")}</SelectItem>
-                        <SelectItem value="es">{t("settings.language.es")}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="organization-timezone">{t("settings.organizationTimezone")}</Label>
-                    <Input
-                      id="organization-timezone"
-                      value={organizationForm.timezone}
-                      onChange={(event) => updateOrganizationForm("timezone", event.target.value)}
-                      placeholder="Europe/Madrid"
-                    />
-                  </div>
-                </div>
-                <Button className="mt-4" type="submit" disabled={createOrganization.isPending}>
-                  <Plus className="h-4 w-4" />
-                  {createOrganization.isPending ? t("settings.creatingOrganization") : t("settings.createOrganization")}
-                </Button>
-              </form>
+            {!canManageOrganizations && (
+              <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
+                <p className="font-semibold">{t("settings.orgAdminRequiredTitle")}</p>
+                <p className="mt-1">{t("settings.orgAdminRequiredDescription")}</p>
+              </div>
             )}
 
             <div className="rounded-2xl border border-border bg-white">
               <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
               <div className="divide-y divide-border">
                 {organizations.map((organization) => (
-                  <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_180px]">
+                  <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_160px_110px]">
                     <span className="font-semibold text-foreground">{organization.name}</span>
                     <span className="text-muted-foreground">{organization.country || t("settings.notAvailable")}</span>
-                    {canManageOrganizations && organization.id ? (
-                      <Select
-                        value={organization.defaultLanguage || "de"}
-                        onValueChange={(value) =>
-                          updateOrganization.mutate({
-                            id: organization.id!,
-                            defaultLanguage: value as LanguageCode,
-                          })
-                        }
-                      >
-                        <SelectTrigger className="h-9 rounded-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="en">{t("settings.language.en")}</SelectItem>
-                          <SelectItem value="de">{t("settings.language.de")}</SelectItem>
-                          <SelectItem value="es">{t("settings.language.es")}</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    ) : (
-                      <span className="text-muted-foreground">
-                        {organization.defaultLanguage ? t(`settings.language.${organization.defaultLanguage}`) : t("settings.notAvailable")}
-                      </span>
-                    )}
+                    <span className="text-muted-foreground">
+                      {organization.defaultLanguage ? t(`settings.language.${organization.defaultLanguage}`) : t("settings.notAvailable")}
+                    </span>
+                    <div className="flex items-center justify-start gap-2 sm:justify-end">
+                      <Badge variant="outline" className={organization.active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-muted bg-muted text-muted-foreground"}>
+                        {organization.active ? t("settings.status.active") : t("settings.status.inactive")}
+                      </Badge>
+                      {canManageOrganizations && organization.id && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full"
+                          onClick={() => openEditOrganization(organization)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          {t("settings.editOrganization")}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {organizations.length === 0 && (
@@ -490,6 +502,111 @@ export default function Settings() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={Boolean(organizationDialogMode)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOrganizationDialogMode(null);
+            setEditingOrganizationId(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl rounded-2xl">
+          <form onSubmit={handleSaveOrganizationDialog}>
+            <DialogHeader>
+              <DialogTitle>
+                {organizationDialogMode === "edit" ? t("settings.editOrganization") : t("settings.createOrganization")}
+              </DialogTitle>
+              <DialogDescription>{t("settings.createOrganizationDescription")}</DialogDescription>
+            </DialogHeader>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="organization-name">{t("settings.organizationName")}</Label>
+                <Input
+                  id="organization-name"
+                  value={organizationForm.name}
+                  onChange={(event) => updateOrganizationForm("name", event.target.value)}
+                  placeholder="Red Cross Zamora"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="organization-slug">{t("settings.organizationSlug")}</Label>
+                <Input
+                  id="organization-slug"
+                  value={organizationForm.slug}
+                  onChange={(event) => updateOrganizationForm("slug", event.target.value)}
+                  placeholder="red-cross-zamora"
+                  disabled={organizationDialogMode === "edit"}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="organization-country">{t("settings.organizationCountry")}</Label>
+                <Input
+                  id="organization-country"
+                  value={organizationForm.country}
+                  onChange={(event) => updateOrganizationForm("country", event.target.value)}
+                  placeholder="Spain"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>{t("settings.organizationDefaultLanguage")}</Label>
+                <Select value={organizationForm.defaultLanguage} onValueChange={(value) => updateOrganizationForm("defaultLanguage", value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="en">{t("settings.language.en")}</SelectItem>
+                    <SelectItem value="de">{t("settings.language.de")}</SelectItem>
+                    <SelectItem value="es">{t("settings.language.es")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="organization-timezone">{t("settings.organizationTimezone")}</Label>
+                <Input
+                  id="organization-timezone"
+                  value={organizationForm.timezone}
+                  onChange={(event) => updateOrganizationForm("timezone", event.target.value)}
+                  placeholder="Europe/Madrid"
+                />
+              </div>
+              <div className="flex items-center justify-between rounded-xl border border-border px-3 py-2">
+                <div>
+                  <Label htmlFor="organization-active">{t("settings.organizationStatus")}</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {organizationForm.active ? t("settings.status.active") : t("settings.status.inactive")}
+                  </p>
+                </div>
+                <Switch
+                  id="organization-active"
+                  checked={organizationForm.active}
+                  onCheckedChange={(checked) => updateOrganizationForm("active", checked)}
+                />
+              </div>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setOrganizationDialogMode(null);
+                  setEditingOrganizationId(null);
+                }}
+              >
+                {t("settings.cancel")}
+              </Button>
+              <Button type="submit" disabled={createOrganization.isPending || updateOrganization.isPending}>
+                {createOrganization.isPending || updateOrganization.isPending
+                  ? t("settings.savingOrganization")
+                  : organizationDialogMode === "edit"
+                    ? t("settings.saveOrganization")
+                    : t("settings.createOrganization")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
