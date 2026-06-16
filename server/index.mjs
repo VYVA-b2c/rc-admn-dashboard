@@ -1434,13 +1434,9 @@ function resolveCampaignTemplateKey(rowOrPayload) {
 }
 
 function callTemplateReasonKey(templateKey, user) {
-  if (templateKey === "medication_reminder") return "campaigns.targets.reason.medication";
+  if (templateKey === "medication_reminder") return "campaigns.targets.reason.publicHealth";
   if (templateKey === "service_update") return "campaigns.targets.reason.service";
-  if (templateKey === "wellbeing_check") {
-    if (!user.checkinEnabled) return "campaigns.targets.reason.noResponse";
-    if (Number(user.careProviderCount || 0) === 0) return "campaigns.targets.reason.support";
-    return "campaigns.targets.reason.isolation";
-  }
+  if (templateKey === "wellbeing_check") return "campaigns.targets.reason.safetyAdvisory";
   if (templateKey === "heatwave_alert") {
     if (Number(user.criticalAlerts || 0) > 0) return "campaigns.targets.reason.safetyCritical";
     if (Number(user.activeAlerts || 0) > 0 || targetRiskStatus(user) === "review") return "campaigns.targets.reason.safetyReview";
@@ -1450,9 +1446,11 @@ function callTemplateReasonKey(templateKey, user) {
 }
 
 function campaignUserMatchesTemplate(templateKey, user) {
-  if (templateKey === "medication_reminder") return Number(user.missedMeds7d || 0) > 0;
+  if (templateKey === "medication_reminder") {
+    return Boolean(user.phone) && (Number(user.healthConditions || 0) > 0 || Number(user.riskScore || 0) >= 40);
+  }
   if (templateKey === "wellbeing_check") {
-    return !user.checkinEnabled || Number(user.careProviderCount || 0) === 0 || targetRiskStatus(user) !== "stable";
+    return Boolean(user.phone) && (Number(user.careProviderCount || 0) === 0 || Number(user.activeAlerts || 0) > 0 || Number(user.riskScore || 0) >= 50);
   }
   if (templateKey === "service_update") {
     return Number(user.careProviderCount || 0) === 0 || targetRiskStatus(user) !== "stable";

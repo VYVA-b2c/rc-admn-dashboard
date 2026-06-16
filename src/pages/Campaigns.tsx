@@ -1,7 +1,6 @@
 ﻿import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Brain,
   CalendarClock,
   CheckCircle2,
   Clock3,
@@ -9,7 +8,6 @@ import {
   MapPin,
   Megaphone,
   PhoneCall,
-  Pill,
   Plus,
   Search,
   Sparkles,
@@ -280,11 +278,11 @@ function templateIcon(templateKey: TemplateKey) {
     case "heatwave_alert":
       return Flame;
     case "medication_reminder":
-      return Pill;
+      return CalendarClock;
     case "wellbeing_check":
-      return Brain;
-    case "service_update":
       return ShieldAlert;
+    case "service_update":
+      return PhoneCall;
     case "general_announcement":
     default:
       return Megaphone;
@@ -328,16 +326,16 @@ function runJobStatusKey(status?: string | null) {
 }
 
 function campaignOpportunityMatchesTemplate(user: OpportunityUser, templateKey: TemplateKey) {
-  if (templateKey === "medication_reminder") return Number(user.missedMeds7d || 0) > 0;
-  if (templateKey === "wellbeing_check") return !user.checkinEnabled || Number(user.activeAlerts || 0) > 0;
+  if (templateKey === "medication_reminder") return Boolean(user.phone) && (Number(user.healthConditions || 0) > 0 || Number(user.riskScore || 0) >= 40);
+  if (templateKey === "wellbeing_check") return Boolean(user.phone) && ((user.careProviderCount ?? 0) < 1 || Number(user.activeAlerts || 0) > 0 || Number(user.riskScore || 0) >= 50);
   if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 || Number(user.activeAlerts || 0) > 0;
   if (templateKey === "heatwave_alert") return Number(user.riskScore || 0) >= 60 || Number(user.healthConditions || 0) > 0;
   return Boolean(user.phone);
 }
 
 function campaignOpportunityReasonKey(user: OpportunityUser, templateKey: TemplateKey) {
-  if (templateKey === "medication_reminder") return "campaigns.targets.reason.medication";
-  if (templateKey === "wellbeing_check") return !user.checkinEnabled ? "usersList.reason.checkins" : "usersList.reason.review";
+  if (templateKey === "medication_reminder") return "campaigns.targets.reason.publicHealth";
+  if (templateKey === "wellbeing_check") return "campaigns.targets.reason.safetyAdvisory";
   if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 ? "usersList.nextAction.assign" : "campaigns.targets.reason.service";
   if (templateKey === "heatwave_alert") return "campaigns.targets.reason.heatwave";
   return "campaigns.targets.reason.safetyCheck";
@@ -609,8 +607,8 @@ export default function Campaigns() {
   const inferAiTemplate = (prompt: string, fallback: TemplateKey): TemplateKey => {
     const normalized = prompt.toLowerCase();
     if (/(heat|hot|dehydrat|summer|weather)/.test(normalized)) return "heatwave_alert";
-    if (/(medication|medicine|dose|pill|tablet|prescription|vaccine|shot)/.test(normalized)) return "medication_reminder";
-    if (/(wellbeing|lonely|alone|check in|check-in|support|reassur|mental|companionship)/.test(normalized)) return "wellbeing_check";
+    if (/(vaccine|vaccination|booster|flu shot|shot clinic|immuni[sz]ation|public health)/.test(normalized)) return "medication_reminder";
+    if (/(scam|fraud|suspicious|phone scam|bank alert|identity theft|safety advisory|warning)/.test(normalized)) return "wellbeing_check";
     if (/(service|transport|pharmacy|update|hours|closure|appointment|referral)/.test(normalized)) return "service_update";
     if (/(announce|announcement|inform|remind|warning|alert|campaign)/.test(normalized)) return "general_announcement";
     return fallback;
@@ -990,26 +988,6 @@ export default function Campaigns() {
                     })}
                   </div>
 
-                  <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-white/80 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="space-y-1">
-                      <p className="text-sm font-semibold text-foreground">{t("campaigns.newCampaign")}</p>
-                      <p className="text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {canDraftCampaigns && (
-                        <Button type="button" variant="outline" className="rounded-full" onClick={() => openCreateDialog()}>
-                          <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                          {t("campaigns.ai.open")}
-                        </Button>
-                      )}
-                      {canDraftCampaigns && (
-                        <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
-                          <Plus className="mr-2 h-4 w-4" />
-                          {t("campaigns.newCampaign")}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
                 </div>
               </div>
             ) : filteredCampaigns.length === 0 ? (
@@ -1124,13 +1102,15 @@ export default function Campaigns() {
                             <div className="space-y-3">
                               {likelyRecipients.slice(0, 3).map((user) => {
                                 const templateKey =
-                                  Number(user.missedMeds7d || 0) > 0
-                                    ? "medication_reminder"
-                                    : !user.checkinEnabled
-                                      ? "wellbeing_check"
-                                      : Number(user.criticalAlerts || 0) > 0
-                                        ? "heatwave_alert"
-                                        : "general_announcement";
+                                  Number(user.criticalAlerts || 0) > 0
+                                    ? "heatwave_alert"
+                                    : (user.careProviderCount ?? 0) < 1
+                                      ? "service_update"
+                                      : Number(user.healthConditions || 0) > 0
+                                        ? "medication_reminder"
+                                        : Number(user.riskScore || 0) >= 50
+                                          ? "wellbeing_check"
+                                          : "general_announcement";
                                 return (
                                   <div key={user.id} className="rounded-2xl bg-slate-50 px-4 py-3">
                                     <div className="flex items-start justify-between gap-3">
