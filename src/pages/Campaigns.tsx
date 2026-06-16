@@ -33,6 +33,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
@@ -336,9 +337,11 @@ export default function Campaigns() {
   const [previewData, setPreviewData] = useState<CallPreview | null>(null);
   const queryClient = useQueryClient();
   const { t, language } = useLanguage();
+  const { user } = useAuth();
   const { isAdmin } = useAdminRole();
   const { data: gisData } = useGISData();
-  const canManageCampaigns = isAdmin && !authBypassEnabled;
+  const canDraftCampaigns = Boolean(user) && !authBypassEnabled;
+  const canManageCampaigns = isAdmin && canDraftCampaigns;
 
   const templateLabel = (templateKey: TemplateKey) => {
     const translated = t(`campaigns.template.${templateKey}.title`);
@@ -708,6 +711,10 @@ export default function Campaigns() {
     previewMutation.mutate({ campaign, action });
   };
 
+  const canEditSelectedCampaign = Boolean(
+    selectedCampaign && (canManageCampaigns || (canDraftCampaigns && operationalState(selectedCampaign) === "draft")),
+  );
+
   return (
     <div className="mx-auto max-w-[1680px] space-y-5">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -718,7 +725,7 @@ export default function Campaigns() {
           <p className="text-sm font-medium text-muted-foreground">{t("campaigns.subtitle")}</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {canManageCampaigns && (
+          {canDraftCampaigns && (
             <Button
               type="button"
               className="h-10 rounded-full bg-primary px-4 text-sm font-bold text-primary-foreground hover:bg-primary/90"
@@ -807,8 +814,8 @@ export default function Campaigns() {
                           key={templateKey}
                           type="button"
                           className="rounded-2xl border border-border bg-white p-4 text-left shadow-sm transition hover:border-primary/30 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70"
-                          onClick={() => canManageCampaigns && openCreateDialog(templateKey)}
-                          disabled={!canManageCampaigns}
+                          onClick={() => canDraftCampaigns && openCreateDialog(templateKey)}
+                          disabled={!canDraftCampaigns}
                         >
                           <div className="space-y-4">
                             <div className="flex items-start justify-between gap-3">
@@ -841,7 +848,7 @@ export default function Campaigns() {
                       <p className="text-sm font-semibold text-foreground">{t("campaigns.newCampaign")}</p>
                       <p className="text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
                     </div>
-                    {canManageCampaigns && (
+                    {canDraftCampaigns && (
                       <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
                         <Plus className="mr-2 h-4 w-4" />
                         {t("campaigns.newCampaign")}
@@ -1031,47 +1038,51 @@ export default function Campaigns() {
                       </div>
                     </div>
 
-                    {canManageCampaigns && (
+                    {canEditSelectedCampaign && (
                       <div className="flex flex-wrap gap-2">
                         <Button type="button" variant="outline" className="rounded-full" onClick={() => openEditDialog(selectedCampaign)}>
                           {t("campaigns.action.edit")}
                         </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="rounded-full"
-                          onClick={() => runPreviewForCampaign(selectedCampaign, "preview")}
-                          disabled={previewMutation.isPending}
-                        >
-                          {t("campaigns.action.previewRecipients")}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="rounded-full border-amber-300 text-amber-700 hover:bg-amber-50"
-                          onClick={() => runPreviewForCampaign(selectedCampaign, "schedule")}
-                          disabled={previewMutation.isPending}
-                        >
-                          {t("campaigns.action.scheduleCalls")}
-                        </Button>
-                        <Button
-                          type="button"
-                          className="rounded-full bg-primary hover:bg-primary/90"
-                          onClick={() => runPreviewForCampaign(selectedCampaign, "queue")}
-                          disabled={previewMutation.isPending}
-                        >
-                          {t("campaigns.call.immediateQueue")}
-                        </Button>
-                        {selectedRun && ["scheduled", "queued", "pending"].includes(selectedRun.status) && (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="rounded-full border-red-200 text-red-700 hover:bg-red-50"
-                            onClick={() => cancelRunMutation.mutate(selectedRun.id)}
-                            disabled={cancelRunMutation.isPending}
-                          >
-                            {t("campaigns.call.cancelRun")}
-                          </Button>
+                        {canManageCampaigns && (
+                          <>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="rounded-full"
+                              onClick={() => runPreviewForCampaign(selectedCampaign, "preview")}
+                              disabled={previewMutation.isPending}
+                            >
+                              {t("campaigns.action.previewRecipients")}
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="rounded-full border-amber-300 text-amber-700 hover:bg-amber-50"
+                              onClick={() => runPreviewForCampaign(selectedCampaign, "schedule")}
+                              disabled={previewMutation.isPending}
+                            >
+                              {t("campaigns.action.scheduleCalls")}
+                            </Button>
+                            <Button
+                              type="button"
+                              className="rounded-full bg-primary hover:bg-primary/90"
+                              onClick={() => runPreviewForCampaign(selectedCampaign, "queue")}
+                              disabled={previewMutation.isPending}
+                            >
+                              {t("campaigns.call.immediateQueue")}
+                            </Button>
+                            {selectedRun && ["scheduled", "queued", "pending"].includes(selectedRun.status) && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="rounded-full border-red-200 text-red-700 hover:bg-red-50"
+                                onClick={() => cancelRunMutation.mutate(selectedRun.id)}
+                                disabled={cancelRunMutation.isPending}
+                              >
+                                {t("campaigns.call.cancelRun")}
+                              </Button>
+                            )}
+                          </>
                         )}
                       </div>
                     )}
@@ -1389,7 +1400,7 @@ export default function Campaigns() {
             <Button
               type="button"
               onClick={() => form && saveMutation.mutate({ draft: form, status: "draft" })}
-              disabled={!form || saveMutation.isPending}
+              disabled={!form || saveMutation.isPending || !canDraftCampaigns}
             >
               {t("campaigns.action.saveDraft")}
             </Button>

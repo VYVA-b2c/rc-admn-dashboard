@@ -819,6 +819,11 @@ function requireAdmin(context) {
   if (!context?.isAdmin) throw httpError(403, "Admin access required");
 }
 
+function requireCampaignDraftAccess(context, status = "draft") {
+  if (!context?.userId) throw httpError(401, "Authentication required");
+  if (String(status || "draft") !== "draft") requireAdmin(context);
+}
+
 function requirePlatformAdmin(context) {
   if (!context?.isPlatformAdmin) throw httpError(403, "Platform admin access required");
 }
@@ -4256,7 +4261,6 @@ app.get("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) => 
 }));
 
 app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) => {
-  requireAdmin(req.context);
   const validationError = validateCampaignPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
@@ -4266,6 +4270,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
   const templateKey = resolveCampaignTemplateKey(req.body);
   const type = campaignTemplateType(templateKey);
   const status = String(req.body.status || "draft");
+  requireCampaignDraftAccess(req.context, status);
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   const organizationId = scopeOrganizationId(req.context);
@@ -4321,7 +4326,6 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
 }));
 
 app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, res) => {
-  requireAdmin(req.context);
   const validationError = validateCampaignPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
@@ -4331,6 +4335,7 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
   const templateKey = resolveCampaignTemplateKey(req.body);
   const type = campaignTemplateType(templateKey);
   const status = String(req.body.status || "draft");
+  requireCampaignDraftAccess(req.context, status);
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   const organizationId = scopeOrganizationId(req.context);
