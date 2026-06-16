@@ -14,7 +14,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import type { CareProviderOption } from "@/lib/careProviders";
-import { providerCoverageLabel, providerPrimaryMeta, providerTypeShortKey } from "@/lib/careProviders";
+import { providerCoverageLabel, providerPrimaryMeta, providerSourceKey, providerTypeShortKey } from "@/lib/careProviders";
 import { demoCareProviders } from "@/lib/operationalDemoData";
 
 async function fetchCareProviders() {
@@ -82,7 +82,7 @@ export default function EmergencyContacts() {
             onClick={() => setAddCaregiverOpen(true)}
           >
             <Plus className="mr-2 h-4 w-4" />
-            {t("careProviders.addCaregiver")}
+            {t("careProviders.addContact")}
           </Button>
         </div>
       </div>
@@ -137,6 +137,7 @@ export default function EmergencyContacts() {
                 ) : (
                   filtered.map((provider) => {
                     const linkedUsers = provider.linked_users ?? [];
+                    const sourceKey = provider.provider_type === "caregiver" ? providerSourceKey(provider.source) : null;
                     return (
                       <TableRow key={`${provider.provider_type}-${provider.provider_id ?? provider.id}`} className="bg-white hover:bg-primary/5">
                         <TableCell>
@@ -150,6 +151,11 @@ export default function EmergencyContacts() {
                                 <p className="mt-0.5 max-w-[180px] truncate text-xs font-semibold text-muted-foreground" title={providerCoverageLabel(provider)}>
                                   {providerPrimaryMeta(provider)}
                                 </p>
+                              )}
+                              {sourceKey && (
+                                <Badge variant="secondary" className="mt-1 rounded-full px-2 py-0.5 text-[11px]">
+                                  {t(sourceKey)}
+                                </Badge>
                               )}
                             </div>
                           </div>

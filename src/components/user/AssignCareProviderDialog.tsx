@@ -109,6 +109,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
           provider: {
             caretaker_name: newName.trim(),
             caretaker_phone: newPhone.trim() || null,
+            source: "manual",
           },
           is_primary: makePrimary,
           relationship_label: relationship.trim() || null,
@@ -137,8 +138,12 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
         queryClient.invalidateQueries({ queryKey: ["emergency-contacts"] }),
       ]);
       close();
-    } catch {
-      toast({ title: t("careProviders.assignFailed"), variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: t("careProviders.assignFailed"),
+        description: error instanceof Error ? error.message : t("careProviders.assignFailedDescription"),
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
@@ -199,7 +204,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
               <p className="px-3 py-6 text-center text-sm font-medium text-muted-foreground">{t("careProviders.loading")}</p>
             ) : providers.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm font-medium text-muted-foreground">
-                {providerType === "caregiver" ? t("careProviders.noMatchesCreate") : t("careProviders.noMatches")}
+                {providerType === "caregiver" ? t("careProviders.noMatchesCreate") : t("careProviders.noRedCrossStaff")}
               </p>
             ) : (
               providers.map((provider) => {

@@ -308,6 +308,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
         {
           caretaker_name: get("caregiver_name") || null,
           caretaker_phone: caregiverPhone || null,
+          source: "csv",
         },
       ];
     }

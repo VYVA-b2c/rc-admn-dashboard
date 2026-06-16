@@ -15,6 +15,7 @@ export interface CareProviderOption {
   role?: string | null;
   team?: string | null;
   status?: string | null;
+  source?: "onboarding" | "manual" | "csv" | "api" | string | null;
   active?: boolean;
   assignment_count?: number;
   linked_users?: LinkedCareUser[];
@@ -36,6 +37,14 @@ export function providerTypeKey(type?: string | null) {
 
 export function providerTypeShortKey(type?: string | null) {
   return type === "field_staff" ? "careProviders.professionalShort" : "careProviders.informalShort";
+}
+
+export function providerSourceKey(source?: string | null) {
+  if (source === "onboarding") return "careProviders.source.onboarding";
+  if (source === "csv") return "careProviders.source.csv";
+  if (source === "api") return "careProviders.source.api";
+  if (source === "manual") return "careProviders.source.manual";
+  return null;
 }
 
 export function providerCoverageLabel(provider?: {

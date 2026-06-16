@@ -27,6 +27,7 @@ const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
 const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
+const externalUserSource = "api.vyva.io";
 const vyvaBackendApiDisabled = process.env.VYVA_BACKEND_API_DISABLED === "true";
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseBaseUrl = supabaseUrl ? supabaseUrl.replace(/\/$/, "") : null;
@@ -149,7 +150,20 @@ function appendSearchParams(url, params = {}) {
   }
 }
 
-function normalizeExternalDashboardPayload(data) {
+function mergeExternalCareProviderSummary(user, summary) {
+  if (!summary) return user;
+  const localNames = Array.isArray(summary.careProviderNames) ? summary.careProviderNames.filter(Boolean) : [];
+  const upstreamNames = Array.isArray(user.careProviderNames) ? user.careProviderNames : [];
+  return {
+    ...user,
+    careProviderCount: Number(summary.careProviderCount || 0),
+    careProviderNames: localNames.length ? localNames : upstreamNames,
+    primaryCaregiverName: summary.primaryCaregiverName ?? user.primaryCaregiverName ?? null,
+    primaryProfessionalName: summary.primaryProfessionalName ?? user.primaryProfessionalName ?? null,
+  };
+}
+
+function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()) {
   const gisUsers = Array.isArray(data?.gisUsers)
     ? data.gisUsers.map((user) => {
         const careProviderNames = Array.isArray(user.careProviderNames)
@@ -157,7 +171,7 @@ function normalizeExternalDashboardPayload(data) {
           : Array.isArray(user.caretakerNames)
             ? user.caretakerNames
             : [];
-        return {
+        const normalizedUser = {
           ...user,
           id: user.id == null ? user.id : String(user.id),
           coords: Array.isArray(user.coords) && user.coords.length === 2 ? [Number(user.coords[0]), Number(user.coords[1])] : null,
@@ -165,6 +179,7 @@ function normalizeExternalDashboardPayload(data) {
           careProviderCount: Number(user.careProviderCount ?? careProviderNames.length ?? 0),
           primaryCaregiverName: user.primaryCaregiverName ?? careProviderNames[0] ?? null,
         };
+        return mergeExternalCareProviderSummary(normalizedUser, assignmentSummaries.get(String(normalizedUser.id)));
       })
     : [];
 
@@ -221,6 +236,243 @@ function normalizeExternalProfilePayload(data) {
     alerts: normalizeRecords(data.alerts),
     readings: normalizeRecords(data.readings),
   };
+}
+
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ""));
+}
+
+function careProvidersToCompatibilityCaregivers(careProviders, userId) {
+  return careProviders
+    .filter((provider) => provider.provider_type === "caregiver")
+    .map((provider) => ({
+      id: provider.id,
+      assignment_id: provider.id,
+      care_provider_contact_id: provider.provider_id,
+      vyva_user_id: userId,
+      caretaker_name: provider.display_name,
+      caretaker_phone: provider.phone,
+      is_primary: provider.is_primary,
+      relationship_label: provider.relationship_label,
+      notes: provider.notes,
+      source: provider.source,
+      created_at: provider.created_at,
+    }));
+}
+
+async function loadExternalAssignmentSummaries(externalIds, context) {
+  const organizationId = scopeOrganizationId(context);
+  const ids = Array.from(new Set(externalIds.map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length) return new Map();
+
+  const rows = await optionalRows(
+    `
+      SELECT
+        u.external_user_id,
+        COUNT(a.id)::int AS care_provider_count,
+        MAX(c.full_name) FILTER (WHERE a.provider_type = 'caregiver' AND a.is_primary = true) AS primary_caregiver_name,
+        MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(c.full_name, fs.full_name)), NULL) AS care_provider_names
+      FROM public.vyva_users u
+      LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
+      LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE u.organization_id = $1
+        AND u.external_source = $2
+        AND u.external_user_id = ANY($3::text[])
+      GROUP BY u.external_user_id
+    `,
+    [organizationId, externalUserSource, ids],
+  );
+
+  return new Map(rows.map((row) => [
+    String(row.external_user_id),
+    {
+      careProviderCount: Number(row.care_provider_count || 0),
+      careProviderNames: Array.isArray(row.care_provider_names) ? row.care_provider_names : [],
+      primaryCaregiverName: row.primary_caregiver_name || null,
+      primaryProfessionalName: row.primary_professional_name || null,
+    },
+  ]));
+}
+
+async function loadLocalUserIdForExternalUser(externalUserId, context, client = { query }) {
+  const organizationId = scopeOrganizationId(context);
+  const result = await client.query(
+    `
+      SELECT id::text
+      FROM public.vyva_users
+      WHERE organization_id = $1
+        AND external_source = $2
+        AND external_user_id = $3
+      LIMIT 1
+    `,
+    [organizationId, externalUserSource, String(externalUserId)],
+  );
+  return result.rows[0]?.id || null;
+}
+
+async function loadExternalUserCareProviders(externalUserId, context) {
+  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
+  return localUserId ? loadUserCareProviders(localUserId, context) : [];
+}
+
+function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId) {
+  const normalized = normalizeExternalProfilePayload(data);
+  if (!Array.isArray(careProviders) || !careProviders.length) return normalized;
+  return {
+    ...normalized,
+    careProviders,
+    caregivers: careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)),
+  };
+}
+
+async function fetchExternalUserProfileForShadow(externalUserId) {
+  const userInfo = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
+    query: {
+      user_id: externalUserId,
+      organization_name: "Red Cross",
+    },
+  });
+  if (userInfo?.ok) return normalizeExternalProfilePayload(userInfo.data);
+
+  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  const match = Array.isArray(dashboard?.data?.gisUsers)
+    ? dashboard.data.gisUsers.find((user) => String(user?.id) === String(externalUserId))
+    : null;
+  return match ? normalizeExternalProfilePayload({ user: match }) : null;
+}
+
+function normalizedExternalShadowUser(externalUserId, externalData, organization = null) {
+  const user = objectValue(externalData?.user || externalData);
+  const fullName = nullIfBlank(firstValue(user.full_name, user.fullName, user.name));
+  const nameParts = fullName ? fullName.split(/\s+/).filter(Boolean) : [];
+  const firstName = nullIfBlank(firstValue(user.first_name, user.firstName)) || nameParts[0] || "External";
+  const lastName = nullIfBlank(firstValue(user.last_name, user.lastName)) || nameParts.slice(1).join(" ") || "User";
+  const dateOfBirth = nullIfBlank(firstValue(user.date_of_birth, user.dateOfBirth));
+  const language = nullIfBlank(user.language) || organization?.defaultLanguage || "de";
+  const safeLanguage = ["en", "de", "es"].includes(language) ? language : organization?.defaultLanguage || "de";
+
+  return {
+    external_user_id: String(externalUserId),
+    external_source: externalUserSource,
+    first_name: firstName,
+    last_name: lastName,
+    phone: nullIfBlank(user.phone),
+    city: nullIfBlank(user.city),
+    street: nullIfBlank(user.street),
+    house_number: nullIfBlank(firstValue(user.house_number, user.houseNumber)),
+    post_code: nullIfBlank(firstValue(user.post_code, user.postCode, user.postal_code, user.postalCode)),
+    country: nullIfBlank(user.country) || organization?.country || "Germany",
+    timezone: nullIfBlank(user.timezone) || organization?.timezone || "Europe/Berlin",
+    date_of_birth: dateOfBirth && /^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth) ? dateOfBirth : null,
+    gender: nullIfBlank(user.gender),
+    language: safeLanguage,
+    emergency_notes: nullIfBlank(firstValue(user.emergency_notes, user.emergencyNotes)),
+  };
+}
+
+function externalCaregiversForShadow(externalData) {
+  const caregivers = Array.isArray(externalData?.caregivers) ? externalData.caregivers : [];
+  return caregivers
+    .map((caregiver) => objectValue(caregiver))
+    .filter(hasMeaningfulPayloadValue)
+    .map((caregiver) => ({
+      caretaker_name: nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.name, caregiver.full_name, caregiver.fullName)),
+      caretaker_phone: nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber)),
+      source: "onboarding",
+    }))
+    .filter((caregiver) => caregiver.caretaker_name || caregiver.caretaker_phone);
+}
+
+async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context) {
+  const organizationId = scopeOrganizationId(context);
+  const userId = String(rawUserId || "").trim();
+  if (!userId) return { error: "user_id is required" };
+
+  if (isUuid(userId)) {
+    const localUser = await client.query(
+      "SELECT id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
+      [userId, organizationId],
+    );
+    if (localUser.rows[0]) return { value: localUser.rows[0].id };
+  }
+
+  const existingShadowId = await loadLocalUserIdForExternalUser(userId, context, client);
+  if (existingShadowId) return { value: existingShadowId };
+
+  const externalData = await fetchExternalUserProfileForShadow(userId);
+  if (!externalData?.user) return { notFound: true };
+
+  const shadowUser = normalizedExternalShadowUser(userId, externalData, context.organization);
+  const result = await client.query(
+    `
+      INSERT INTO public.vyva_users (
+        organization_id,
+        external_user_id,
+        external_source,
+        first_name,
+        last_name,
+        phone,
+        city,
+        street,
+        house_number,
+        post_code,
+        country,
+        timezone,
+        date_of_birth,
+        gender,
+        language,
+        emergency_notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::date, $14, $15, $16)
+      ON CONFLICT (organization_id, external_source, external_user_id) WHERE external_user_id IS NOT NULL
+      DO UPDATE SET
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        phone = COALESCE(EXCLUDED.phone, public.vyva_users.phone),
+        city = COALESCE(EXCLUDED.city, public.vyva_users.city),
+        street = COALESCE(EXCLUDED.street, public.vyva_users.street),
+        house_number = COALESCE(EXCLUDED.house_number, public.vyva_users.house_number),
+        post_code = COALESCE(EXCLUDED.post_code, public.vyva_users.post_code),
+        country = COALESCE(EXCLUDED.country, public.vyva_users.country),
+        timezone = COALESCE(EXCLUDED.timezone, public.vyva_users.timezone),
+        date_of_birth = COALESCE(EXCLUDED.date_of_birth, public.vyva_users.date_of_birth),
+        gender = COALESCE(EXCLUDED.gender, public.vyva_users.gender),
+        language = COALESCE(EXCLUDED.language, public.vyva_users.language),
+        emergency_notes = COALESCE(EXCLUDED.emergency_notes, public.vyva_users.emergency_notes),
+        updated_at = now()
+      RETURNING id::text
+    `,
+    [
+      organizationId,
+      shadowUser.external_user_id,
+      shadowUser.external_source,
+      shadowUser.first_name,
+      shadowUser.last_name,
+      shadowUser.phone,
+      shadowUser.city,
+      shadowUser.street,
+      shadowUser.house_number,
+      shadowUser.post_code,
+      shadowUser.country,
+      shadowUser.timezone,
+      shadowUser.date_of_birth,
+      shadowUser.gender,
+      shadowUser.language,
+      shadowUser.emergency_notes,
+    ],
+  );
+
+  const localUserId = result.rows[0]?.id;
+  if (!localUserId) return { notFound: true };
+
+  const onboardingCaregivers = externalCaregiversForShadow(externalData);
+  if (onboardingCaregivers.length) {
+    await replaceCaregiversWithClient(client, localUserId, onboardingCaregivers, organizationId);
+  }
+
+  return { value: localUserId };
 }
 
 async function requestVyvaBackend(pathname, { method = "GET", query: queryParams, body } = {}) {
@@ -1711,6 +1963,7 @@ async function loadUserInfo(userId, context) {
       is_primary: provider.is_primary,
       relationship_label: provider.relationship_label,
       notes: provider.notes,
+      source: provider.source,
       created_at: provider.created_at,
     }));
 
@@ -1912,6 +2165,11 @@ function normalizeCareProviderType(value) {
   return "caregiver";
 }
 
+function normalizeContactSource(value, fallback = "manual") {
+  const source = nullIfBlank(value)?.toLowerCase().replace(/[-\s]+/g, "_");
+  return ["onboarding", "manual", "csv", "api"].includes(source) ? source : fallback;
+}
+
 function careProviderAssignmentRow(row) {
   return {
     id: row.id,
@@ -1923,6 +2181,7 @@ function careProviderAssignmentRow(row) {
     role: row.role,
     team: row.team,
     status: row.status,
+    source: row.source || null,
     is_primary: Boolean(row.is_primary),
     relationship_label: row.relationship_label,
     notes: row.notes,
@@ -1947,6 +2206,7 @@ async function loadUserCareProviders(userId, context = null) {
         fs.role,
         fs.team,
         fs.status,
+        c.source,
         COALESCE(c.active, fs.active, true) AS active,
         a.is_primary,
         a.relationship_label,
@@ -1978,6 +2238,7 @@ async function loadCareProviderAssignmentByIdWithClient(client, assignmentId, or
         fs.role,
         fs.team,
         fs.status,
+        c.source,
         COALESCE(c.active, fs.active, true) AS active,
         a.is_primary,
         a.relationship_label,
@@ -2048,6 +2309,7 @@ async function loadCareProviders(filters = {}, context) {
         NULL::text AS role,
         NULL::text AS team,
         CASE WHEN c.active THEN 'active' ELSE 'inactive' END AS status,
+        c.source,
         c.active,
         COALESCE(cc.assignment_count, 0) AS assignment_count,
         COALESCE(cc.linked_users, '[]'::json) AS linked_users,
@@ -2070,6 +2332,7 @@ async function loadCareProviders(filters = {}, context) {
         fs.role,
         fs.team,
         fs.status,
+        NULL::text AS source,
         fs.active,
         COALESCE(fc.assignment_count, 0) AS assignment_count,
         COALESCE(fc.linked_users, '[]'::json) AS linked_users,
@@ -2097,6 +2360,7 @@ async function upsertCareProviderContactWithClient(client, payload, organization
   const fullName = caregiver.value.caretaker_name || "Care contact";
   const phone = caregiver.value.caretaker_phone;
   const digits = phoneDigits(phone);
+  const source = normalizeContactSource(caregiver.value.source);
 
   if (digits) {
     const existing = await client.query(
@@ -2107,11 +2371,20 @@ async function upsertCareProviderContactWithClient(client, payload, organization
       const result = await client.query(
         `
           UPDATE public.care_provider_contacts
-          SET full_name = $2, phone = COALESCE($3, phone), phone_digits = $4, active = true, updated_at = now()
+          SET
+            full_name = $2,
+            phone = COALESCE($3, phone),
+            phone_digits = $4,
+            source = CASE
+              WHEN public.care_provider_contacts.source = 'manual' THEN $5
+              ELSE public.care_provider_contacts.source
+            END,
+            active = true,
+            updated_at = now()
           WHERE id = $1
-          RETURNING id::text, full_name, phone, phone_digits
+          RETURNING id::text, full_name, phone, phone_digits, source
         `,
-        [existing.rows[0].id, fullName, phone, digits],
+        [existing.rows[0].id, fullName, phone, digits, source],
       );
       return { value: result.rows[0] };
     }
@@ -2119,11 +2392,11 @@ async function upsertCareProviderContactWithClient(client, payload, organization
 
   const result = await client.query(
     `
-      INSERT INTO public.care_provider_contacts (organization_id, full_name, phone, phone_digits)
-      VALUES ($1, $2, $3, $4)
-      RETURNING id::text, full_name, phone, phone_digits
+      INSERT INTO public.care_provider_contacts (organization_id, full_name, phone, phone_digits, source)
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id::text, full_name, phone, phone_digits, source
     `,
-    [organizationId, fullName, phone, digits],
+    [organizationId, fullName, phone, digits, source],
   );
   return { value: result.rows[0] };
 }
@@ -2150,6 +2423,7 @@ async function createCareProviderContact(payload, context) {
           NULL::text AS role,
           NULL::text AS team,
           CASE WHEN c.active THEN 'active' ELSE 'inactive' END AS status,
+          c.source,
           c.active,
           0::int AS assignment_count,
           '[]'::json AS linked_users,
@@ -2196,13 +2470,13 @@ async function assignCareProviderWithClient(client, userId, payload, organizatio
   let result;
   if (providerType === "field_staff") {
     const fieldStaffId = nullIfBlank(firstValue(payload?.field_staff_id, payload?.provider_id, providerPayload.id));
-    if (!fieldStaffId) return { error: "field_staff_id is required" };
+    if (!fieldStaffId) return { error: "Choose a Red Cross staff member" };
 
     const staff = await client.query(
       "SELECT id::text FROM public.field_staff WHERE id = $1 AND organization_id = $2 AND active = true LIMIT 1",
       [fieldStaffId, organizationId],
     );
-    if (!staff.rows[0]) return { error: "field_staff provider not found" };
+    if (!staff.rows[0]) return { error: "Red Cross staff member is not available" };
 
     if (makePrimary) {
       await client.query(
@@ -2240,7 +2514,7 @@ async function assignCareProviderWithClient(client, userId, payload, organizatio
         "SELECT id::text FROM public.care_provider_contacts WHERE id = $1 AND organization_id = $2 AND active = true LIMIT 1",
         [existingContactId, organizationId],
       );
-      if (!contactResult.rows[0]) return { error: "care provider contact not found" };
+      if (!contactResult.rows[0]) return { error: "Emergency contact is not available" };
       contact = contactResult.rows[0];
     } else {
       const contactResult = await upsertCareProviderContactWithClient(client, {
@@ -2290,16 +2564,13 @@ async function assignCareProvider(userId, payload, context) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const userResult = await client.query(
-      "SELECT id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
-      [userId, organizationId],
-    );
-    if (!userResult.rows[0]) {
+    const resolvedUser = await ensureLocalUserForAssignmentWithClient(client, userId, context);
+    if (resolvedUser.error || resolvedUser.notFound) {
       await client.query("ROLLBACK");
-      return { notFound: true };
+      return resolvedUser;
     }
 
-    const result = await assignCareProviderWithClient(client, userId, payload, organizationId);
+    const result = await assignCareProviderWithClient(client, resolvedUser.value, payload, organizationId);
     if (result.error || result.notFound) {
       await client.query("ROLLBACK");
       return result;
@@ -2432,6 +2703,7 @@ function compatibilityCaregiverRow(assignment) {
     is_primary: assignment.is_primary,
     relationship_label: assignment.relationship_label,
     notes: assignment.notes,
+    source: assignment.source || null,
     created_at: assignment.created_at,
     updated_at: assignment.updated_at,
   };
@@ -2448,6 +2720,7 @@ async function replaceCaregiversWithClient(client, userId, caregivers, organizat
       provider: caregiver,
       is_primary: index === 0,
       relationship_label: "Caregiver",
+      source: caregiver.source || "manual",
     }, organizationId);
   }
 }
@@ -2724,6 +2997,7 @@ async function deleteMedication(medicationId, context) {
 function normalizeCaregiverPayload(payload, creating = false) {
   const name = nullIfBlank(firstValue(payload?.caretaker_name, payload?.caregiver_name, payload?.name, payload?.full_name, payload?.fullName));
   const phone = nullIfBlank(firstValue(payload?.caretaker_phone, payload?.caregiver_phone, payload?.phone, payload?.phone_number, payload?.phoneNumber));
+  const source = normalizeContactSource(payload?.source);
   if (!name && !phone) return { error: "caretaker_name or caretaker_phone is required" };
 
   return {
@@ -2731,6 +3005,7 @@ function normalizeCaregiverPayload(payload, creating = false) {
       vyva_user_id: nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)),
       caretaker_name: name,
       caretaker_phone: phone,
+      source,
     },
     error: creating && !nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)) ? "vyva_user_id is required" : null,
   };
@@ -3382,7 +3657,19 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
   try {
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
     if (upstream?.ok) {
-      res.json(normalizeExternalDashboardPayload(upstream.data));
+      let assignmentSummaries = new Map();
+      if (pool) {
+        try {
+          req.context = await resolveRequestContext(req);
+          const externalIds = Array.isArray(upstream.data?.gisUsers)
+            ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
+            : [];
+          assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, req.context);
+        } catch (error) {
+          if (error.status && error.status !== 401) throw error;
+        }
+      }
+      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -3434,7 +3721,16 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       },
     });
     if (upstream?.ok) {
-      res.json(normalizeExternalProfilePayload(upstream.data));
+      let careProviders = [];
+      if (pool) {
+        try {
+          req.context = await resolveRequestContext(req);
+          careProviders = await loadExternalUserCareProviders(userId, req.context);
+        } catch (error) {
+          if (error.status && error.status !== 401) throw error;
+        }
+      }
+      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {

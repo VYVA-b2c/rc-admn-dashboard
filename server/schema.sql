@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS public.vyva_users (
   language TEXT DEFAULT 'de',
   photo_url TEXT,
   emergency_notes TEXT,
+  external_user_id TEXT,
+  external_source TEXT NOT NULL DEFAULT 'local',
   conversation_id TEXT,
   transcript TEXT,
   call_duration INTEGER,
@@ -290,6 +292,7 @@ CREATE TABLE IF NOT EXISTS public.care_provider_contacts (
   full_name TEXT NOT NULL,
   phone TEXT,
   phone_digits TEXT,
+  source TEXT NOT NULL DEFAULT 'manual',
   active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -409,9 +412,12 @@ ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS organization_id UUID REFERE
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_platform_admin BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.vyva_users ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
+ALTER TABLE public.vyva_users ADD COLUMN IF NOT EXISTS external_user_id TEXT;
+ALTER TABLE public.vyva_users ADD COLUMN IF NOT EXISTS external_source TEXT NOT NULL DEFAULT 'local';
 ALTER TABLE public.operational_offices ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.field_staff ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.care_provider_contacts ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
+ALTER TABLE public.care_provider_contacts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual';
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.campaign_targets ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.campaign_call_runs ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
@@ -510,6 +516,9 @@ CREATE INDEX IF NOT EXISTS idx_vyva_user_sensors_user ON public.vyva_user_sensor
 CREATE INDEX IF NOT EXISTS idx_vyva_sensor_alerts_user ON public.vyva_sensor_alerts(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_vyva_medication_logs_user_date ON public.vyva_medication_logs(vyva_user_id, scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_vyva_users_conversation ON public.vyva_users(conversation_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vyva_users_external_source_id
+  ON public.vyva_users(organization_id, external_source, external_user_id)
+  WHERE external_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_vyva_users_phone_digits ON public.vyva_users ((regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g')));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_care_provider_contacts_org_phone_digits
   ON public.care_provider_contacts(organization_id, phone_digits)
@@ -550,22 +559,27 @@ WITH caregiver_phone_groups AS (
   WHERE NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), '') IS NOT NULL
   GROUP BY u.organization_id, NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), '')
 )
-INSERT INTO public.care_provider_contacts (organization_id, full_name, phone, phone_digits)
-SELECT organization_id, full_name, phone, phone_digits
+INSERT INTO public.care_provider_contacts (organization_id, full_name, phone, phone_digits, source)
+SELECT organization_id, full_name, phone, phone_digits, 'onboarding'
 FROM caregiver_phone_groups
 ON CONFLICT (organization_id, phone_digits) WHERE phone_digits IS NOT NULL
 DO UPDATE SET
   full_name = COALESCE(EXCLUDED.full_name, public.care_provider_contacts.full_name),
   phone = COALESCE(EXCLUDED.phone, public.care_provider_contacts.phone),
+  source = CASE
+    WHEN public.care_provider_contacts.source = 'manual' THEN EXCLUDED.source
+    ELSE public.care_provider_contacts.source
+  END,
   updated_at = now();
 
-INSERT INTO public.care_provider_contacts (id, organization_id, full_name, phone, phone_digits)
+INSERT INTO public.care_provider_contacts (id, organization_id, full_name, phone, phone_digits, source)
 SELECT
   c.id,
   u.organization_id,
   COALESCE(NULLIF(c.caretaker_name, ''), 'Care contact') AS full_name,
   c.caretaker_phone,
-  NULL
+  NULL,
+  'onboarding'
 FROM public.vyva_user_caregivers c
 JOIN public.vyva_users u ON u.id = c.vyva_user_id
 WHERE NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), '') IS NULL
