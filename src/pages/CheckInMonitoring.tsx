@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Calendar,
   CheckCircle,
+  Info,
   Pencil,
   PhoneCall,
   Plus,
@@ -46,7 +47,12 @@ type UserDashboardResponse = {
     last_name?: string;
     phone?: string | null;
     city?: string | null;
+    checkinEnabled?: boolean;
   }>;
+};
+
+type ScheduledCallRow = ScheduledCall & {
+  isFallback?: boolean;
 };
 
 type ScheduledCallApiItem = Partial<ScheduledCall> & {
@@ -146,6 +152,23 @@ function normalizeScheduledCalls(response: ScheduledCallsResponse): ScheduledCal
   return list.map(normalizeScheduledCall);
 }
 
+function normalizeFallbackCheckins(response: UserDashboardResponse): ScheduledCallRow[] {
+  return (response.gisUsers ?? [])
+    .filter((user) => Boolean(user.checkinEnabled))
+    .map((user) => ({
+      id: `fallback:${user.id}`,
+      user_id: user.id,
+      userName: fullName(user.first_name, user.last_name) || String(user.id),
+      userPhone: user.phone,
+      city: user.city ?? null,
+      type: "scheduled_call",
+      is_active: true,
+      frequency_days: 1,
+      preferred_time: null,
+      isFallback: true,
+    }));
+}
+
 function typeLabel(type: string | undefined, t: (key: string) => string) {
   if (!type) return "—";
   const key = `checkin.type.${type}`;
@@ -165,7 +188,7 @@ export default function CheckInMonitoring() {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
-  const canEdit = isAdmin && !authBypassEnabled;
+  const baseCanEdit = isAdmin && !authBypassEnabled;
 
   const {
     data: checkinsData,
@@ -174,7 +197,7 @@ export default function CheckInMonitoring() {
     isLoading,
   } = useQuery({
     queryKey: ["checkin-monitoring"],
-    queryFn: async (): Promise<ScheduledCall[]> => {
+    queryFn: async (): Promise<ScheduledCallRow[]> => {
       try {
         const response = await apiFetch<ScheduledCallsResponse>("/api/v1/checkins-dashboard/checkins", {
           timeoutMs: CHECKIN_REQUEST_TIMEOUT_MS,
@@ -182,13 +205,22 @@ export default function CheckInMonitoring() {
         return normalizeScheduledCalls(response);
       } catch (error) {
         if (authBypassEnabled) return [];
-        throw error;
+        try {
+          const fallbackResponse = await apiFetch<UserDashboardResponse>("/api/v1/user-dashboard/users", {
+            timeoutMs: CHECKIN_REQUEST_TIMEOUT_MS,
+          });
+          return normalizeFallbackCheckins(fallbackResponse);
+        } catch {
+          throw error;
+        }
       }
     },
     retry: false,
   });
 
   const checkins = useMemo(() => checkinsData ?? [], [checkinsData]);
+  const usingFallbackData = useMemo(() => checkins.some((call) => call.isFallback), [checkins]);
+  const canEdit = baseCanEdit && !usingFallbackData;
 
   useEffect(() => {
     if (!isError) return;
@@ -201,7 +233,7 @@ export default function CheckInMonitoring() {
 
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ["scheduled-call-users"],
-    enabled: canEdit,
+    enabled: baseCanEdit,
     retry: false,
     queryFn: async (): Promise<ScheduledCallUser[]> => {
       try {
@@ -358,6 +390,13 @@ export default function CheckInMonitoring() {
           </Button>
         )}
       </div>
+
+      {usingFallbackData && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>{t("checkin.fallbackNotice")}</p>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard title={t("checkin.totalScheduled")} value={isLoading ? "—" : stats.total} icon={<Calendar className="h-5 w-5" />} gradient="bg-gradient-to-br from-primary to-primary/70" />
