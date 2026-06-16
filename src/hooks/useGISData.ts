@@ -18,6 +18,10 @@ export interface GISUser {
   sensorCount: number;
   offlineSensors: number;
   checkinEnabled: boolean;
+  checkinFrequency?: string | null;
+  checkinPreferredTime?: string | null;
+  checkinLastStatus?: string | null;
+  checkinLastReportedAt?: string | null;
   healthConditions: number;
   missedMeds7d: number;
   riskScore: number;

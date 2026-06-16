@@ -48,11 +48,18 @@ type UserDashboardResponse = {
     phone?: string | null;
     city?: string | null;
     checkinEnabled?: boolean;
+    checkinFrequency?: string | null;
+    checkinPreferredTime?: string | null;
+    checkinLastStatus?: string | null;
+    checkinLastReportedAt?: string | null;
   }>;
 };
 
 type ScheduledCallRow = ScheduledCall & {
   isFallback?: boolean;
+  displayFrequency?: string | null;
+  lastOutcome?: string | null;
+  lastOutcomeAt?: string | null;
 };
 
 type ScheduledCallApiItem = Partial<ScheduledCall> & {
@@ -164,7 +171,10 @@ function normalizeFallbackCheckins(response: UserDashboardResponse): ScheduledCa
       type: "scheduled_call",
       is_active: true,
       frequency_days: 1,
-      preferred_time: null,
+      preferred_time: user.checkinPreferredTime ?? null,
+      displayFrequency: user.checkinFrequency ?? null,
+      lastOutcome: user.checkinLastStatus ?? null,
+      lastOutcomeAt: user.checkinLastReportedAt ?? null,
       isFallback: true,
     }));
 }
@@ -175,6 +185,25 @@ function typeLabel(type: string | undefined, t: (key: string) => string) {
   const translated = t(key);
   if (translated !== key) return translated;
   return type.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatFrequency(call: ScheduledCallRow, t: (key: string) => string) {
+  if (call.displayFrequency) {
+    const key = `userForm.frequency.${call.displayFrequency}`;
+    const translated = t(key);
+    if (translated !== key) return translated;
+    return call.displayFrequency;
+  }
+  if (!call.frequency_days) return "-";
+  if (call.frequency_days === 1) return t("checkin.everyDay");
+  return t("checkin.everyDays").replace("{count}", String(call.frequency_days));
+}
+
+function lastOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
+  if (!call.lastOutcome) return t("checkin.outcomeUnknown");
+  const key = `checkin.outcome.${call.lastOutcome}`;
+  const translated = t(key);
+  return translated !== key ? translated : call.lastOutcome;
 }
 
 export default function CheckInMonitoring() {
@@ -372,7 +401,7 @@ export default function CheckInMonitoring() {
     }
   };
 
-  const actionColSpan = canEdit ? 7 : 6;
+  const actionColSpan = canEdit ? 8 : 7;
 
   return (
     <div className="space-y-6">
@@ -426,6 +455,7 @@ export default function CheckInMonitoring() {
               <TableHead>{t("checkin.phone")}</TableHead>
               <TableHead>{t("checkin.Type")}</TableHead>
               <TableHead>{t("checkin.status")}</TableHead>
+              <TableHead>{t("checkin.lastCheckin")}</TableHead>
               <TableHead>{t("checkin.frequency")}</TableHead>
               <TableHead>{t("checkin.preferredTime")}</TableHead>
               {canEdit && <TableHead className="text-right">{t("checkin.actions")}</TableHead>}
