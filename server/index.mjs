@@ -593,6 +593,7 @@ function teamMemberRow(row) {
     user_id: row.user_id,
     role: row.role,
     organization_id: row.organization_id,
+    status: String(row.user_id || "").startsWith("pending:") ? "pending" : "active",
     profiles: {
       full_name: row.full_name || null,
       email: row.email || null,
@@ -818,9 +819,13 @@ function normalizeTeamMemberPayload(payload = {}) {
   const role = nullIfBlank(payload.role) || "operator";
   const fullName = nullIfBlank(firstValue(payload.full_name, payload.fullName, payload.name));
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is required" };
-  if (!password || password.length < 6) return { error: "password must be at least 6 characters" };
+  if (password && password.length < 6) return { error: "password must be at least 6 characters" };
   if (!["admin", "operator", "coordinator"].includes(role)) return { error: "role is invalid" };
   return { value: { email, password, role, fullName } };
+}
+
+function teamInviteAuthConfigured(authToken) {
+  return Boolean((supabaseBaseUrl && supabaseServiceRoleKey) || (supabaseInviteAdminFunctionUrl && supabaseAnonKey && authToken));
 }
 
 async function createTeamMember(payload, context) {
@@ -829,14 +834,25 @@ async function createTeamMember(payload, context) {
   const member = normalizeTeamMemberPayload(payload);
   if (member.error) return member;
 
-  const authUser = await createSupabaseAuthUser({
-    email: member.value.email,
-    password: member.value.password,
-    role: member.value.role,
-    organizationId,
-    authToken: context.authToken,
-  });
-  const userId = authUserIdFromInviteResponse(authUser) || pendingTeamUserId(member.value.email);
+  let userId = pendingTeamUserId(member.value.email);
+  let inviteMode = "magic_link_pending";
+  if (member.value.password && teamInviteAuthConfigured(context.authToken)) {
+    try {
+      const authUser = await createSupabaseAuthUser({
+        email: member.value.email,
+        password: member.value.password,
+        role: member.value.role,
+        organizationId,
+        authToken: context.authToken,
+      });
+      userId = authUserIdFromInviteResponse(authUser) || userId;
+      inviteMode = "password";
+    } catch (error) {
+      console.warn("Team auth invite unavailable; created a pending magic-link team member instead.", {
+        status: error.status || null,
+      });
+    }
+  }
   if (!userId) throw httpError(502, "Team member auth record was not returned");
 
   const client = await pool.connect();
@@ -871,7 +887,10 @@ async function createTeamMember(payload, context) {
   }
 
   const members = await loadTeamMembers(context);
-  return { value: members.find((item) => item.user_id === userId && item.role === member.value.role) || null };
+  return {
+    inviteMode,
+    value: members.find((item) => item.user_id === userId && item.role === member.value.role) || null,
+  };
 }
 
 async function initializeDatabase() {
@@ -3356,7 +3375,7 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
     res.status(400).json({ error: result.error });
     return;
   }
-  res.status(201).json({ member: result.value });
+  res.status(201).json({ inviteMode: result.inviteMode, member: result.value });
 }));
 
 app.get("/api/v1/user-dashboard/users", async (req, res, next) => {

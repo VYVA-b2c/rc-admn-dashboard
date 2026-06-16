@@ -17,6 +17,7 @@ import { apiFetch } from "@/lib/apiClient";
 type AdminUserRow = {
   id: string;
   role: string;
+  status?: "active" | "pending";
   user_id?: string;
   profiles?: {
     full_name?: string | null;
@@ -28,10 +29,18 @@ type TeamMembersResponse = {
   members: AdminUserRow[];
 };
 
+type CreateTeamMemberResponse = {
+  inviteMode?: "password" | "magic_link_pending";
+  member?: AdminUserRow | null;
+};
+
 export default function InviteAdmin() {
   const { t } = useLanguage();
-  const { data: currentContext } = useCurrentUserContext();
-  const organizationId = currentContext?.user.organization?.id;
+  const { data: currentContext, isLoading: loadingContext } = useCurrentUserContext();
+  const currentUser = currentContext?.user;
+  const organizationId = currentUser?.organization?.id;
+  const canManageTeam = Boolean(currentUser?.isAdmin && organizationId && !authBypassEnabled);
+  const formDisabled = loadingContext || !canManageTeam;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("admin");
@@ -45,7 +54,7 @@ export default function InviteAdmin() {
       const data = await apiFetch<TeamMembersResponse>("/api/v1/team-members");
       return data.members || [];
     },
-    enabled: !authBypassEnabled && Boolean(organizationId),
+    enabled: !authBypassEnabled && Boolean(currentUser?.isAdmin && organizationId),
     placeholderData: [],
     retry: false,
   });
@@ -57,21 +66,31 @@ export default function InviteAdmin() {
       toast.info(t("invite.previewDisabled"));
       return;
     }
-    if (!email || !password || !organizationId) return;
-    if (password.length < 6) { toast.error(t("invite.passwordTooShort")); return; }
+    if (!currentUser?.isAdmin) {
+      toast.error(t("invite.adminRequired"));
+      return;
+    }
+    if (!organizationId) {
+      toast.error(t("invite.organizationRequired"));
+      return;
+    }
+    if (!email) return;
+    if (password && password.length < 6) { toast.error(t("invite.passwordTooShort")); return; }
     setLoading(true);
     try {
-      await apiFetch("/api/v1/team-members", {
+      const response = await apiFetch<CreateTeamMemberResponse>("/api/v1/team-members", {
         method: "POST",
-        body: JSON.stringify({ email, password, role }),
+        body: JSON.stringify({ email, password: password || undefined, role }),
       });
-      const creds = `Email: ${email}\nPassword: ${password}`;
+      const inviteInstructions = password
+        ? `Email: ${email}\nPassword: ${password}`
+        : `Email: ${email}\nSign in with the magic link option to activate console access.`;
       toast.success(t("invite.userCreated"), {
-        description: t("invite.shareCredentials"),
+        description: response.inviteMode === "password" ? t("invite.shareCredentials") : t("invite.magicLinkInviteQueued"),
         duration: 15000,
         action: {
           label: t("invite.copyCredentials"),
-          onClick: () => navigator.clipboard.writeText(creds),
+          onClick: () => navigator.clipboard.writeText(inviteInstructions),
         },
       });
       setEmail("");
@@ -99,10 +118,21 @@ export default function InviteAdmin() {
             {t("invite.createNewUser")}
           </CardTitle>
           <CardDescription>
-          {authBypassEnabled ? t("invite.previewDisabled") : t("invite.description")}
+            {authBypassEnabled ? t("invite.previewDisabled") : t("invite.description")}
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {formDisabled && (
+            <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+              {authBypassEnabled
+                ? t("invite.previewDisabled")
+                : loadingContext
+                  ? t("invite.teamAccessLoading")
+                  : !currentUser?.isAdmin
+                    ? t("invite.adminRequired")
+                    : t("invite.organizationRequired")}
+            </div>
+          )}
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1.5">
@@ -114,11 +144,11 @@ export default function InviteAdmin() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
-                  disabled={authBypassEnabled || !organizationId}
+                  disabled={formDisabled}
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="create-password">{t("invite.tempPassword")}</Label>
+                <Label htmlFor="create-password">{t("invite.tempPasswordOptional")}</Label>
                 <div className="relative">
                   <Input
                     id="create-password"
@@ -127,26 +157,26 @@ export default function InviteAdmin() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     minLength={6}
-                    required
                     className="pr-10"
-                    disabled={authBypassEnabled || !organizationId}
+                    disabled={formDisabled}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
                     tabIndex={-1}
-                    disabled={authBypassEnabled || !organizationId}
+                    disabled={formDisabled}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
                 </div>
+                <p className="text-xs text-muted-foreground">{t("invite.passwordOptionalHelp")}</p>
               </div>
             </div>
             <div className="flex gap-3 items-end">
               <div className="w-48 space-y-1.5">
                 <Label>{t("invite.role")}</Label>
-                <Select value={role} onValueChange={setRole} disabled={authBypassEnabled || !organizationId}>
+                <Select value={role} onValueChange={setRole} disabled={formDisabled}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">{t("invite.admin")}</SelectItem>
@@ -155,7 +185,7 @@ export default function InviteAdmin() {
                   </SelectContent>
                 </Select>
               </div>
-              <Button type="submit" disabled={loading || authBypassEnabled || !organizationId}>
+              <Button type="submit" disabled={loading || formDisabled}>
                 {loading ? t("invite.creating") : t("invite.createUser")}
               </Button>
             </div>
@@ -174,12 +204,13 @@ export default function InviteAdmin() {
                 <TableHead>{t("invite.name")}</TableHead>
                 <TableHead>{t("invite.email")}</TableHead>
                 <TableHead>{t("invite.role")}</TableHead>
+                <TableHead>{t("invite.status")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {adminRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                     {loadingAdmins ? t("invite.loadingUsers") : adminsError ? t("invite.loadFailed") : t("invite.noUsersYet")}
                   </TableCell>
                 </TableRow>
@@ -190,6 +221,14 @@ export default function InviteAdmin() {
                     <TableCell className="text-muted-foreground">{admin.profiles?.email || "—"}</TableCell>
                     <TableCell>
                       <Badge variant="secondary" className="capitalize text-xs">{admin.role}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant="outline"
+                        className={admin.status === "pending" ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}
+                      >
+                        {admin.status === "pending" ? t("invite.status.pending") : t("invite.status.active")}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))
