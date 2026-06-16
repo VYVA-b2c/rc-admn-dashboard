@@ -4259,9 +4259,22 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (req, res) => {
   })));
 }));
 
-app.get("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
-  res.json({ checkins: await loadCheckins(req.context) });
-}));
+app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
+  try {
+    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    if (handleVyvaBackendResponse(res, upstream)) {
+      return;
+    }
+    if (!pool) {
+      dbUnavailable(res);
+      return;
+    }
+    req.context = await resolveRequestContext(req);
+    res.json({ checkins: await loadCheckins(req.context) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
   requireAdmin(req.context);
