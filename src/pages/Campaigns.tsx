@@ -35,9 +35,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
+import { demoOperationalUsers } from "@/lib/operationalDemoData";
 import { cn } from "@/lib/utils";
 
 type TemplateKey =
@@ -164,6 +166,8 @@ type CampaignFormState = {
   retryLimit: string;
   callScript: string;
 };
+
+type OpportunityUser = GISUser;
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -304,6 +308,22 @@ function runJobStatusKey(status?: string | null) {
   }
 }
 
+function campaignOpportunityMatchesTemplate(user: OpportunityUser, templateKey: TemplateKey) {
+  if (templateKey === "medication_reminder") return Number(user.missedMeds7d || 0) > 0;
+  if (templateKey === "wellbeing_check") return !user.checkinEnabled || Number(user.activeAlerts || 0) > 0;
+  if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 || Number(user.activeAlerts || 0) > 0;
+  if (templateKey === "heatwave_alert") return Number(user.riskScore || 0) >= 60 || Number(user.healthConditions || 0) > 0;
+  return Boolean(user.phone);
+}
+
+function campaignOpportunityReasonKey(user: OpportunityUser, templateKey: TemplateKey) {
+  if (templateKey === "medication_reminder") return "campaigns.targets.reason.medication";
+  if (templateKey === "wellbeing_check") return !user.checkinEnabled ? "usersList.reason.checkins" : "usersList.reason.review";
+  if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 ? "usersList.nextAction.assign" : "campaigns.targets.reason.service";
+  if (templateKey === "heatwave_alert") return "campaigns.targets.reason.heatwave";
+  return "campaigns.targets.reason.safetyCheck";
+}
+
 export default function Campaigns() {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
@@ -317,6 +337,7 @@ export default function Campaigns() {
   const queryClient = useQueryClient();
   const { t, language } = useLanguage();
   const { isAdmin } = useAdminRole();
+  const { data: gisData } = useGISData();
   const canManageCampaigns = isAdmin && !authBypassEnabled;
 
   const templateLabel = (templateKey: TemplateKey) => {
@@ -456,8 +477,41 @@ export default function Campaigns() {
     completed: campaigns.filter((campaign) => operationalState(campaign) === "completed").length,
   }), [campaigns]);
 
-  const openCreateDialog = () => {
-    setForm(defaultForm("general_announcement", templateScript));
+  const noCampaignsCreated = !campaignsQuery.isLoading && campaigns.length === 0;
+  const opportunityUsers = useMemo<OpportunityUser[]>(() => {
+    const apiUsers = gisData?.gisUsers ?? [];
+    if (apiUsers.length > 0) return apiUsers;
+    if (authBypassEnabled) return demoOperationalUsers as OpportunityUser[];
+    return [];
+  }, [gisData?.gisUsers]);
+
+  const templateOpportunities = useMemo(() => {
+    return templateKeys.map((templateKey) => {
+      const matching = opportunityUsers
+        .filter((user) => campaignOpportunityMatchesTemplate(user, templateKey))
+        .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
+      return { templateKey, matching };
+    });
+  }, [opportunityUsers]);
+
+  const likelyRecipients = useMemo(() => {
+    return opportunityUsers
+      .filter((user) => Number(user.criticalAlerts || 0) > 0 || Number(user.activeAlerts || 0) > 0 || Number(user.missedMeds7d || 0) > 0 || !user.checkinEnabled)
+      .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0))
+      .slice(0, 5);
+  }, [opportunityUsers]);
+
+  const operationalGaps = useMemo(() => {
+    const missingPhone = opportunityUsers.filter((user) => !user.phone).length;
+    const checkinsOff = opportunityUsers.filter((user) => !user.checkinEnabled).length;
+    const medicationSignals = opportunityUsers.filter((user) => Number(user.missedMeds7d || 0) > 0).length;
+    const unassignedCoverage = opportunityUsers.filter((user) => (user.careProviderCount ?? 0) < 1).length;
+    const urgentSignals = opportunityUsers.filter((user) => Number(user.criticalAlerts || 0) > 0 || Number(user.riskScore || 0) >= 80).length;
+    return { missingPhone, checkinsOff, medicationSignals, unassignedCoverage, urgentSignals };
+  }, [opportunityUsers]);
+
+  const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
+    setForm(defaultForm(templateKey, templateScript));
     setEditorOpen(true);
   };
 
@@ -734,6 +788,108 @@ export default function Campaigns() {
           <div className="space-y-3">
             {campaignsQuery.isLoading ? (
               Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-36 rounded-2xl" />)
+            ) : noCampaignsCreated ? (
+              <div className="rounded-2xl border border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-white p-6">
+                <div className="max-w-2xl space-y-5">
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
+                      {t("campaigns.empty.eyebrow")}
+                    </p>
+                    <h2 className="text-xl font-bold text-foreground">{t("campaigns.empty.title")}</h2>
+                    <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.description")}</p>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {templateOpportunities.map(({ templateKey, matching }) => {
+                      const Icon = templateIcon(templateKey);
+                      return (
+                        <button
+                          key={templateKey}
+                          type="button"
+                          className="rounded-2xl border border-border bg-white p-4 text-left shadow-sm transition hover:border-primary/30 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70"
+                          onClick={() => canManageCampaigns && openCreateDialog(templateKey)}
+                          disabled={!canManageCampaigns}
+                        >
+                          <div className="flex items-start gap-3">
+                            <span className="rounded-full bg-primary/10 p-2 text-primary">
+                              <Icon className="h-4 w-4" />
+                            </span>
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center justify-between gap-3">
+                                <p className="font-semibold text-foreground">{templateLabel(templateKey)}</p>
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                                  {t("campaigns.empty.peopleCount").replace("{count}", String(matching.length))}
+                                </span>
+                              </div>
+                              <p className="text-sm text-muted-foreground">{templateDescription(templateKey)}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {matching.length > 0
+                                  ? t("campaigns.empty.topCity").replace("{city}", matching[0].city || t("campaigns.scope.allCities"))
+                                  : t("campaigns.empty.noneReady")}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="flex flex-wrap gap-3">
+                    {canManageCampaigns && (
+                      <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => openCreateDialog()}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        {t("campaigns.newCampaign")}
+                      </Button>
+                    )}
+                    <p className="self-center text-sm text-muted-foreground">{t("campaigns.empty.hint")}</p>
+                  </div>
+
+                  <div className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-foreground">{t("campaigns.empty.likelyRecipientsTitle")}</h3>
+                        <p className="text-sm text-muted-foreground">{t("campaigns.empty.likelyRecipientsDescription")}</p>
+                      </div>
+                    </div>
+                    {likelyRecipients.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {likelyRecipients.map((user) => {
+                          const templateKey =
+                            Number(user.missedMeds7d || 0) > 0
+                              ? "medication_reminder"
+                              : !user.checkinEnabled
+                                ? "wellbeing_check"
+                                : Number(user.criticalAlerts || 0) > 0
+                                  ? "heatwave_alert"
+                                  : "general_announcement";
+                          return (
+                            <div key={user.id} className="flex flex-col gap-3 rounded-2xl border border-border bg-slate-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
+                              <div>
+                                <p className="font-semibold text-foreground">{`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown"}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {[user.city || t("campaigns.scope.allCities"), t(campaignOpportunityReasonKey(user, templateKey))]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                                  {templateLabel(templateKey)}
+                                </Badge>
+                                <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
+                                  {t("campaigns.empty.riskScore").replace("{score}", String(user.riskScore ?? 0))}
+                                </Badge>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             ) : filteredCampaigns.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-10 text-center text-sm text-muted-foreground">
                 {t("campaigns.noMatch")}
@@ -805,9 +961,68 @@ export default function Campaigns() {
           <Card className="rounded-2xl border-border bg-white shadow-sm">
             <CardContent className="space-y-5 p-5">
               {!selectedCampaign ? (
-                <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-10 text-center text-sm text-muted-foreground">
-                  {t("campaigns.detail.noCampaignSelected")}
-                </div>
+                noCampaignsCreated ? (
+                  <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
+                    <div className="space-y-5">
+                      <div className="space-y-2">
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.panelTitle")}</h3>
+                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.panelDescription")}</p>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <CompactStat title={t("campaigns.empty.stepOneTitle")} value="1" />
+                        <CompactStat title={t("campaigns.empty.stepTwoTitle")} value="2" />
+                        <CompactStat title={t("campaigns.empty.stepThreeTitle")} value="3" />
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <DetailBlock title={t("campaigns.empty.stepOneTitle")}>
+                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepOneDescription")}</p>
+                        </DetailBlock>
+                        <DetailBlock title={t("campaigns.empty.stepTwoTitle")}>
+                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepTwoDescription")}</p>
+                        </DetailBlock>
+                        <DetailBlock title={t("campaigns.empty.stepThreeTitle")}>
+                          <p className="text-sm leading-6 text-foreground">{t("campaigns.empty.stepThreeDescription")}</p>
+                        </DetailBlock>
+                      </div>
+
+                      <div className="grid gap-4 xl:grid-cols-2">
+                        <DetailBlock title={t("campaigns.empty.snapshotTitle")}>
+                          <div className="space-y-3">
+                            <SnapshotLine
+                              label={t("campaigns.metric.queuedRuns")}
+                              value={String(templateOpportunities.find((item) => item.templateKey === "general_announcement")?.matching.length ?? 0)}
+                              detail={t("campaigns.empty.snapshotGeneral")}
+                            />
+                            <SnapshotLine
+                              label={t("campaigns.template.medication_reminder.title")}
+                              value={String(templateOpportunities.find((item) => item.templateKey === "medication_reminder")?.matching.length ?? 0)}
+                              detail={t("campaigns.empty.snapshotMedication")}
+                            />
+                            <SnapshotLine
+                              label={t("campaigns.template.wellbeing_check.title")}
+                              value={String(templateOpportunities.find((item) => item.templateKey === "wellbeing_check")?.matching.length ?? 0)}
+                              detail={t("campaigns.empty.snapshotWellbeing")}
+                            />
+                          </div>
+                        </DetailBlock>
+
+                        <DetailBlock title={t("campaigns.empty.gapsTitle")}>
+                          <div className="space-y-3">
+                            <GapLine label={t("campaigns.empty.gap.noPhone")} value={operationalGaps.missingPhone} />
+                            <GapLine label={t("campaigns.empty.gap.checkins")} value={operationalGaps.checkinsOff} />
+                            <GapLine label={t("campaigns.empty.gap.medication")} value={operationalGaps.medicationSignals} />
+                            <GapLine label={t("campaigns.empty.gap.unassigned")} value={operationalGaps.unassignedCoverage} />
+                            <GapLine label={t("campaigns.empty.gap.urgent")} value={operationalGaps.urgentSignals} />
+                          </div>
+                        </DetailBlock>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-10 text-center text-sm text-muted-foreground">
+                    {t("campaigns.detail.noCampaignSelected")}
+                  </div>
+                )
               ) : (
                 <>
                   <div className="flex flex-col gap-3 border-b border-border pb-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1337,6 +1552,27 @@ function CompactStat({ title, value }: { title: string; value: string }) {
     <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
       <p className="mt-2 text-xl font-bold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function SnapshotLine({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-2xl bg-slate-50 px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-semibold text-foreground">{label}</p>
+        <span className="text-lg font-bold text-foreground">{value}</span>
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+function GapLine({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <span className="font-semibold text-foreground">{value}</span>
     </div>
   );
 }
