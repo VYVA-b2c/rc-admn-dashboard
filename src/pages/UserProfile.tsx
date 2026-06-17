@@ -17,7 +17,6 @@ import {
   PhoneCall,
   Pill,
   Plus,
-  ShieldAlert,
   ShieldCheck,
   Trash2,
   UserRound,
@@ -540,9 +539,7 @@ export default function UserProfile() {
             <div className="flex flex-wrap gap-2">
               <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callNow")} onClick={() => navigate(`/risk-queue/${user.id}/prepare-call`)} />
               <ActionButton icon={MessageCircle} label={t("profile.sendWhatsApp")} onClick={() => handleOperationalAction("profile.action.whatsapp")} />
-              <ActionButton icon={Calendar} label={t("profile.createFollowUp")} onClick={() => handleOperationalAction("profile.action.followUp")} />
               <ActionButton icon={Users} label={t("profile.contactCaregiver")} onClick={() => handleOperationalAction("profile.action.caregiver")} />
-              <ActionButton tone="danger" icon={ShieldAlert} label={t("profile.escalate")} onClick={() => handleOperationalAction("profile.action.escalate")} />
               <ActionButton icon={Pencil} label={t("profile.addNote")} onClick={() => handleOperationalAction("profile.action.note")} />
             </div>
           </div>
