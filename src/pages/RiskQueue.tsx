@@ -22,8 +22,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
+import { useGISData, type GISFieldStaff, type GISUser } from "@/hooks/useGISData";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
+import { deriveRiskQueueRows, type RiskQueueRow } from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 
 type Kpis = {
@@ -88,6 +90,7 @@ type InsightsPayload = {
   operators: OperatorCapacity[];
   suggestions: Suggestion[];
   isPreview: boolean;
+  source: "predicted" | "operational" | "preview";
 };
 
 const horizonOptions = [7, 14, 30] as const;
@@ -230,6 +233,145 @@ function previewPayload(days: number, filter: string): InsightsPayload {
     operators: demoOperators,
     suggestions: demoSuggestions,
     isPreview: true,
+    source: "preview",
+  };
+}
+
+function fallbackBand(score: number): InsightClient["band"] {
+  if (score >= 67) return "high";
+  if (score >= 38) return "moderate";
+  return "low";
+}
+
+function fallbackHistory(score: number) {
+  return Array.from({ length: 14 }, (_, index) => {
+    const drift = (index - 13) * 0.7;
+    return Math.max(0, Math.min(100, Math.round(score + drift)));
+  });
+}
+
+function fallbackForecast(score: number, row: RiskQueueRow, days: number) {
+  const trend = row.status === "urgent" || row.hasNoResponse ? 0.8 : row.hasMedicationIssue || row.hasCheckinIssue ? 0.35 : 0;
+  const mid = Array.from({ length: days }, (_, index) => Math.max(0, Math.min(100, Math.round(score + (index + 1) * trend))));
+  return {
+    mid,
+    low: mid.map((value) => Math.max(0, value - 7)),
+    high: mid.map((value) => Math.min(100, value + 7)),
+  };
+}
+
+function fallbackFactors(row: RiskQueueRow): InsightFactor[] {
+  const factors: InsightFactor[] = [];
+  if (row.status === "urgent") factors.push({ signal: "risk", label: "Urgent risk", severity: "high" });
+  if (row.hasNoResponse) factors.push({ signal: "response", label: "No response", severity: "high" });
+  if (row.hasMedicationIssue) factors.push({ signal: "medication", label: "Medication follow-up", severity: "high" });
+  if (row.hasCheckinIssue) factors.push({ signal: "checkin", label: "Check-in inactive", severity: "moderate" });
+  if (row.isUnassigned) factors.push({ signal: "assignment", label: "Unassigned", severity: "high" });
+  if (!factors.length) factors.push({ signal: "review", label: "Operator review", severity: "moderate" });
+  return factors;
+}
+
+function fallbackWindow(row: RiskQueueRow) {
+  if (row.status === "urgent" || row.hasNoResponse) return "Immediate operator review recommended from live risk signals.";
+  if (row.isUnassigned) return "Assign a care provider before the next follow-up.";
+  if (row.hasMedicationIssue) return "Medication confirmation should be checked during the next outreach.";
+  if (row.hasCheckinIssue) return "Scheduled check-in setup needs review.";
+  return "Continue routine monitoring.";
+}
+
+function fallbackClientMatchesFilter(client: InsightClient, filter: string) {
+  if (filter === "all") return true;
+  if (filter === "high") return client.band === "high";
+  if (filter === "unassigned") return !client.operator;
+  if (filter === "noresponse") return client.factors.some((factor) => factor.signal === "response");
+  return client.factors.some((factor) => `${factor.signal || ""} ${factor.label}`.toLowerCase().includes(filter));
+}
+
+function fallbackHorizon(rows: RiskQueueRow[], fieldStaff: GISFieldStaff[], days: number): HorizonRow[] {
+  if (!rows.length) return [];
+  const urgent = rows.filter((row) => row.status === "urgent").length;
+  const review = rows.filter((row) => row.status !== "urgent").length;
+  const medication = rows.filter((row) => row.hasMedicationIssue).length;
+  const noResponse = rows.filter((row) => row.hasNoResponse).length;
+  const availableHours = fieldStaff.reduce((sum, staff) => sum + Number(staff.capacity || 0), 0) || 21;
+  const baseHoursNeeded = urgent * 1.5 + review * 0.75 + medication * 0.5 + noResponse * 0.5;
+
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() + index + 1);
+    const pressureBump = index >= 7 ? Math.floor(index / 7) : 0;
+    return {
+      date: date.toISOString().slice(0, 10),
+      urgent: urgent + (pressureBump && urgent > 0 ? 1 : 0),
+      review: review + pressureBump,
+      medication,
+      noResponse,
+      hoursNeeded: Number((baseHoursNeeded + pressureBump * 0.75).toFixed(1)),
+      hoursAvailable: availableHours,
+    };
+  });
+}
+
+function fallbackOperators(rows: RiskQueueRow[], fieldStaff: GISFieldStaff[]): OperatorCapacity[] {
+  if (fieldStaff.length) {
+    return fieldStaff.map((staff) => {
+      const capacity = Number(staff.capacity || 0) || 32;
+      return {
+        id: staff.id,
+        name: staff.full_name,
+        current: Number(staff.open_cases || 0),
+        capacity,
+        recommended: Math.max(1, Math.round(capacity / 3)),
+      };
+    });
+  }
+
+  const assignedCounts = new Map<string, number>();
+  rows.forEach((row) => {
+    if (!row.assignedTo) return;
+    assignedCounts.set(row.assignedTo, (assignedCounts.get(row.assignedTo) || 0) + 1);
+  });
+  return Array.from(assignedCounts.entries()).map(([name, current], index) => ({
+    id: `fallback-operator-${index}`,
+    name,
+    current,
+    capacity: 32,
+    recommended: 8,
+  }));
+}
+
+function operationalFallbackPayload(users: GISUser[], fieldStaff: GISFieldStaff[], days: number, filter: string): InsightsPayload {
+  const rows = deriveRiskQueueRows(users);
+  const clients = rows
+    .map((row) => ({
+      id: row.id,
+      name: row.name,
+      age: row.age ?? null,
+      zone: row.city || null,
+      operator: row.assignedTo || null,
+      score: row.score,
+      delta: row.status === "urgent" ? 3 : row.hasMedicationIssue || row.hasCheckinIssue ? 1 : 0,
+      band: fallbackBand(row.score),
+      history: fallbackHistory(row.score),
+      forecast: fallbackForecast(row.score, row, days),
+      factors: fallbackFactors(row),
+      window: fallbackWindow(row),
+    }))
+    .filter((client) => fallbackClientMatchesFilter(client, filter));
+
+  return {
+    kpis: {
+      predictedEscalations7d: rows.filter((row) => row.status === "urgent" || row.score >= 67).length,
+      clientsTrendingUp: rows.filter((row) => row.score >= 38).length,
+      adherenceRiskFlags: rows.filter((row) => row.hasMedicationIssue).length,
+      operatorsOverCapacity: fallbackOperators(rows, fieldStaff).filter((operator) => operator.current > Math.max(1, operator.recommended)).length,
+    },
+    horizon: fallbackHorizon(rows, fieldStaff, days),
+    clients,
+    operators: fallbackOperators(rows, fieldStaff),
+    suggestions: [],
+    isPreview: false,
+    source: "operational",
   };
 }
 
@@ -244,7 +386,7 @@ async function fetchInsights(days: number, filter: string): Promise<InsightsPayl
     ]);
     const hasData = horizon.length > 0 || clients.length > 0 || operators.length > 0 || suggestions.length > 0;
     if (!hasData && authBypassEnabled) return previewPayload(days, filter);
-    return { kpis, horizon, clients, operators, suggestions, isPreview: false };
+    return { kpis, horizon, clients, operators, suggestions, isPreview: false, source: "predicted" };
   } catch (error) {
     if (authBypassEnabled) return previewPayload(days, filter);
     throw error;
@@ -335,6 +477,7 @@ export default function RiskQueue() {
   const [days, setDays] = useState<(typeof horizonOptions)[number]>(7);
   const [filter, setFilter] = useState<(typeof filterOptions)[number]["value"]>("all");
   const queryClient = useQueryClient();
+  const operationalQuery = useGISData();
   const insightsQuery = useQuery({
     queryKey: ["insights", days, filter],
     queryFn: () => fetchInsights(days, filter),
@@ -364,13 +507,17 @@ export default function RiskQueue() {
     },
   });
 
-  const data = insightsQuery.data;
+  const operationalFallback = useMemo(
+    () => operationalFallbackPayload(operationalQuery.data?.gisUsers ?? [], operationalQuery.data?.fieldStaff ?? [], days, filter),
+    [days, filter, operationalQuery.data?.fieldStaff, operationalQuery.data?.gisUsers],
+  );
+  const data = insightsQuery.data ?? (insightsQuery.isError && !operationalQuery.isLoading ? operationalFallback : undefined);
   const maxHours = useMemo(
     () => Math.max(1, ...(data?.horizon ?? []).map((row) => Math.max(row.hoursNeeded, row.hoursAvailable))),
     [data?.horizon],
   );
 
-  if (insightsQuery.isLoading) {
+  if (insightsQuery.isLoading || (insightsQuery.isError && operationalQuery.isLoading)) {
     return (
       <div className="mx-auto max-w-[1520px] space-y-5">
         <Skeleton className="h-10 w-80" />
@@ -382,7 +529,7 @@ export default function RiskQueue() {
     );
   }
 
-  if (insightsQuery.isError || !data) {
+  if (!data) {
     return (
       <Card className="mx-auto max-w-2xl border-border bg-white">
         <CardContent className="p-8 text-center">
@@ -400,14 +547,16 @@ export default function RiskQueue() {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-display text-2xl font-bold text-foreground">Predictive insights</h1>
-            {data.isPreview && (
+            {data.source !== "predicted" && (
               <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                Preview data
+                {data.source === "operational" ? "Operational data" : "Preview data"}
               </Badge>
             )}
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            Risk forecasting, operator capacity, and reassignment suggestions on the same horizon.
+            {data.source === "operational"
+              ? "Forecast tables are unavailable, so this view is using live risk queue signals from the client dashboard."
+              : "Risk forecasting, operator capacity, and reassignment suggestions on the same horizon."}
           </p>
         </div>
         <div className="flex rounded-lg border border-border bg-white p-1 shadow-sm">
@@ -563,7 +712,7 @@ export default function RiskQueue() {
                       <Button
                         type="button"
                         size="sm"
-                        disabled={data.isPreview || applyMutation.isPending}
+                        disabled={data.source !== "predicted" || applyMutation.isPending}
                         onClick={() => applyMutation.mutate(suggestion.id)}
                         className="h-8 rounded-full px-3 text-xs font-semibold"
                       >
@@ -574,7 +723,7 @@ export default function RiskQueue() {
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={data.isPreview || dismissMutation.isPending}
+                        disabled={data.source !== "predicted" || dismissMutation.isPending}
                         onClick={() => dismissMutation.mutate(suggestion.id)}
                         className="h-8 rounded-full border-border bg-white px-3 text-xs font-semibold text-muted-foreground"
                       >
