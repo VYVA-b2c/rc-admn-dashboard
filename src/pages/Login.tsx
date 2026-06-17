@@ -129,9 +129,6 @@ export default function Login() {
             <p className="mt-4 text-xs text-center text-muted-foreground/70">
               {t("login.adminAccessHint")}
             </p>
-            <p className="mt-3 text-xs text-center text-muted-foreground/60">
-              {t("login.previewHint")}
-            </p>
             <p className="mt-4 text-[10px] text-center text-muted-foreground/40">
               {t("common.poweredByVyva")}
             </p>

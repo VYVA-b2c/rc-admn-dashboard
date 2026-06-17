@@ -37,7 +37,6 @@ vi.mock("@/contexts/LanguageContext", () => ({
         "login.magicLinkSentDesc": "Check your inbox and use the secure link to sign in.",
         "login.tooManyAttempts": "Try again in one minute",
         "login.tooManyAttemptsDesc": "No new email was sent. Please wait one minute before requesting another sign-in link.",
-        "login.previewHint": "If login fails in preview, try the published URL.",
         "login.sendMagicLink": "Send magic link",
         "login.sendingMagicLink": "Sending magic link...",
         "login.subtitle": "VYVA x Red Cross operations console",
