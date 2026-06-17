@@ -25,12 +25,14 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<"google" | "azure" | null>(null);
   const rateLimitUntil = useRef(0);
+  const magicLinkInFlight = useRef(false);
   const nextPath = safeNextPath(searchParams.get("next"));
 
   if (session || authBypassEnabled) return <Navigate to={nextPath} replace />;
 
   const handleMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (magicLinkInFlight.current) return;
     if (Date.now() < rateLimitUntil.current) {
       toast.error(t("login.rateLimited"), { description: t("login.rateLimitDesc") });
       return;
@@ -40,20 +42,25 @@ export default function Login() {
       return;
     }
 
+    magicLinkInFlight.current = true;
     setLoading(true);
-    const { error } = await signInWithMagicLink(email.trim(), nextPath, language);
-    if (error) {
-      const msg = error.message?.toLowerCase() ?? "";
-      if (msg.includes("rate") || msg.includes("429")) {
-        rateLimitUntil.current = Date.now() + 60_000;
-        toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
+    try {
+      const { error } = await signInWithMagicLink(email.trim(), nextPath, language);
+      if (error) {
+        const msg = error.message?.toLowerCase() ?? "";
+        if (msg.includes("rate") || msg.includes("429") || msg.includes("too many") || msg.includes("security") || msg.includes("wait")) {
+          rateLimitUntil.current = Date.now() + 60_000;
+          toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
+        } else {
+          toast.error(t("login.magicLinkFailed"), { description: error.message });
+        }
       } else {
-        toast.error(t("login.magicLinkFailed"), { description: error.message });
+        toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkSentDesc") });
       }
-    } else {
-      toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkSentDesc") });
+    } finally {
+      magicLinkInFlight.current = false;
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleOAuth = async (provider: "google" | "azure") => {

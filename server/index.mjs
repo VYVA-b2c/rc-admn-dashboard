@@ -936,6 +936,46 @@ function inviteEmailLanguage(organization) {
   return "en";
 }
 
+const consoleMagicLinkCache = new Map();
+const consoleMagicLinkInFlight = new Map();
+const consoleMagicLinkCacheMs = 55_000;
+
+function consoleMagicLinkKey({ email, redirectPath, language, origin }) {
+  return JSON.stringify([
+    normalizedEmail(email),
+    loginRedirectPath(redirectPath),
+    loginEmailLanguage(language),
+    origin || "",
+  ]);
+}
+
+async function sendConsoleMagicLinkOnce(options) {
+  const key = consoleMagicLinkKey(options);
+  const cached = consoleMagicLinkCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { sent: true, provider: cached.provider, deduped: true };
+  }
+
+  const active = consoleMagicLinkInFlight.get(key);
+  if (active) return active;
+
+  const promise = sendConsoleMagicLink(options)
+    .then((result) => {
+      if (result.sent) {
+        consoleMagicLinkCache.set(key, {
+          expiresAt: Date.now() + consoleMagicLinkCacheMs,
+          provider: result.provider || null,
+        });
+      }
+      return result;
+    })
+    .finally(() => {
+      consoleMagicLinkInFlight.delete(key);
+    });
+  consoleMagicLinkInFlight.set(key, promise);
+  return promise;
+}
+
 function inviteRoleLabel(role, language) {
   if (role === "admin") {
     if (language === "de") return "Admin";
@@ -6408,7 +6448,7 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
     return;
   }
 
-  const sent = await sendConsoleMagicLink({
+  const sent = await sendConsoleMagicLinkOnce({
     email,
     redirectPath: req.body?.redirectPath,
     language: loginEmailLanguage(req.body?.language),
