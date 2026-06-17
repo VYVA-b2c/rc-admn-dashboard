@@ -5,9 +5,11 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/contexts/LanguageContext";
+import { Toaster } from "@/components/ui/toaster";
 import Campaigns from "@/pages/Campaigns";
 
 const campaignPosts: unknown[] = [];
+let mockedCampaigns: unknown[] = [];
 
 vi.mock("@/contexts/AuthContext", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
@@ -70,6 +72,7 @@ function renderCampaigns() {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/campaigns"]}>
         <LanguageProvider>
+          <Toaster />
           <Campaigns />
         </LanguageProvider>
       </MemoryRouter>
@@ -94,6 +97,7 @@ async function openCreateDialog() {
 describe("Campaigns create flow", () => {
   beforeEach(() => {
     campaignPosts.length = 0;
+    mockedCampaigns = [];
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -128,7 +132,7 @@ describe("Campaigns create flow", () => {
       }
 
       if (url.includes("/api/v1/campaigns-dashboard/campaigns")) {
-        return new Response(JSON.stringify({ campaigns: [] }), {
+        return new Response(JSON.stringify({ campaigns: mockedCampaigns }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });
@@ -239,5 +243,41 @@ describe("Campaigns create flow", () => {
     fireEvent.click(voiceChannel as HTMLElement);
     expect(within(dialog).getByText("Select at least one channel.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Next" })).toBeDisabled();
+  });
+
+  it("requires a date and time before scheduling a voice campaign", async () => {
+    mockedCampaigns = [
+      {
+        id: "campaign-1",
+        name: "Vaccination reminder",
+        objective: "Remind clients about the vaccination clinic.",
+        audience: "Clients with phone consent.",
+        templateKey: "medication_reminder",
+        targetRules: {
+          channels: ["voice"],
+          schedule: { frequency: "once", scheduledAt: null },
+        },
+        dueKey: "campaigns.due.draft",
+        city: "Tarifa",
+        owner: "Codex",
+        status: "draft",
+        channel: "phone",
+        scheduledAt: null,
+        callScript: "Please remember the vaccination clinic on Friday.",
+        callWindowStart: "09:00",
+        callWindowEnd: "18:00",
+        retryLimit: 1,
+        executionType: "vyva_call",
+        latestRun: null,
+        targets: [],
+      },
+    ];
+
+    renderCampaigns();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Schedule calls" }));
+
+    expect(await screen.findByText("Add a schedule first")).toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Edit campaign");
   });
 });
