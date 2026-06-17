@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Mail } from "lucide-react";
 import drkLogo from "@/assets/drk-logo.svg";
-import loginBackground from "@/assets/login-happy-elders.png";
+import loginBackground from "@/assets/login-active-elders.png";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
