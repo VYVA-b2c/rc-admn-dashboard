@@ -1073,6 +1073,7 @@ export default function Campaigns() {
     }
     return { eligible, skipped, skippedReasons };
   }, [form, opportunityUsers]);
+  const inlineDraftActive = Boolean(noCampaignsCreated && form && !form.id && !editorOpen);
 
   const inferAiTemplate = (prompt: string, fallback: TemplateKey): TemplateKey => {
     const normalized = prompt.toLowerCase();
@@ -1250,15 +1251,20 @@ export default function Campaigns() {
     updateUploadedAudience(text, file.name);
   };
 
-  const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
-    const baseRules = defaultTargetRules();
-    setForm({
+  const templateDraftForm = (templateKey: TemplateKey = "general_announcement", city = ""): CampaignFormState => {
+    const baseRules = defaultTargetRules(city);
+    return {
       ...defaultForm(templateKey, templateScript),
       name: isCustomTemplate(templateKey) ? "" : templateLabel(templateKey),
-      objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, ""),
-      audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, ""),
+      city,
+      objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, city),
+      audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, city),
       targetRules: baseRules,
-    });
+    };
+  };
+
+  const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
+    setForm(templateDraftForm(templateKey));
     setAiSuggestion(null);
     setWizardStep(1);
     setEditorOpen(true);
@@ -1279,6 +1285,17 @@ export default function Campaigns() {
     next.delete("template");
     next.delete("mode");
     setSearchParams(next, { replace: true });
+  };
+
+  const openInlineTemplateDraft = (templateKey: TemplateKey) => {
+    const topCity = templateOpportunities.find((item) => item.templateKey === templateKey)?.matching[0]?.city || "";
+    clearCreateIntent();
+    setForm(templateDraftForm(templateKey, topCity));
+    setAiSuggestion(null);
+    setWizardStep(1);
+    setEditorOpen(false);
+    setGuideDialogOpen(false);
+    setGuideExpanded(false);
   };
 
   const openEditDialog = (campaign: Campaign) => {
@@ -1682,12 +1699,17 @@ export default function Campaigns() {
                   <div className="grid gap-3 md:grid-cols-2">
                     {templateOpportunities.map(({ templateKey, matching }) => {
                       const Icon = templateIcon(templateKey);
+                      const active = inlineDraftActive && form?.templateKey === templateKey;
                       return (
                         <button
                           key={templateKey}
                           type="button"
-                          className="rounded-2xl border border-border bg-white p-4 text-left shadow-sm transition hover:border-primary/30 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70"
-                          onClick={() => canDraftCampaigns && syncCreateIntent(templateKey)}
+                          aria-pressed={active}
+                          className={cn(
+                            "rounded-2xl border bg-white p-4 text-left shadow-sm transition hover:border-primary/30 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70",
+                            active ? "border-primary/50 ring-2 ring-primary/15" : "border-border",
+                          )}
+                          onClick={() => canDraftCampaigns && openInlineTemplateDraft(templateKey)}
                           disabled={!canDraftCampaigns}
                         >
                           <div className="space-y-4">
@@ -1701,7 +1723,10 @@ export default function Campaigns() {
                             </div>
 
                             <div className="space-y-2">
-                              <p className="text-lg font-semibold leading-7 text-foreground">{templateLabel(templateKey)}</p>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-lg font-semibold leading-7 text-foreground">{templateLabel(templateKey)}</p>
+                                {active && <Badge className="rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
+                              </div>
                               <p className="min-h-[72px] text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</p>
                             </div>
 
@@ -1790,7 +1815,118 @@ export default function Campaigns() {
             <CardContent className="space-y-5 p-5">
               {!selectedCampaign ? (
                 noCampaignsCreated ? (
-                  <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
+                  inlineDraftActive && form ? (
+                    <div className="rounded-2xl border border-primary/20 bg-primary/5 px-5 py-5">
+                      <div className="space-y-5">
+                        <div className="space-y-3 border-b border-primary/10 pb-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge className="rounded-full border-0 bg-primary/10 px-3 py-1 text-primary">
+                              {t("campaigns.wizard.selected")}
+                            </Badge>
+                            <Badge variant="outline" className="rounded-full border-primary/20 bg-white px-3 py-1 font-semibold text-primary">
+                              {t("campaigns.empty.peopleCount").replace("{count}", String(localTargetSummary.eligible.length))}
+                            </Badge>
+                          </div>
+                          <div>
+                            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-primary">
+                              {t("campaigns.wizard.templateChoice")}
+                            </p>
+                            <h3 className="mt-2 text-xl font-bold text-foreground">{templateLabel(form.templateKey)}</h3>
+                            <p className="mt-2 text-sm leading-6 text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3">
+                          <MiniStat title={t("campaigns.preview.eligibleCount")} value={String(localTargetSummary.eligible.length)} />
+                          <MiniStat title={t("campaigns.preview.skippedCount")} value={String(localTargetSummary.skipped.length)} />
+                        </div>
+
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-inline-name">{t("campaigns.form.name")}</Label>
+                            <Input
+                              id="campaign-inline-name"
+                              value={form.name}
+                              onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
+                              placeholder={t("campaigns.form.namePlaceholder")}
+                              className="bg-white"
+                            />
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-inline-city">{t("campaigns.form.city")}</Label>
+                            <Input
+                              id="campaign-inline-city"
+                              value={form.city}
+                              list="campaign-inline-city-options"
+                              onChange={(event) => setCampaignCity(event.target.value)}
+                              placeholder={t("campaigns.form.cityPlaceholder")}
+                              className="bg-white"
+                            />
+                            <datalist id="campaign-inline-city-options">
+                              {availableCities.map((city) => <option key={city} value={city} />)}
+                            </datalist>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-inline-script">{t("campaigns.call.script")}</Label>
+                            <Textarea
+                              id="campaign-inline-script"
+                              value={form.callScript}
+                              onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                              placeholder={t("campaigns.call.scriptPlaceholder")}
+                              className="min-h-[180px] resize-y bg-white text-sm leading-6"
+                            />
+                            <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                          </div>
+                        </div>
+
+                        <DetailBlock title={t("campaigns.detail.audience")}>
+                          <p className="text-sm leading-6 text-foreground">{form.audience}</p>
+                        </DetailBlock>
+
+                        <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
+                          <div className="space-y-2">
+                            {localTargetSummary.eligible.slice(0, 3).map((target) => (
+                              <div key={target.id} className="rounded-xl bg-white px-3 py-2 text-sm">
+                                <p className="font-semibold text-foreground">{`${target.first_name ?? ""} ${target.last_name ?? ""}`.trim() || "Unknown"}</p>
+                                <p className="text-muted-foreground">{target.city || t("campaigns.scope.allCities")}</p>
+                              </div>
+                            ))}
+                            {localTargetSummary.eligible.length > 3 && (
+                              <p className="text-sm font-semibold text-primary">
+                                {t("campaigns.target.moreRecipients").replace("{count}", String(localTargetSummary.eligible.length - 3))}
+                              </p>
+                            )}
+                            {localTargetSummary.eligible.length === 0 && (
+                              <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                            )}
+                          </div>
+                        </DetailBlock>
+
+                        <div className="flex flex-col-reverse gap-2 border-t border-primary/10 pt-4 sm:flex-row sm:justify-between">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="rounded-full bg-white"
+                            onClick={() => setForm(null)}
+                          >
+                            {t("campaigns.form.cancel")}
+                          </Button>
+                          <Button
+                            type="button"
+                            className="rounded-full bg-primary px-4 font-bold text-primary-foreground hover:bg-primary/90"
+                            onClick={() => saveMutation.mutate({ draft: form, status: "draft" })}
+                            disabled={saveMutation.isPending || !canDraftCampaigns || !form.callScript.trim() || form.channels.length === 0}
+                          >
+                            {saveMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                            {t("campaigns.action.saveDraft")}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.quickGuideTitle")}</h3>
@@ -1934,6 +2070,7 @@ export default function Campaigns() {
                       )}
                     </div>
                   </div>
+                  )
                 ) : (
                   <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
                     <div className="space-y-5">

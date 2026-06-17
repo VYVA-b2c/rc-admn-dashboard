@@ -171,6 +171,24 @@ describe("Campaigns create flow", () => {
     expect(buttons[3]).toHaveTextContent(/^4Schedule/);
   });
 
+  it("shows empty-state template selection inline instead of opening the create dialog", async () => {
+    renderCampaigns();
+
+    const dismissGuide = await screen.findByRole("button", { name: "Got it" });
+    fireEvent.click(dismissGuide);
+
+    const heatwaveCard = screen.getByText("Heatwave alert").closest("button");
+    expect(heatwaveCard).toBeInTheDocument();
+    fireEvent.click(heatwaveCard as HTMLElement);
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("Selected format")).toBeInTheDocument();
+    expect(screen.getByLabelText("Campaign name")).toHaveValue("Heatwave alert");
+    expect(screen.getByLabelText("City")).toHaveValue("Tarifa");
+    expect((screen.getByLabelText("Call script") as HTMLTextAreaElement).value).toContain("heatwave alert");
+    expect(screen.getByRole("button", { name: "Save draft" })).toBeInTheDocument();
+  });
+
   it("lets admins save template, uploaded audience, channels, and schedule metadata", async () => {
     const dialog = await openCreateDialog();
 
