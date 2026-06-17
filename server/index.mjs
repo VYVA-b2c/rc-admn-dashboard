@@ -3347,6 +3347,21 @@ function applyScheduledSessionContact(data, contact) {
   };
 }
 
+function applyScheduledSessionContactToItem(item, contact) {
+  if (!contact?.at || !item || typeof item !== "object") return item;
+  const existingAt = recordFirstString(item, scheduledSessionLastContactDateKeys);
+  const existingStatus = recordFirstString(item, scheduledSessionStatusKeys);
+  const at = existingAt || contact.at;
+  const status = existingStatus || contact.status || null;
+  return {
+    ...item,
+    last_checkin_at: at,
+    lastCheckinAt: at,
+    last_outcome: status,
+    lastOutcome: status,
+  };
+}
+
 function normalizeServiceType(value) {
   return String(value || "")
     .trim()
@@ -3548,12 +3563,26 @@ async function overlayRoutineServicePayload(payload, serviceType, context) {
   ).filter(Boolean);
   const overlays = await loadRoutineServiceOverlayMap(serviceType, userIds, context);
   const accessMap = await loadRoutineServiceAccessMap(userIds, context);
+  const uniqueUserIds = Array.from(new Set(userIds));
+  const listContactMap = new Map(
+    uniqueUserIds
+      .map((userId) => [userId, latestScheduledSessionContactFromPayload(payload, userId)])
+      .filter(([, contact]) => contact?.at),
+  );
+  const missingContactIds = uniqueUserIds.filter((userId) => !listContactMap.has(userId));
+  const fallbackContacts = await Promise.all(
+    missingContactIds.map(async (userId) => [userId, await loadLatestScheduledSessionContact(userId)]),
+  );
+  for (const [userId, contact] of fallbackContacts) {
+    if (contact?.at) listContactMap.set(userId, contact);
+  }
 
   const augmented = list.map((item) => {
     const candidateId = String(item?.user_id ?? item?.vyva_user_id ?? item?.user?.id ?? item?.vyva_users?.id ?? "").trim();
     const merged = mergeRoutinePauseIntoItem(item, overlays.get(candidateId));
+    const withContact = applyScheduledSessionContactToItem(merged, listContactMap.get(candidateId));
     const access = accessMap.get(candidateId);
-    return access ? { ...merged, ...access } : merged;
+    return access ? { ...withContact, ...access } : withContact;
   });
 
   if (Array.isArray(payload)) return augmented;
