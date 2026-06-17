@@ -73,6 +73,7 @@ function medicationFormState(profileData?: OperationalProfileResponse | null) {
     dosage: medication.dosage || "",
     medication_name: medication.medication_name || "",
     purpose: medication.purpose || "",
+    reminders_enabled: medication.reminders_enabled ?? true,
     schedule_times: Array.isArray(medication.schedule_times) ? medication.schedule_times.join(", ") : "",
   }));
 }
@@ -125,7 +126,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
   }, [defaultLanguage, open, profileData, user]);
 
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  const updateMedication = (index: number, key: keyof MedicationIntake, value: string) =>
+  const updateMedication = (index: number, key: keyof MedicationIntake, value: string | boolean) =>
     setMedications((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
   const updateCaregiver = (index: number, key: keyof CaregiverIntake, value: string) =>
     setCaregivers((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
@@ -473,6 +474,14 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                           onChange={(event) => updateMedication(index, "schedule_times", event.target.value)}
                         />
                       </Field>
+                    </div>
+                    <div className="mt-3">
+                      <SwitchRow
+                        checked={medication.reminders_enabled}
+                        description={t("userForm.medicationReminderToggleDescription")}
+                        label={t("userForm.medicationRemindersEnabled")}
+                        onCheckedChange={(value) => updateMedication(index, "reminders_enabled", value)}
+                      />
                     </div>
                   </div>
                 );

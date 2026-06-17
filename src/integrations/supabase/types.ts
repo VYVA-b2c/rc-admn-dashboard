@@ -518,6 +518,7 @@ export type Database = {
           id: string
           medication_name: string
           purpose: string | null
+          reminders_enabled: boolean
           schedule_times: string[] | null
           updated_at: string
           vyva_user_id: string
@@ -528,6 +529,7 @@ export type Database = {
           id?: string
           medication_name: string
           purpose?: string | null
+          reminders_enabled?: boolean
           schedule_times?: string[] | null
           updated_at?: string
           vyva_user_id: string
@@ -538,6 +540,7 @@ export type Database = {
           id?: string
           medication_name?: string
           purpose?: string | null
+          reminders_enabled?: boolean
           schedule_times?: string[] | null
           updated_at?: string
           vyva_user_id?: string

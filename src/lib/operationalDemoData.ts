@@ -67,6 +67,7 @@ export interface OperationalMedication extends ProfileRecord {
   dosage?: string | null;
   medication_name?: string | null;
   purpose?: string | null;
+  reminders_enabled?: boolean;
   schedule_times?: string[];
 }
 
@@ -331,6 +332,7 @@ export const demoOperationalProfile: OperationalProfileResponse = {
       medication_name: "Metformin",
       dosage: "500mg",
       purpose: "Diabetes",
+      reminders_enabled: true,
       schedule_times: ["08:00", "20:00"],
       created_at: "2025-04-21T08:00:00.000Z",
     },
@@ -339,6 +341,7 @@ export const demoOperationalProfile: OperationalProfileResponse = {
       medication_name: "Lisinopril",
       dosage: "10mg",
       purpose: "Blood pressure",
+      reminders_enabled: false,
       schedule_times: ["09:00"],
       created_at: "2025-04-21T08:00:00.000Z",
     },

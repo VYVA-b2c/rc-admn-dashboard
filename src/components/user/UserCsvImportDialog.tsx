@@ -194,6 +194,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
           dosage: medicationDosage,
           medication_name: medicationName,
           purpose: medicationPurpose,
+          reminders_enabled: true,
           schedule_times: medicationTimes.join(", "),
         }]
       : [];

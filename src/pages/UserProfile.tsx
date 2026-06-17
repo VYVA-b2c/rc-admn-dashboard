@@ -646,8 +646,15 @@ export default function UserProfile() {
                         <p className="text-sm text-muted-foreground">
                           {[med.dosage, med.purpose].filter(Boolean).join(" · ") || t("profile.noExtraDetails")}
                         </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <Badge variant={med.reminders_enabled ?? true ? "default" : "secondary"} className="rounded-full text-[11px]">
+                            {(med.reminders_enabled ?? true) ? t("profile.medicationRemindersOn") : t("profile.medicationRemindersOff")}
+                          </Badge>
+                        </div>
                         {Array.isArray(med.schedule_times) && med.schedule_times.length > 0 && (
-                          <p className="mt-1 text-xs font-semibold text-primary">{med.schedule_times.join(", ")}</p>
+                          <p className={cn("mt-1 text-xs font-semibold", (med.reminders_enabled ?? true) ? "text-primary" : "text-muted-foreground")}>
+                            {med.schedule_times.join(", ")}
+                          </p>
                         )}
                       </div>
                       {canEditMedications && (
@@ -670,7 +677,7 @@ export default function UserProfile() {
                 pausedUntil={checkins?.paused_until}
                 pauseSource={checkins?.pause_source}
                 isPaused={Boolean(checkins?.is_paused)}
-                onEdit={canEditCheckins && checkins ? () => setEditCheckinOpen(true) : undefined}
+                onEdit={canEditCheckins ? () => setEditCheckinOpen(true) : undefined}
               />
               <ServiceSummary
                 title={t("profile.service.brainCoach")}
@@ -680,7 +687,7 @@ export default function UserProfile() {
                 pausedUntil={brainCoach?.paused_until}
                 pauseSource={brainCoach?.pause_source}
                 isPaused={Boolean(brainCoach?.is_paused)}
-                onEdit={canEditBrainCoach && brainCoach ? () => setEditBrainOpen(true) : undefined}
+                onEdit={canEditBrainCoach ? () => setEditBrainOpen(true) : undefined}
               />
             </div>
           </CardContent>
@@ -870,8 +877,8 @@ export default function UserProfile() {
           userName={fullName}
         />
       )}
-      {editCheckinOpen && checkins && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
-      {editBrainOpen && brainCoach && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
+      {editCheckinOpen && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
+      {editBrainOpen && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
       {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
     </div>
   );

@@ -18,6 +18,7 @@ export type MedicationIntake = {
   dosage: string;
   medication_name: string;
   purpose: string;
+  reminders_enabled: boolean;
   schedule_times: string;
 };
 
@@ -128,6 +129,7 @@ export function emptyMedicationIntake(): MedicationIntake {
     dosage: "",
     medication_name: "",
     purpose: "",
+    reminders_enabled: true,
     schedule_times: "",
   };
 }
@@ -197,6 +199,7 @@ function normalizedMedications(medications: MedicationIntake[] = []) {
       dosage: nullIfBlank(medication.dosage),
       medication_name: medication.medication_name.trim(),
       purpose: nullIfBlank(medication.purpose),
+      reminders_enabled: medication.reminders_enabled,
       schedule_times: splitIntakeList(medication.schedule_times),
     }))
     .filter((medication) => medication.medication_name);

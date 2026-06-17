@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,7 @@ interface EditServiceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
-  service: OperationalService;
+  service?: OperationalService | null;
   serviceName: "Check-in" | "Brain Coach";
   serviceType: "checkin" | "brainCoach";
 }
@@ -27,19 +27,23 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     enabled: service?.enabled ?? false,
-    frequency: service?.frequency || "",
+    frequency: service?.frequency || "weekly",
     preferred_time: service?.preferred_time || "",
   });
 
-  const handleSave = async () => {
-    if (serviceType === "checkin" && !service.id) {
-      toast({ title: t("profile.serviceUnavailable"), variant: "destructive" });
-      return;
-    }
+  useEffect(() => {
+    if (!open) return;
+    setForm({
+      enabled: service?.enabled ?? false,
+      frequency: service?.frequency || "weekly",
+      preferred_time: service?.preferred_time || "",
+    });
+  }, [open, service]);
 
+  const handleSave = async () => {
     const path =
       serviceType === "checkin"
-        ? `/api/v1/user-dashboard/checkins/${service.id}`
+        ? `/api/v1/user-dashboard/checkins/${service?.id ?? "new"}`
         : `/api/v1/user-dashboard/brain-coach/${vyvaUserId}`;
 
     setSaving(true);
@@ -50,6 +54,7 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
           enabled: form.enabled,
           frequency: form.frequency || null,
           preferred_time: form.preferred_time || null,
+          user_id: vyvaUserId,
         }),
       });
 

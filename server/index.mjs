@@ -4677,10 +4677,10 @@ async function replaceMedicationsWithClient(client, userId, medications) {
   for (const medication of medications) {
     await client.query(
       `
-        INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
+        VALUES ($1, $2, $3, $4, $5, $6)
       `,
-      [userId, medication.medication_name, medication.purpose, medication.dosage, medication.schedule_times],
+      [userId, medication.medication_name, medication.purpose, medication.dosage, medication.reminders_enabled ?? true, medication.schedule_times],
     );
   }
 }
@@ -4891,6 +4891,7 @@ function normalizeMedicationPayload(payload, creating = false) {
       medication_name: medicationName,
       purpose: nullIfBlank(firstValue(payload?.purpose, payload?.reason)),
       dosage: nullIfBlank(payload?.dosage),
+      reminders_enabled: optionalBooleanValue(payload?.reminders_enabled, payload?.remindersEnabled, payload?.enabled, payload?.active) ?? true,
       schedule_times: normalizeStringArray(firstValue(payload?.schedule_times, payload?.scheduleTimes, payload?.times)),
     },
     error: creating && !nullIfBlank(firstValue(payload?.vyva_user_id, payload?.user_id, payload?.userId)) ? "vyva_user_id is required" : null,
@@ -4905,8 +4906,8 @@ async function createMedication(payload, context) {
 
   const result = await query(
     `
-      INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING *, id::text, vyva_user_id::text
     `,
     [
@@ -4914,6 +4915,7 @@ async function createMedication(payload, context) {
       medication.value.medication_name,
       medication.value.purpose,
       medication.value.dosage,
+      medication.value.reminders_enabled,
       medication.value.schedule_times,
     ],
   );
@@ -4942,11 +4944,11 @@ async function updateMedication(medicationId, payload, context) {
   const result = await query(
     `
       UPDATE public.vyva_user_medications m
-      SET medication_name = $2, purpose = $3, dosage = $4, schedule_times = $5, updated_at = now()
+      SET medication_name = $2, purpose = $3, dosage = $4, reminders_enabled = $5, schedule_times = $6, updated_at = now()
       FROM public.vyva_users u
       WHERE m.id = $1
         AND u.id = m.vyva_user_id
-        AND u.organization_id = $6
+        AND u.organization_id = $7
       RETURNING m.*, m.id::text, m.vyva_user_id::text
     `,
     [
@@ -4954,6 +4956,7 @@ async function updateMedication(medicationId, payload, context) {
       medication.value.medication_name,
       medication.value.purpose,
       medication.value.dosage,
+      medication.value.reminders_enabled,
       medication.value.schedule_times,
       organizationId,
     ],
@@ -5713,14 +5716,15 @@ async function syncOnboardingRelatedData(userId, registration) {
       if (!name) continue;
       await query(
         `
-          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, schedule_times)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
+          VALUES ($1, $2, $3, $4, $5, $6)
         `,
         [
           userId,
           name,
           nullIfBlank(firstValue(medication.purpose, medication.reason)),
           nullIfBlank(medication.dosage),
+          optionalBooleanValue(medication.reminders_enabled, medication.remindersEnabled, medication.enabled, medication.active) ?? true,
           normalizeStringArray(firstValue(medication.schedule_times, medication.scheduleTimes, medication.times)),
         ],
       );
@@ -7111,6 +7115,7 @@ app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
         SELECT id::text, medication_name, dosage, schedule_times
         FROM public.vyva_user_medications
         WHERE vyva_user_id = $1
+          AND COALESCE(reminders_enabled, true) = true
         ORDER BY medication_name ASC
       `,
       [userId],

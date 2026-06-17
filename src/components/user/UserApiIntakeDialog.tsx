@@ -31,6 +31,7 @@ const payloadExample = `{
     "medication_name": "Medication name",
     "dosage": "10mg",
     "purpose": "blood pressure",
+    "reminders_enabled": true,
     "schedule_times": ["08:00", "20:00"]
   }],
   "caregivers": [{

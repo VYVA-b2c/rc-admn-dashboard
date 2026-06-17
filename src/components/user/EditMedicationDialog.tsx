@@ -1,13 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { apiFetch } from "@/lib/apiClient";
 import type { OperationalMedication } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { isValidIntakeTime } from "@/lib/userIntake";
 
 interface EditMedicationDialogProps {
   open: boolean;
@@ -24,10 +26,22 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
     medication_name: medication?.medication_name || "",
     dosage: medication?.dosage || "",
     purpose: medication?.purpose || "",
+    reminders_enabled: medication?.reminders_enabled ?? true,
     schedule_times: medication?.schedule_times?.join(", ") || "",
   });
 
-  const update = (key: string, value: string) => setForm(f => ({ ...f, [key]: value }));
+  useEffect(() => {
+    if (!open) return;
+    setForm({
+      medication_name: medication?.medication_name || "",
+      dosage: medication?.dosage || "",
+      purpose: medication?.purpose || "",
+      reminders_enabled: medication?.reminders_enabled ?? true,
+      schedule_times: medication?.schedule_times?.join(", ") || "",
+    });
+  }, [medication, open]);
+
+  const update = (key: keyof typeof form, value: string | boolean) => setForm(f => ({ ...f, [key]: value }));
 
   const handleSave = async () => {
     if (!form.medication_name.trim()) {
@@ -35,11 +49,16 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
       return;
     }
     const times = form.schedule_times.split(",").map(t => t.trim()).filter(Boolean);
+    if (times.some((time) => !isValidIntakeTime(time))) {
+      toast({ title: t("profile.medicationTimeInvalid"), variant: "destructive" });
+      return;
+    }
     const payload = {
       vyva_user_id: vyvaUserId,
       medication_name: form.medication_name.trim(),
       dosage: form.dosage.trim() || null,
       purpose: form.purpose.trim() || null,
+      reminders_enabled: form.reminders_enabled,
       schedule_times: times.length ? times : null,
     };
 
@@ -88,6 +107,17 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
           <div className="space-y-1.5">
             <Label>{t("profile.medicationScheduleTimes")}</Label>
             <Input value={form.schedule_times} onChange={e => update("schedule_times", e.target.value)} placeholder={t("profile.medicationSchedulePlaceholder")} />
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-border bg-muted/25 px-4 py-3">
+            <div className="pr-4">
+              <p className="text-sm font-semibold text-foreground">{t("profile.medicationRemindersEnabled")}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{t("profile.medicationReminderToggleDescription")}</p>
+            </div>
+            <Switch
+              aria-label={t("profile.medicationRemindersEnabled")}
+              checked={form.reminders_enabled}
+              onCheckedChange={(checked) => update("reminders_enabled", checked)}
+            />
           </div>
         </div>
         <DialogFooter>

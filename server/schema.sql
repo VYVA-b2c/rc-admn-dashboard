@@ -161,10 +161,14 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_medications (
   medication_name TEXT NOT NULL,
   purpose TEXT,
   dosage TEXT,
+  reminders_enabled BOOLEAN NOT NULL DEFAULT true,
   schedule_times TEXT[],
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.vyva_user_medications
+  ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT true;
 
 CREATE TABLE IF NOT EXISTS public.vyva_user_checkins (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
