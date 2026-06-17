@@ -35,6 +35,8 @@ vi.mock("@/contexts/LanguageContext", () => ({
         "login.magicLinkSent": "Magic link sent",
         "login.magicLinkAlreadyRequestedDesc": "A recent link may already be on its way. Check your inbox before requesting another one.",
         "login.magicLinkSentDesc": "Check your inbox and use the secure link to sign in.",
+        "login.tooManyAttempts": "Try again in one minute",
+        "login.tooManyAttemptsDesc": "No new email was sent. Please wait one minute before requesting another sign-in link.",
         "login.previewHint": "If login fails in preview, try the published URL.",
         "login.sendMagicLink": "Send magic link",
         "login.sendingMagicLink": "Sending magic link...",
@@ -66,6 +68,7 @@ describe("Login", () => {
   beforeEach(() => {
     authMocks.signInWithMagicLink.mockReset();
     authMocks.signInWithMagicLink.mockResolvedValue({ error: null });
+    vi.clearAllMocks();
   });
 
   it("shows email-only magic-link sign-in without OAuth or password controls", () => {
@@ -92,7 +95,7 @@ describe("Login", () => {
     });
   });
 
-  it("treats a recently requested link as a successful inbox check", async () => {
+  it("shows a clear wait message when the provider delays a magic link", async () => {
     authMocks.signInWithMagicLink.mockResolvedValue({ error: null, delayed: true });
     renderLogin();
 
@@ -102,13 +105,13 @@ describe("Login", () => {
     fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Magic link sent", {
-        description: "A recent link may already be on its way. Check your inbox before requesting another one.",
+      expect(toast.error).toHaveBeenCalledWith("Try again in one minute", {
+        description: "No new email was sent. Please wait one minute before requesting another sign-in link.",
       });
     });
   });
 
-  it("does not show an error when the provider asks the user to wait", async () => {
+  it("does not pretend an email was sent when the provider asks the user to wait", async () => {
     authMocks.signInWithMagicLink.mockResolvedValue({
       error: new Error("For security purposes, please wait before requesting another link."),
     });
@@ -120,13 +123,10 @@ describe("Login", () => {
     fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith("Magic link sent", {
-        description: "A recent link may already be on its way. Check your inbox before requesting another one.",
+      expect(toast.error).toHaveBeenCalledWith("Try again in one minute", {
+        description: "No new email was sent. Please wait one minute before requesting another sign-in link.",
       });
     });
-    expect(toast.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("delayed"),
-      expect.anything(),
-    );
+    expect(toast.success).not.toHaveBeenCalledWith("Magic link sent", expect.anything());
   });
 });

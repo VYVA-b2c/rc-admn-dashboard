@@ -966,24 +966,10 @@ function consoleMagicLinkKey({ email, redirectPath, language, origin }) {
 
 async function sendConsoleMagicLinkOnce(options) {
   const key = consoleMagicLinkKey(options);
-  const cached = consoleMagicLinkCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
-    return { sent: true, provider: cached.provider, deduped: true };
-  }
-
   const active = consoleMagicLinkInFlight.get(key);
   if (active) return active;
 
   const promise = sendConsoleMagicLink(options)
-    .then((result) => {
-      if (result.sent) {
-        consoleMagicLinkCache.set(key, {
-          expiresAt: Date.now() + consoleMagicLinkCacheMs,
-          provider: result.provider || null,
-        });
-      }
-      return result;
-    })
     .finally(() => {
       consoleMagicLinkInFlight.delete(key);
     });
