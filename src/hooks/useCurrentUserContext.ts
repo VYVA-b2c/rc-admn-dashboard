@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
+import { isProjectPlatformAdminEmail } from "@/lib/projectAdmin";
 
 export type OrganizationContext = {
   active?: boolean;
@@ -44,6 +45,18 @@ const previewUserContext: CurrentUserContext = {
   userId: "preview",
 };
 
+function applyProjectAdminFallback(user: CurrentUserContext): CurrentUserContext {
+  if (!isProjectPlatformAdminEmail(user.email)) return user;
+  const roles = user.roles.includes("admin") ? user.roles : ["admin", ...user.roles];
+  return {
+    ...user,
+    isAdmin: true,
+    isPlatformAdmin: true,
+    role: "admin",
+    roles,
+  };
+}
+
 export function useCurrentUserContext() {
   const { user } = useAuth();
 
@@ -54,7 +67,8 @@ export function useCurrentUserContext() {
     placeholderData: authBypassEnabled ? { user: previewUserContext } : undefined,
     queryFn: async () => {
       try {
-        return await apiFetch<{ user: CurrentUserContext }>("/api/v1/me");
+        const response = await apiFetch<{ user: CurrentUserContext }>("/api/v1/me");
+        return { user: applyProjectAdminFallback(response.user) };
       } catch (error) {
         if (authBypassEnabled) return { user: previewUserContext };
         throw error;
