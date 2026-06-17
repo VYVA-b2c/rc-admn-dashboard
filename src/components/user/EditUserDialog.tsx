@@ -59,6 +59,7 @@ function userFormState(user?: Partial<OperationalProfileUser> | null, defaultLan
     house_number: String(user?.house_number ?? ""),
     language: String(user?.language ?? defaultLanguage),
     last_name: String(user?.last_name ?? ""),
+    living_context: String(user?.living_context ?? ""),
     phone: String(user?.phone ?? ""),
     post_code: String(user?.post_code ?? ""),
     street: String(user?.street ?? ""),
@@ -71,6 +72,7 @@ function medicationFormState(profileData?: OperationalProfileResponse | null) {
 
   return medications.map((medication) => ({
     dosage: medication.dosage || "",
+    frequency: medication.frequency || "",
     medication_name: medication.medication_name || "",
     purpose: medication.purpose || "",
     reminders_enabled: medication.reminders_enabled ?? true,
@@ -327,6 +329,29 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                 </Select>
               </Field>
             </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field helper={t("userForm.livingContextHelp")} label={t("userForm.livingContext")}>
+                <Select
+                  value={form.living_context || "unknown"}
+                  onValueChange={(value) => update("living_context", value === "unknown" ? "" : value)}
+                >
+                  <SelectTrigger
+                    className={cn("h-12 rounded-xl bg-white px-4", form.living_context ? "text-foreground" : "text-muted-foreground")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+                    <SelectGroup>
+                      <CareSelectItem value="unknown">{t("profile.livingContextUnknown")}</CareSelectItem>
+                      <CareSelectItem value="alone">{t("usersList.livingAlone")}</CareSelectItem>
+                      <CareSelectItem value="partner">{t("usersList.livingWithPartner")}</CareSelectItem>
+                      <CareSelectItem value="family">{t("usersList.livingWithFamily")}</CareSelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+            </div>
           </SectionPanel>
 
           <SectionPanel
@@ -462,6 +487,16 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                           onChange={(event) => updateMedication(index, "purpose", event.target.value)}
                         />
                       </Field>
+                      <Field label={t("userForm.medicationFrequency")} htmlFor={`user-medication-frequency-${index}`}>
+                        <Input
+                          id={`user-medication-frequency-${index}`}
+                          placeholder={t("userForm.medicationFrequencyPlaceholder")}
+                          value={medication.frequency}
+                          onChange={(event) => updateMedication(index, "frequency", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-3">
                       <Field
                         helper={t("userForm.medicationTimesHelp")}
                         label={t("userForm.medicationTimes")}

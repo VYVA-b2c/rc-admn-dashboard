@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.vyva_users (
   date_of_birth DATE,
   gender TEXT,
   language TEXT DEFAULT 'de',
+  living_context TEXT CHECK (living_context IN ('alone', 'partner', 'family')),
   photo_url TEXT,
   emergency_notes TEXT,
   external_user_id TEXT,
@@ -136,6 +137,9 @@ CREATE TABLE IF NOT EXISTS public.vyva_users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE public.vyva_users
+  ADD COLUMN IF NOT EXISTS living_context TEXT CHECK (living_context IN ('alone', 'partner', 'family'));
 
 CREATE TABLE IF NOT EXISTS public.vyva_user_consent (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -161,6 +165,7 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_medications (
   medication_name TEXT NOT NULL,
   purpose TEXT,
   dosage TEXT,
+  frequency TEXT,
   reminders_enabled BOOLEAN NOT NULL DEFAULT true,
   schedule_times TEXT[],
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -168,7 +173,8 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_medications (
 );
 
 ALTER TABLE public.vyva_user_medications
-  ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT true;
+  ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT true,
+  ADD COLUMN IF NOT EXISTS frequency TEXT;
 
 CREATE TABLE IF NOT EXISTS public.vyva_user_checkins (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

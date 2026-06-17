@@ -9,6 +9,7 @@ export type UserIntakeIdentity = {
   house_number: string;
   language: string;
   last_name: string;
+  living_context: string;
   phone: string;
   post_code: string;
   street: string;
@@ -16,6 +17,7 @@ export type UserIntakeIdentity = {
 
 export type MedicationIntake = {
   dosage: string;
+  frequency: string;
   medication_name: string;
   purpose: string;
   reminders_enabled: boolean;
@@ -70,6 +72,7 @@ export const userIntakeTemplateHeaders = [
   "medication_name",
   "medication_dosage",
   "medication_purpose",
+  "medication_frequency",
   "medication_times",
   "caregiver_name",
   "caregiver_phone",
@@ -103,6 +106,7 @@ export const userIntakeHeaderAliases: Record<string, string> = {
   lastname: "last_name",
   medication: "medication_name",
   medication_dose: "medication_dosage",
+  medication_frequency: "medication_frequency",
   medication_schedule: "medication_times",
   medication_time: "medication_times",
   mobile: "phone",
@@ -119,7 +123,8 @@ export const userIntakeHeaderAliases: Record<string, string> = {
 const trueValues = new Set(["1", "active", "enabled", "ja", "si", "true", "y", "yes"]);
 const falseValues = new Set(["0", "disabled", "false", "inactive", "n", "nein", "no"]);
 
-function nullIfBlank(value: string) {
+function nullIfBlank(value?: string | null) {
+  if (value === undefined || value === null) return null;
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
 }
@@ -127,6 +132,7 @@ function nullIfBlank(value: string) {
 export function emptyMedicationIntake(): MedicationIntake {
   return {
     dosage: "",
+    frequency: "",
     medication_name: "",
     purpose: "",
     reminders_enabled: true,
@@ -182,8 +188,9 @@ export function parseIntakeBoolean(value: string) {
 
 export function hasMedicationDetail(medication: MedicationIntake) {
   return Boolean(
-    medication.medication_name.trim() ||
+      medication.medication_name.trim() ||
       medication.dosage.trim() ||
+      medication.frequency?.trim() ||
       medication.purpose.trim() ||
       medication.schedule_times.trim(),
   );
@@ -195,13 +202,17 @@ export function hasCaregiverDetail(caregiver: CaregiverIntake) {
 
 function normalizedMedications(medications: MedicationIntake[] = []) {
   return medications
-    .map((medication) => ({
-      dosage: nullIfBlank(medication.dosage),
-      medication_name: medication.medication_name.trim(),
-      purpose: nullIfBlank(medication.purpose),
-      reminders_enabled: medication.reminders_enabled,
-      schedule_times: splitIntakeList(medication.schedule_times),
-    }))
+    .map((medication) => {
+      const frequency = nullIfBlank(medication.frequency);
+      return {
+        dosage: nullIfBlank(medication.dosage),
+        ...(frequency ? { frequency } : {}),
+        medication_name: medication.medication_name.trim(),
+        purpose: nullIfBlank(medication.purpose),
+        reminders_enabled: medication.reminders_enabled,
+        schedule_times: splitIntakeList(medication.schedule_times),
+      };
+    })
     .filter((medication) => medication.medication_name);
 }
 
@@ -254,6 +265,7 @@ export function buildUserIntakePayload({
     house_number: nullIfBlank(identity.house_number),
     language: normalizeIntakeLanguage(identity.language, defaultLanguage),
     last_name: identity.last_name.trim(),
+    living_context: nullIfBlank(identity.living_context),
     phone: nullIfBlank(identity.phone),
     post_code: nullIfBlank(identity.post_code),
     street: nullIfBlank(identity.street),

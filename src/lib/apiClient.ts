@@ -3,6 +3,7 @@ import { authBypassEnabled } from "@/lib/authMode";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 export const ACTIVE_ORGANIZATION_STORAGE_KEY = "active-organization-id";
+export const AUTH_SESSION_EXPIRED_EVENT = "vyva:session-expired";
 
 const DEFAULT_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS ?? 3500);
 
@@ -28,8 +29,12 @@ async function parseApiResponse<T>(res: Response): Promise<T> {
   return (text ? text : undefined) as T;
 }
 
+export function isAuthSessionErrorMessage(message: string) {
+  return /invalid session|authentication required|jwt|token|session expired|sign in again/i.test(message);
+}
+
 function isSessionAuthError(status: number, message: string) {
-  return status === 401 && /invalid session|authentication required|jwt|token/i.test(message);
+  return status === 401 && isAuthSessionErrorMessage(message);
 }
 
 async function clearExpiredSupabaseSession() {
@@ -38,6 +43,11 @@ async function clearExpiredSupabaseSession() {
   } catch {
     // Ignore cleanup failures and surface the original auth error instead.
   }
+}
+
+function notifySessionExpired() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(AUTH_SESSION_EXPIRED_EVENT));
 }
 
 export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptions = {}): Promise<T> {
@@ -81,11 +91,13 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
           const retryMessage = await responseErrorMessage(retryRes);
           if (isSessionAuthError(retryRes.status, retryMessage)) {
             await clearExpiredSupabaseSession();
+            notifySessionExpired();
             throw new Error("Your session expired. Please sign in again.");
           }
           throw new Error(retryMessage);
         }
         await clearExpiredSupabaseSession();
+        notifySessionExpired();
         throw new Error("Your session expired. Please sign in again.");
       }
       throw new Error(message);

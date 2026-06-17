@@ -139,6 +139,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
     const dateOfBirth = get("date_of_birth");
     const medicationName = get("medication_name");
     const medicationDosage = get("medication_dosage");
+    const medicationFrequency = get("medication_frequency");
     const medicationPurpose = get("medication_purpose");
     const medicationTimes = splitIntakeList(get("medication_times"));
     const checkinTime = get("checkin_preferred_time");
@@ -162,7 +163,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
     if (caregiverPhone && !isValidIntakePhone(caregiverPhone)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.caregiverPhone", "caregiver_phone"));
     }
-    if ((medicationDosage || medicationPurpose || medicationTimes.length) && !medicationName) {
+    if ((medicationDosage || medicationFrequency || medicationPurpose || medicationTimes.length) && !medicationName) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.medicationName", "medication_name"));
     }
     if (medicationTimes.some((time) => !isValidIntakeTime(time))) {
@@ -192,6 +193,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
     const medications: MedicationIntake[] = medicationName
       ? [{
           dosage: medicationDosage,
+          frequency: medicationFrequency,
           medication_name: medicationName,
           purpose: medicationPurpose,
           reminders_enabled: true,

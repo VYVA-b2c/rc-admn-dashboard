@@ -123,4 +123,29 @@ describe("Campaigns", () => {
     expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
     expect(screen.getAllByText("API request timed out after 10000ms").length).toBeGreaterThan(0);
   });
+
+  it("suppresses the broken load panels when the session has expired", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/campaigns-dashboard/campaigns")) {
+        return new Response(JSON.stringify({ error: "Invalid session" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
+
+    renderCampaigns();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Loading...").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.queryByText("Campaigns could not be loaded.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Invalid session")).not.toBeInTheDocument();
+  });
 });

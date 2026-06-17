@@ -17,7 +17,7 @@ vi.mock("@/lib/authMode", () => ({
   authBypassEnabled: false,
 }));
 
-import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
+import { ACTIVE_ORGANIZATION_STORAGE_KEY, AUTH_SESSION_EXPIRED_EVENT, apiFetch } from "@/lib/apiClient";
 
 describe("apiFetch organization scoping", () => {
   afterEach(() => {
@@ -80,6 +80,8 @@ describe("apiFetch organization scoping", () => {
     supabaseAuthMocks.getSession.mockResolvedValue({ data: { session: { access_token: "stale-token" } } });
     supabaseAuthMocks.refreshSession.mockResolvedValue({ data: { session: null } });
     supabaseAuthMocks.signOut.mockResolvedValue({ error: null });
+    const expiredListener = vi.fn();
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, expiredListener);
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Invalid session" }), {
       status: 401,
       headers: { "content-type": "application/json" },
@@ -89,5 +91,7 @@ describe("apiFetch organization scoping", () => {
 
     expect(supabaseAuthMocks.refreshSession).toHaveBeenCalledTimes(1);
     expect(supabaseAuthMocks.signOut).toHaveBeenCalledWith({ scope: "local" });
+    expect(expiredListener).toHaveBeenCalledTimes(1);
+    window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, expiredListener);
   });
 });

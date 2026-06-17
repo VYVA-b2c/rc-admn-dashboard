@@ -392,7 +392,7 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
   const hasAccess = Boolean(carePlanAccess);
   if (!hasProviders && !hasServices && !hasAccess && !scheduledContact) return normalized;
-  return applyScheduledSessionContact({
+  const merged = {
     ...normalized,
     careProviders: hasProviders ? careProviders : normalized.careProviders,
     caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
@@ -404,7 +404,18 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
     can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
     edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
-  }, scheduledContact);
+  };
+  return applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
+    checkins: merged.checkins,
+    brainCoach: merged.brainCoach,
+    medicationActivity: merged.medicationActivity,
+  })));
+}
+
+function normalizeLivingContextValue(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "alone" || normalized === "partner" || normalized === "family") return normalized;
+  return null;
 }
 
 async function fetchExternalUserProfileForShadow(externalUserId) {
@@ -2393,6 +2404,7 @@ async function loadDashboardUsers(context) {
       c.preferred_time AS checkin_preferred_time,
       NULL::text AS checkin_last_status,
       NULL::text AS checkin_last_reported_at,
+      u.living_context,
       COALESCE(cp.care_provider_count, 0) AS care_provider_count,
       cp.primary_caregiver_name,
       cp.primary_professional_name,
@@ -3556,6 +3568,10 @@ function normalizeCheckin(row) {
     pause_reason: row.pause_reason || null,
     pause_source: row.pause_source || null,
     is_paused: isPaused,
+    last_checkin_at: row.last_checkin_at ? new Date(row.last_checkin_at).toISOString() : null,
+    lastCheckinAt: row.last_checkin_at ? new Date(row.last_checkin_at).toISOString() : null,
+    last_outcome: row.last_outcome || null,
+    lastOutcome: row.last_outcome || null,
     consent_given: Boolean(row.consent_given),
     assigned_provider_name: row.assigned_provider_name || null,
     can_edit: Boolean(row.can_edit),
@@ -3666,24 +3682,67 @@ function scheduledContactCandidate(record, dateKeys) {
   };
 }
 
+function normalizeScheduledContactServiceType(value) {
+  const normalized = normalizeServiceType(value);
+  if (normalized === "scheduled_call" || normalized === "scheduled") return "checkins";
+  if (normalized === "braincoach") return "brain_coach";
+  return normalized || null;
+}
+
+function buildScheduledContactCandidate(record, dateKeys, serviceType = null, statusKeys = scheduledSessionStatusKeys) {
+  const at = validIsoDate(recordFirstString(record, dateKeys));
+  if (!at) return null;
+  return {
+    at,
+    status: recordFirstString(record, statusKeys),
+    serviceType: normalizeScheduledContactServiceType(serviceType),
+  };
+}
+
+function latestScheduledContact(...candidates) {
+  return candidates
+    .flat()
+    .filter((candidate) => candidate?.at)
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] || null;
+}
+
+function latestScheduledContactFromServices(services = {}) {
+  const checkinsCandidate = buildScheduledContactCandidate(
+    services.checkins,
+    scheduledSessionLastContactDateKeys,
+    "checkins",
+  );
+  const brainCoachCandidate = buildScheduledContactCandidate(
+    services.brainCoach,
+    ["lastSessionAt", "last_session_at", ...scheduledSessionLastContactDateKeys],
+    "brain_coach",
+  );
+  const medicationCandidate = buildScheduledContactCandidate(
+    services.medicationActivity,
+    ["occurredAt", "occurred_at", "reportedAt", "reported_at", "createdAt", "created_at"],
+    "medication",
+  );
+  return latestScheduledContact(checkinsCandidate, brainCoachCandidate, medicationCandidate);
+}
+
 function latestScheduledSessionContactFromPayload(payload, userId) {
   const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
   const candidates = [];
 
   for (const item of list) {
     if (!scheduledSessionMatchesUser(item, userId)) continue;
+    const serviceType = normalizeScheduledContactServiceType(item?.type);
 
-    const parentCandidate = scheduledContactCandidate(item, scheduledSessionLastContactDateKeys);
+    const parentCandidate = buildScheduledContactCandidate(item, scheduledSessionLastContactDateKeys, serviceType);
     if (parentCandidate) candidates.push(parentCandidate);
 
     for (const log of scheduledSessionLogRecords(item)) {
-      const logCandidate = scheduledContactCandidate(log, scheduledSessionLogDateKeys);
+      const logCandidate = buildScheduledContactCandidate(log, scheduledSessionLogDateKeys, serviceType);
       if (logCandidate) candidates.push(logCandidate);
     }
   }
 
-  return candidates
-    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] || null;
+  return latestScheduledContact(candidates);
 }
 
 async function loadLatestScheduledSessionContact(userId) {
@@ -3700,10 +3759,13 @@ async function loadLatestScheduledSessionContact(userId) {
 
 function applyScheduledSessionContact(data, contact) {
   if (!contact?.at || !data || typeof data !== "object") return data;
+  const serviceType = normalizeScheduledContactServiceType(contact.serviceType);
   const checkins = data.checkins || null;
+  const brainCoach = data.brainCoach || null;
+  const medicationActivity = data.medicationActivity || null;
   return {
     ...data,
-    ...(checkins
+    ...(checkins && (!serviceType || serviceType === "checkins")
       ? {
           checkins: {
             ...checkins,
@@ -3711,6 +3773,27 @@ function applyScheduledSessionContact(data, contact) {
             lastCheckinAt: contact.at,
             last_outcome: contact.status || checkins.last_outcome || checkins.lastOutcome || null,
             lastOutcome: contact.status || checkins.lastOutcome || checkins.last_outcome || null,
+          },
+        }
+      : {}),
+    ...(brainCoach && serviceType === "brain_coach"
+      ? {
+          brainCoach: {
+            ...brainCoach,
+            last_session_at: contact.at,
+            lastSessionAt: contact.at,
+            last_outcome: contact.status || brainCoach.last_outcome || brainCoach.lastOutcome || null,
+            lastOutcome: contact.status || brainCoach.lastOutcome || brainCoach.last_outcome || null,
+          },
+        }
+      : {}),
+    ...(medicationActivity && serviceType === "medication"
+      ? {
+          medicationActivity: {
+            ...medicationActivity,
+            occurred_at: contact.at,
+            occurredAt: contact.at,
+            status: contact.status || medicationActivity.status || null,
           },
         }
       : {}),
@@ -4046,6 +4129,10 @@ function normalizeBrainCoachSession(row) {
     enabled: Boolean(row.enabled),
     frequency: row.frequency,
     preferred_time: row.preferred_time,
+    last_session_at: row.last_session_at ? new Date(row.last_session_at).toISOString() : null,
+    lastSessionAt: row.last_session_at ? new Date(row.last_session_at).toISOString() : null,
+    last_outcome: row.last_outcome || null,
+    lastOutcome: row.last_outcome || null,
     ...pauseState,
   };
 }
@@ -4161,6 +4248,7 @@ function normalizeUserPayload(payload, creating = false, organization = null) {
   const lastName = nullIfBlank(payload?.last_name);
   const dateOfBirth = nullIfBlank(payload?.date_of_birth);
   const language = nullIfBlank(payload?.language) || organization?.defaultLanguage || "de";
+  const livingContext = normalizeLivingContextValue(firstValue(payload?.living_context, payload?.livingContext));
 
   if (!firstName) return { error: "first_name is required" };
   if (!lastName) return { error: "last_name is required" };
@@ -4181,6 +4269,7 @@ function normalizeUserPayload(payload, creating = false, organization = null) {
       date_of_birth: dateOfBirth,
       gender: nullIfBlank(payload?.gender),
       language,
+      living_context: livingContext,
       emergency_notes: nullIfBlank(payload?.emergency_notes),
     },
   };
@@ -5036,10 +5125,18 @@ async function replaceMedicationsWithClient(client, userId, medications) {
   for (const medication of medications) {
     await client.query(
       `
-        INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, frequency, reminders_enabled, schedule_times)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
       `,
-      [userId, medication.medication_name, medication.purpose, medication.dosage, medication.reminders_enabled ?? true, medication.schedule_times],
+      [
+        userId,
+        medication.medication_name,
+        medication.purpose,
+        medication.dosage,
+        medication.frequency,
+        medication.reminders_enabled ?? true,
+        medication.schedule_times,
+      ],
     );
   }
 }
@@ -5140,9 +5237,10 @@ async function createDashboardUser(payload, context) {
           date_of_birth,
           gender,
           language,
+          living_context,
           emergency_notes
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         RETURNING *, id::text
       `,
       [
@@ -5159,6 +5257,7 @@ async function createDashboardUser(payload, context) {
         user.value.date_of_birth,
         user.value.gender,
         user.value.language,
+        user.value.living_context,
         user.value.emergency_notes,
       ],
     );
@@ -5202,9 +5301,10 @@ async function updateDashboardUser(userId, payload, context) {
           date_of_birth = $9,
           gender = $10,
           language = $11,
-          emergency_notes = $12,
+          living_context = $12,
+          emergency_notes = $13,
           updated_at = now()
-        WHERE id = $1 AND organization_id = $13
+        WHERE id = $1 AND organization_id = $14
         RETURNING *, id::text
       `,
       [
@@ -5219,6 +5319,7 @@ async function updateDashboardUser(userId, payload, context) {
         user.value.date_of_birth,
         user.value.gender,
         user.value.language,
+        user.value.living_context,
         user.value.emergency_notes,
         organizationId,
       ],
@@ -5240,6 +5341,33 @@ async function updateDashboardUser(userId, payload, context) {
   }
 }
 
+async function appendDashboardUserNote(userId, payload, context) {
+  const organizationId = scopeOrganizationId(context);
+  const note = nullIfBlank(firstValue(payload?.note, payload?.text));
+  if (!note) return { error: "note is required" };
+
+  const author = nullIfBlank(context?.email);
+  const timestamp = new Date().toISOString();
+  const entry = `[${timestamp}${author ? ` - ${author}` : ""}] ${note}`;
+  const result = await query(
+    `
+      UPDATE public.vyva_users
+      SET
+        emergency_notes = CASE
+          WHEN emergency_notes IS NULL OR btrim(emergency_notes) = '' THEN $3
+          ELSE emergency_notes || E'\n\n' || $3
+        END,
+        updated_at = now()
+      WHERE id = $1 AND organization_id = $2
+      RETURNING *, id::text
+    `,
+    [userId, organizationId, entry],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: result.rows[0] };
+}
+
 function normalizeMedicationPayload(payload, creating = false) {
   const medicationName = nullIfBlank(firstValue(payload?.medication_name, payload?.medicationName, payload?.name));
   if (!medicationName) return { error: "medication_name is required" };
@@ -5250,6 +5378,7 @@ function normalizeMedicationPayload(payload, creating = false) {
       medication_name: medicationName,
       purpose: nullIfBlank(firstValue(payload?.purpose, payload?.reason)),
       dosage: nullIfBlank(payload?.dosage),
+      frequency: nullIfBlank(firstValue(payload?.frequency, payload?.cadence, payload?.repeat)),
       reminders_enabled: optionalBooleanValue(payload?.reminders_enabled, payload?.remindersEnabled, payload?.enabled, payload?.active) ?? true,
       schedule_times: normalizeStringArray(firstValue(payload?.schedule_times, payload?.scheduleTimes, payload?.times)),
     },
@@ -5265,8 +5394,8 @@ async function createMedication(payload, context) {
 
   const result = await query(
     `
-      INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, frequency, reminders_enabled, schedule_times)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       RETURNING *, id::text, vyva_user_id::text
     `,
     [
@@ -5274,6 +5403,7 @@ async function createMedication(payload, context) {
       medication.value.medication_name,
       medication.value.purpose,
       medication.value.dosage,
+      medication.value.frequency,
       medication.value.reminders_enabled,
       medication.value.schedule_times,
     ],
@@ -5303,11 +5433,11 @@ async function updateMedication(medicationId, payload, context) {
   const result = await query(
     `
       UPDATE public.vyva_user_medications m
-      SET medication_name = $2, purpose = $3, dosage = $4, reminders_enabled = $5, schedule_times = $6, updated_at = now()
+      SET medication_name = $2, purpose = $3, dosage = $4, frequency = $5, reminders_enabled = $6, schedule_times = $7, updated_at = now()
       FROM public.vyva_users u
       WHERE m.id = $1
         AND u.id = m.vyva_user_id
-        AND u.organization_id = $7
+        AND u.organization_id = $8
       RETURNING m.*, m.id::text, m.vyva_user_id::text
     `,
     [
@@ -5315,6 +5445,7 @@ async function updateMedication(medicationId, payload, context) {
       medication.value.medication_name,
       medication.value.purpose,
       medication.value.dosage,
+      medication.value.frequency,
       medication.value.reminders_enabled,
       medication.value.schedule_times,
       organizationId,
@@ -6075,14 +6206,15 @@ async function syncOnboardingRelatedData(userId, registration) {
       if (!name) continue;
       await query(
         `
-          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, reminders_enabled, schedule_times)
-          VALUES ($1, $2, $3, $4, $5, $6)
+          INSERT INTO public.vyva_user_medications (vyva_user_id, medication_name, purpose, dosage, frequency, reminders_enabled, schedule_times)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
         `,
         [
           userId,
           name,
           nullIfBlank(firstValue(medication.purpose, medication.reason)),
           nullIfBlank(medication.dosage),
+          nullIfBlank(firstValue(medication.frequency, medication.cadence, medication.repeat)),
           optionalBooleanValue(medication.reminders_enabled, medication.remindersEnabled, medication.enabled, medication.active) ?? true,
           normalizeStringArray(firstValue(medication.schedule_times, medication.scheduleTimes, medication.times)),
         ],
@@ -6400,7 +6532,14 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       return;
     }
     const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
-    res.json(applyScheduledSessionContact(data, scheduledContact));
+    res.json(applyScheduledSessionContact(data, latestScheduledContact(
+      scheduledContact,
+      latestScheduledContactFromServices({
+        checkins: data.checkins,
+        brainCoach: data.brainCoach,
+        medicationActivity: data.medicationActivity,
+      }),
+    )));
   } catch (error) {
     next(error);
   }
@@ -6435,6 +6574,33 @@ async function updateUserRoute(req, res) {
 
 app.patch("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
+
+app.post("/api/v1/user-dashboard/users/:id/notes", asyncRoute(async (req, res) => {
+  const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}/notes`, {
+    method: "POST",
+    body: req.body,
+  });
+  if (upstream?.ok) {
+    res.status(upstream.status || 201).json(upstream.data);
+    return;
+  }
+  if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+    res.status(upstream.status).json(upstream.data);
+    return;
+  }
+
+  const result = await appendDashboardUserNote(req.params.id, req.body, req.context);
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  if (result.notFound) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+
+  res.status(201).json({ user: result.value });
+}));
 
 function sendWriteResult(res, result, okStatus = 200) {
   if (result.error) {

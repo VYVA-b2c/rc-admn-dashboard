@@ -42,6 +42,7 @@ export interface OperationalProfileUser extends ProfileRecord {
   house_number?: string | null;
   language?: string | null;
   last_name?: string | null;
+  living_context?: string | null;
   phone?: string | null;
   photo_url?: string | null;
   post_code?: string | null;
@@ -65,6 +66,7 @@ export interface OperationalMedication extends ProfileRecord {
   id: string;
   created_at?: string;
   dosage?: string | null;
+  frequency?: string | null;
   medication_name?: string | null;
   purpose?: string | null;
   reminders_enabled?: boolean;

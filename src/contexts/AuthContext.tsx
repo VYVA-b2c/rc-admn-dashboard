@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
-import { BASE_URL } from "@/lib/apiClient";
+import { AUTH_SESSION_EXPIRED_EVENT, BASE_URL } from "@/lib/apiClient";
 import type { Language } from "@/lib/translations";
 
 interface AuthContextType {
@@ -134,9 +134,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await finalizeSignedOutState();
     };
 
+    const handleSessionExpired = () => {
+      applySession(null);
+      setLoading(false);
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+    }
+
     void restoreSession();
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+      if (typeof window !== "undefined") {
+        window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+      }
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {

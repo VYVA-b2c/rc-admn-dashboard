@@ -85,6 +85,14 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
   return `${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase() || "VP";
 }
 
+function livingContextKey(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "alone") return "usersList.livingAlone";
+  if (normalized === "partner") return "usersList.livingWithPartner";
+  if (normalized === "family") return "usersList.livingWithFamily";
+  return null;
+}
+
 function getRiskScore(user: OperationalQueueUser) {
   if (typeof user.riskScore === "number" && user.riskScore > 0) return user.riskScore;
 
@@ -147,7 +155,7 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     hasCheckinIssue: !(user.checkinEnabled ?? false),
     hasNoResponse: Boolean(meta?.noResponse),
     isUnassigned: !assignedTo && careProviderCount === 0,
-    livingContextKey: meta?.livingContextKey,
+    livingContextKey: meta?.livingContextKey ?? livingContextKey(user.living_context),
   };
 }
 

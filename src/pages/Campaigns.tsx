@@ -45,7 +45,7 @@ import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { toast } from "@/hooks/use-toast";
-import { apiFetch } from "@/lib/apiClient";
+import { apiFetch, isAuthSessionErrorMessage } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import { demoOperationalUsers } from "@/lib/operationalDemoData";
 import { getTranslation, type Language } from "@/lib/translations";
@@ -955,6 +955,9 @@ export default function Campaigns() {
   });
 
   const jobs = jobsQuery.data ?? [];
+  const authSessionError = [campaignsQuery.error, runsQuery.error, jobsQuery.error].some(
+    (error) => error instanceof Error && isAuthSessionErrorMessage(error.message),
+  );
 
   const filteredCampaigns = useMemo(() => {
     const normalized = search.trim().toLowerCase();
@@ -1617,6 +1620,10 @@ export default function Campaigns() {
     setGuideDialogOpen(true);
     setGuidePromptShown(true);
   }, [guidePromptShown, noCampaignsCreated]);
+
+  if (authSessionError) {
+    return <LoadingCampaignsPanel label={t("login.loading")} />;
+  }
 
   return (
     <div className="mx-auto max-w-[1680px] space-y-5">

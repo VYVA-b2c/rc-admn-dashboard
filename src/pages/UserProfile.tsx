@@ -29,8 +29,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
 import { toast } from "@/hooks/use-toast";
@@ -158,6 +161,14 @@ function isServicePaused(service: Record<string, unknown> | undefined | null) {
   return Boolean(pausedUntil && new Date(pausedUntil).getTime() > Date.now());
 }
 
+function livingContextKey(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "alone") return "usersList.livingAlone";
+  if (normalized === "partner") return "usersList.livingWithPartner";
+  if (normalized === "family") return "usersList.livingWithFamily";
+  return null;
+}
+
 async function fetchUserProfile(id: string): Promise<OperationalProfileResponse> {
   if (isDemoUserId(id)) return getDemoProfileById(id);
 
@@ -195,6 +206,9 @@ export default function UserProfile() {
   const [editBrainOpen, setEditBrainOpen] = useState(false);
   const [editSensorOpen, setEditSensorOpen] = useState(false);
   const [editSensorTarget, setEditSensorTarget] = useState<OperationalSensor | null>(null);
+  const [addNoteOpen, setAddNoteOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
@@ -291,6 +305,40 @@ export default function UserProfile() {
   const brainCoach = data.brainCoach ?? null;
   const medicationActivity = data.medicationActivity ?? null;
   const isPreviewDemo = Boolean(data.isPreviewDemo);
+  const openAddNoteDialog = () => {
+    setNoteDraft("");
+    setAddNoteOpen(true);
+  };
+  const handleSaveProfileNote = async () => {
+    const note = noteDraft.trim();
+    if (!note) {
+      toast({ title: t("profile.noteRequired"), variant: "destructive" });
+      return;
+    }
+    if (isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
+    setSavingNote(true);
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${user.id}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      });
+      toast({ title: t("profile.noteSaved") });
+      setAddNoteOpen(false);
+      setNoteDraft("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] }),
+        queryClient.invalidateQueries({ queryKey: ["gis-data"] }),
+      ]);
+    } catch {
+      toast({ title: t("profile.noteSaveFailed"), variant: "destructive" });
+    } finally {
+      setSavingNote(false);
+    }
+  };
 
   const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || t("profile.unknownPerson");
   const firstName = String(user.first_name ?? fullName.split(" ")[0] ?? t("profile.unknownPerson"));
@@ -305,7 +353,7 @@ export default function UserProfile() {
     familyConsentKey: data.consent?.consent_given ? "profile.familyConsentActive" : "profile.familyConsentUnknown",
     preferredChannel: "phone",
     lastContactKey: "profile.lastContactUnknown",
-    livingContextKey: "profile.livingContextUnknown",
+    livingContextKey: livingContextKey(user.living_context) ?? "profile.livingContextUnknown",
     nextActionKey: "usersList.nextAction.review",
     reasonKey: criticalAlerts ? "queue.reason.default" : "profile.reasonReview",
     riskStatus: criticalAlerts ? "urgent" : warningAlerts ? "review" : "stable",
@@ -467,6 +515,7 @@ export default function UserProfile() {
   })();
 
   const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
+  const canEditProfile = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_care_plan ?? isAdmin);
   const canAssignProviders = !authBypassEnabled && !isPreviewDemo;
   const canEditMedications = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_medications ?? isAdmin);
   const canEditCheckins = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_checkins ?? isAdmin);
@@ -492,7 +541,7 @@ export default function UserProfile() {
               {t("profile.previewData")}
             </Badge>
           )}
-          {showAdminControls && (
+          {canEditProfile && (
             <Button variant="outline" className="h-10 rounded-full border-primary/20 text-primary hover:bg-primary/10" onClick={() => setEditUserOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               {t("profile.editProfile")}
@@ -530,8 +579,6 @@ export default function UserProfile() {
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold text-muted-foreground xl:justify-end">
               <MetaItem icon={ChannelIcon} label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
               <MetaItem icon={Phone} label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
-              <MetaItem icon={Clock} label={t("profile.lastContact")} value={lastContactValue} />
-              <MetaItem icon={UserRound} label={t("careProviders.coverage")} value={assignedProviderLabel ?? t("usersList.unassigned")} />
             </div>
           </div>
 
@@ -540,7 +587,7 @@ export default function UserProfile() {
               <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callNow")} onClick={() => navigate(`/risk-queue/${user.id}/prepare-call`)} />
               <ActionButton icon={MessageCircle} label={t("profile.sendWhatsApp")} onClick={() => handleOperationalAction("profile.action.whatsapp")} />
               <ActionButton icon={Users} label={t("profile.contactCaregiver")} onClick={() => handleOperationalAction("profile.action.caregiver")} />
-              <ActionButton icon={Pencil} label={t("profile.addNote")} onClick={() => handleOperationalAction("profile.action.note")} />
+              <ActionButton icon={Pencil} label={t("profile.addNote")} onClick={openAddNoteDialog} />
             </div>
           </div>
         </CardContent>
@@ -562,6 +609,12 @@ export default function UserProfile() {
             <InfoTile label={t("profile.lastContact")} value={lastContactValue} />
             <InfoTile label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
           </div>
+          {user.emergency_notes && (
+            <div className="mt-4 rounded-xl border border-border/70 bg-muted/25 px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.careNotes")}</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-foreground">{user.emergency_notes}</p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -653,6 +706,11 @@ export default function UserProfile() {
                             {med.schedule_times.join(", ")}
                           </p>
                         )}
+                        {med.frequency && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t("profile.medicationFrequency")}: {med.frequency}
+                          </p>
+                        )}
                       </div>
                       {canEditMedications && (
                         <div className="flex gap-1">
@@ -711,27 +769,29 @@ export default function UserProfile() {
               <EmptyLine icon={Users} label={t("careProviders.noProviders")} />
             ) : (
               <div className="space-y-4">
-                <ProviderGroup
-                  title={t("careProviders.informalShort")}
-                  providers={additionalEmergencyContacts}
-                  emptyLabel={t("careProviders.noAdditionalEmergencyContacts")}
-                  canAssignProviders={canAssignProviders}
-                  showAdminControls={showAdminControls}
-                  onEditCaregiver={(provider) => {
-                    setEditCaregiverTarget({
-                      id: provider.id,
-                      assignment_id: provider.id,
-                      care_provider_contact_id: provider.provider_id,
-                      caretaker_name: provider.display_name,
-                      caretaker_phone: provider.phone,
-                      is_primary: provider.is_primary,
-                      relationship_label: provider.relationship_label,
-                      notes: provider.notes,
-                    });
-                    setEditCaregiverOpen(true);
-                  }}
-                  onUnassign={handleUnassignCareProvider}
-                />
+                {additionalEmergencyContacts.length > 0 && (
+                  <ProviderGroup
+                    title={t("careProviders.informalShort")}
+                    providers={additionalEmergencyContacts}
+                    emptyLabel={t("careProviders.noAdditionalEmergencyContacts")}
+                    canAssignProviders={canAssignProviders}
+                    showAdminControls={showAdminControls}
+                    onEditCaregiver={(provider) => {
+                      setEditCaregiverTarget({
+                        id: provider.id,
+                        assignment_id: provider.id,
+                        care_provider_contact_id: provider.provider_id,
+                        caretaker_name: provider.display_name,
+                        caretaker_phone: provider.phone,
+                        is_primary: provider.is_primary,
+                        relationship_label: provider.relationship_label,
+                        notes: provider.notes,
+                      });
+                      setEditCaregiverOpen(true);
+                    }}
+                    onUnassign={handleUnassignCareProvider}
+                  />
+                )}
                 {redCrossStaffProviders.length > 0 && (
                   <ProviderGroup
                     title={t("careProviders.professionalShort")}
@@ -877,6 +937,32 @@ export default function UserProfile() {
       {editCheckinOpen && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
       {editBrainOpen && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
       {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
+      <Dialog open={addNoteOpen} onOpenChange={(open) => !savingNote && setAddNoteOpen(open)}>
+        <DialogContent className="max-w-lg rounded-2xl border-border bg-white">
+          <DialogHeader>
+            <DialogTitle>{t("profile.addNoteTitle")}</DialogTitle>
+            <DialogDescription>{t("profile.addNoteDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="profile-note">{t("profile.note")}</Label>
+            <Textarea
+              id="profile-note"
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              placeholder={t("profile.notePlaceholder")}
+              className="min-h-32 rounded-xl"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" className="rounded-full" disabled={savingNote} onClick={() => setAddNoteOpen(false)}>
+              {t("userForm.cancel")}
+            </Button>
+            <Button type="button" className="rounded-full" disabled={savingNote} onClick={handleSaveProfileNote}>
+              {savingNote ? t("userForm.saving") : t("userForm.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

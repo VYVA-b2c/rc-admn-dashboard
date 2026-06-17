@@ -11,6 +11,7 @@ export interface GISUser {
   country?: string | null;
   phone: string | null;
   date_of_birth: string | null;
+  living_context?: string | null;
   coords: [number, number] | null;
 
   activeAlerts: number;

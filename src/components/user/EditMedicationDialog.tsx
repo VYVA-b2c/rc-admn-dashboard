@@ -26,6 +26,7 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
     medication_name: medication?.medication_name || "",
     dosage: medication?.dosage || "",
     purpose: medication?.purpose || "",
+    frequency: medication?.frequency || "",
     reminders_enabled: medication?.reminders_enabled ?? true,
     schedule_times: medication?.schedule_times?.join(", ") || "",
   });
@@ -36,6 +37,7 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
       medication_name: medication?.medication_name || "",
       dosage: medication?.dosage || "",
       purpose: medication?.purpose || "",
+      frequency: medication?.frequency || "",
       reminders_enabled: medication?.reminders_enabled ?? true,
       schedule_times: medication?.schedule_times?.join(", ") || "",
     });
@@ -58,6 +60,7 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
       medication_name: form.medication_name.trim(),
       dosage: form.dosage.trim() || null,
       purpose: form.purpose.trim() || null,
+      frequency: form.frequency.trim() || null,
       reminders_enabled: form.reminders_enabled,
       schedule_times: times.length ? times : null,
     };
@@ -107,6 +110,10 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
           <div className="space-y-1.5">
             <Label>{t("profile.medicationScheduleTimes")}</Label>
             <Input value={form.schedule_times} onChange={e => update("schedule_times", e.target.value)} placeholder={t("profile.medicationSchedulePlaceholder")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t("profile.medicationFrequency")}</Label>
+            <Input value={form.frequency} onChange={e => update("frequency", e.target.value)} placeholder={t("profile.medicationFrequencyPlaceholder")} />
           </div>
           <div className="flex items-center justify-between rounded-xl border border-border bg-muted/25 px-4 py-3">
             <div className="pr-4">
