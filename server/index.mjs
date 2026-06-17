@@ -634,8 +634,12 @@ function httpError(status, message, expose = status < 500) {
   return error;
 }
 
+const PROJECT_OWNER_PLATFORM_ADMIN_EMAILS = [
+  "karim.assad@mokadigital.net",
+];
+
 function platformAdminEmails() {
-  return String(
+  const configuredEmails = String(
     process.env.VYVA_PLATFORM_ADMIN_EMAILS ||
     process.env.PLATFORM_ADMIN_EMAILS ||
     process.env.VYVA_PLATFORM_ADMINS ||
@@ -647,6 +651,7 @@ function platformAdminEmails() {
     .split(/[\s,;]+/)
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
+  return Array.from(new Set([...configuredEmails, ...PROJECT_OWNER_PLATFORM_ADMIN_EMAILS]));
 }
 
 function userHasPlatformAdminMetadata(user) {
@@ -1236,7 +1241,7 @@ async function loadUserContext(user) {
       .map((row) => row.role === "admin" ? "admin" : "operator")
       .filter(Boolean),
   ));
-  const primaryRole = roles.includes("admin") ? "admin" : roles[0] || "operator";
+  const primaryRole = isPlatformAdmin || roles.includes("admin") ? "admin" : roles[0] || "operator";
   const roleOrg = rolesResult.rows.find((row) => row.organization_id)?.organization_id;
   let organization = profile?.org_id
     ? {
@@ -1288,7 +1293,7 @@ async function loadUserContext(user) {
     userId: user.id,
     email,
     fullName: profile?.full_name || null,
-    roles,
+    roles: isPlatformAdmin && !roles.includes("admin") ? ["admin", ...roles] : roles,
     role: primaryRole,
     isAdmin: roles.includes("admin") || isPlatformAdmin,
     isPlatformAdmin,
