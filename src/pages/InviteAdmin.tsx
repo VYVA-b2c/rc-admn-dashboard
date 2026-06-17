@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { UserPlus, Eye, EyeOff } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
-import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
+import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
 import { apiFetch } from "@/lib/apiClient";
 
 type AdminUserRow = {
@@ -37,16 +37,31 @@ type CreateTeamMemberResponse = {
   member?: AdminUserRow | null;
 };
 
+type OrganizationsResponse = {
+  currentOrganization?: OrganizationContext | null;
+  organizations?: OrganizationContext[];
+};
+
 type TeamRole = "admin" | "operator";
 
 export default function InviteAdmin() {
   const { t } = useLanguage();
   const { data: currentContext, isLoading: loadingContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
-  const organizationId = currentUser?.organization?.id;
   const hasTeamAccess = Boolean(currentUser?.isAdmin || currentUser?.isPlatformAdmin);
+  const { data: organizationsData, isLoading: loadingOrganizations } = useQuery({
+    queryKey: ["organizations", "team-access"],
+    queryFn: () => apiFetch<OrganizationsResponse>("/api/v1/organizations"),
+    enabled: !authBypassEnabled && hasTeamAccess,
+    retry: false,
+  });
+  const organizationId =
+    currentUser?.organization?.id ||
+    organizationsData?.currentOrganization?.id ||
+    organizationsData?.organizations?.find((organization) => organization.id)?.id ||
+    null;
   const canManageTeam = Boolean(hasTeamAccess && organizationId && !authBypassEnabled);
-  const formDisabled = loadingContext || !canManageTeam;
+  const formDisabled = loadingContext || loadingOrganizations || !canManageTeam;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<TeamRole>("admin");
@@ -57,7 +72,9 @@ export default function InviteAdmin() {
     queryKey: ["admin-users", organizationId],
     queryFn: async () => {
       if (authBypassEnabled || !organizationId) return [];
-      const data = await apiFetch<TeamMembersResponse>("/api/v1/team-members");
+      const data = await apiFetch<TeamMembersResponse>("/api/v1/team-members", {
+        headers: { "x-organization-id": organizationId },
+      });
       return data.members || [];
     },
     enabled: !authBypassEnabled && Boolean(hasTeamAccess && organizationId),
@@ -86,6 +103,7 @@ export default function InviteAdmin() {
     try {
       const response = await apiFetch<CreateTeamMemberResponse>("/api/v1/team-members", {
         method: "POST",
+        headers: { "x-organization-id": organizationId },
         body: JSON.stringify({ email, password: password || undefined, role }),
       });
       const inviteInstructions = [
@@ -145,7 +163,7 @@ export default function InviteAdmin() {
             <div className="mb-4 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-800">
               {authBypassEnabled
                 ? t("invite.previewDisabled")
-                : loadingContext
+                : loadingContext || loadingOrganizations
                   ? t("invite.teamAccessLoading")
                   : !hasTeamAccess
                     ? t("invite.adminRequired")

@@ -622,30 +622,53 @@ function httpError(status, message, expose = status < 500) {
 }
 
 function platformAdminEmails() {
-  return String(process.env.VYVA_PLATFORM_ADMIN_EMAILS || process.env.PLATFORM_ADMIN_EMAILS || "")
-    .split(",")
+  return String(
+    process.env.VYVA_PLATFORM_ADMIN_EMAILS ||
+    process.env.PLATFORM_ADMIN_EMAILS ||
+    process.env.VYVA_PLATFORM_ADMINS ||
+    process.env.PLATFORM_ADMINS ||
+    process.env.VYVA_SUPER_ADMIN_EMAILS ||
+    process.env.SUPER_ADMIN_EMAILS ||
+    "",
+  )
+    .split(/[\s,;]+/)
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
 }
 
 function userHasPlatformAdminMetadata(user) {
-  const metadata = user?.app_metadata && typeof user.app_metadata === "object" ? user.app_metadata : {};
+  const metadata = user?.app_metadata && typeof user.app_metadata === "object"
+    ? user.app_metadata
+    : user?.raw_app_meta_data && typeof user.raw_app_meta_data === "object"
+      ? user.raw_app_meta_data
+      : {};
   const truthyFlags = [
     metadata.is_platform_admin,
     metadata.isPlatformAdmin,
     metadata.platform_admin,
     metadata.platformAdmin,
+    metadata.is_super_admin,
+    metadata.isSuperAdmin,
+    metadata.super_admin,
+    metadata.superAdmin,
   ];
   if (truthyFlags.some((value) => value === true || String(value).toLowerCase() === "true")) return true;
 
-  const roleValues = [metadata.role, metadata.roles, metadata.user_role, metadata.user_roles].flatMap((value) => {
+  const roleValues = [
+    metadata.role,
+    metadata.roles,
+    metadata.user_role,
+    metadata.user_roles,
+    metadata.platform_role,
+    metadata.platformRole,
+  ].flatMap((value) => {
     if (Array.isArray(value)) return value;
     if (typeof value === "string") return value.split(",");
     return [];
   });
   return roleValues
     .map((value) => String(value).trim().toLowerCase().replace(/[\s-]+/g, "_"))
-    .some((value) => ["platform_admin", "super_admin", "superadmin"].includes(value));
+    .some((value) => ["platform_admin", "platform_owner", "super_admin", "superadmin"].includes(value));
 }
 
 async function defaultOrganization() {

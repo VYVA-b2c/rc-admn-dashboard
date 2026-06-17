@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { useGISData } from "@/hooks/useGISData";
 import { authBypassEnabled } from "@/lib/authMode";
 import { demoOperationalUsers, type OperationalQueueUser } from "@/lib/operationalDemoData";
@@ -149,6 +150,14 @@ export function AppSidebar() {
   const { signOut, user } = useAuth();
   const { t } = useLanguage();
   const { data: gisData } = useGISData();
+  const { data: currentContext } = useCurrentUserContext();
+  const currentUser = currentContext?.user;
+  const accountEmail = currentUser?.email || user?.email;
+  const roleLabel = currentUser?.isPlatformAdmin
+    ? t("settings.role.superAdmin")
+    : currentUser?.isAdmin
+      ? t("settings.role.admin")
+      : t("sidebar.operator");
 
   const riskQueueBadge = useMemo(() => {
     const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
@@ -204,8 +213,8 @@ export function AppSidebar() {
       <SidebarFooter className="gap-3 border-t border-sidebar-border bg-white p-3">
         {!collapsed && user && (
           <div className="rounded-xl border border-border bg-muted/60 px-3 py-2">
-            <p className="truncate text-xs font-semibold text-foreground">{user.email}</p>
-            <p className="text-[11px] text-muted-foreground">{t("sidebar.operator")}</p>
+            <p className="truncate text-xs font-semibold text-foreground">{accountEmail}</p>
+            <p className="text-[11px] text-muted-foreground">{roleLabel}</p>
           </div>
         )}
         {!authBypassEnabled && (
