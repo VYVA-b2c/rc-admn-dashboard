@@ -81,6 +81,16 @@ type ScheduledCallApiItem = Partial<ScheduledCall> & {
   assigned_provider_name?: string | null;
   can_edit?: boolean;
   edit_block_reason?: "consent_required" | "assigned_provider_required" | null;
+  lastOutcome?: string | null;
+  lastOutcomeAt?: string | null;
+  last_outcome?: string | null;
+  last_outcome_at?: string | null;
+  last_status?: string | null;
+  last_status_at?: string | null;
+  last_checkin_status?: string | null;
+  last_checkin_at?: string | null;
+  last_reported_at?: string | null;
+  last_completed_at?: string | null;
   vyva_user_id?: number | string;
   user?: {
     id?: number | string;
@@ -169,6 +179,8 @@ function normalizeScheduledCall(raw: ScheduledCallApiItem): ScheduledCall {
     assigned_provider_name: raw.assigned_provider_name ?? null,
     can_edit: Boolean(raw.can_edit),
     edit_block_reason: raw.edit_block_reason ?? null,
+    lastOutcome: raw.lastOutcome ?? raw.last_outcome ?? raw.last_status ?? raw.last_checkin_status ?? null,
+    lastOutcomeAt: raw.lastOutcomeAt ?? raw.last_outcome_at ?? raw.last_status_at ?? raw.last_checkin_at ?? raw.last_reported_at ?? raw.last_completed_at ?? null,
   };
 }
 
@@ -222,6 +234,13 @@ function lastOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
   const key = `checkin.outcome.${call.lastOutcome}`;
   const translated = t(key);
   return translated !== key ? translated : call.lastOutcome;
+}
+
+function lastOutcomeTime(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
 function formatPreferredTime(value?: string | null) {
@@ -606,7 +625,14 @@ export default function CheckInMonitoring() {
                         {paused && <p className="max-w-[280px] text-xs text-amber-700">{pauseDescription(c, t)}</p>}
                       </div>
                     </TableCell>
-                    <TableCell>{lastOutcomeLabel(c, t)}</TableCell>
+                    <TableCell>
+                      <div className="space-y-0.5">
+                        <p>{lastOutcomeLabel(c, t)}</p>
+                        {lastOutcomeTime(c.lastOutcomeAt) && (
+                          <p className="text-xs text-muted-foreground">{lastOutcomeTime(c.lastOutcomeAt)}</p>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>{formatFrequencyLabel(c, t)}</TableCell>
                     <TableCell>{formatPreferredTime(c.preferred_time)}</TableCell>
                     {canShowActions && (

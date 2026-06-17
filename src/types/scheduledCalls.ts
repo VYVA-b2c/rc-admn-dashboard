@@ -16,6 +16,8 @@ export interface ScheduledCall {
   assigned_provider_name?: string | null;
   can_edit?: boolean;
   edit_block_reason?: "consent_required" | "assigned_provider_required" | null;
+  lastOutcome?: string | null;
+  lastOutcomeAt?: string | null;
 }
 
 export interface ScheduledCallUser {
