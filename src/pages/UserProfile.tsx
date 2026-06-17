@@ -136,6 +136,29 @@ function sensorTypeKey(type?: string | null) {
   }
 }
 
+function recordString(record: Record<string, unknown> | undefined | null, keys: string[]) {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function recordDate(record: Record<string, unknown> | undefined | null, keys: string[]) {
+  const value = recordString(record, keys);
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : value;
+}
+
+function isServicePaused(service: Record<string, unknown> | undefined | null) {
+  if (!service) return false;
+  if (service.is_paused === true) return true;
+  const pausedUntil = recordString(service, ["paused_until", "pausedUntil"]);
+  return Boolean(pausedUntil && new Date(pausedUntil).getTime() > Date.now());
+}
+
 async function fetchUserProfile(id: string): Promise<OperationalProfileResponse> {
   if (isDemoUserId(id)) return getDemoProfileById(id);
 
@@ -307,18 +330,115 @@ export default function UserProfile() {
   ];
   const servicesActive = services.filter((service) => service.active).length;
 
-  const eventTimeline = (() => {
-    const events: { date: string; label: string; tone: string }[] = [];
-    if (user.created_at) events.push({ date: user.created_at, label: t("profile.timeline.onboarded"), tone: "primary" });
-    if (checkins?.created_at) events.push({ date: checkins.created_at, label: t("profile.timeline.checkinsConfigured"), tone: "teal" });
-    medications.forEach((med) => {
-      if (med.created_at) events.push({ date: med.created_at, label: copy("profile.timeline.medicationAdded", { item: med.medication_name }), tone: "orange" });
-    });
-    alerts.forEach((alert) => {
-      if (alert.created_at) events.push({ date: alert.created_at, label: alert.message || t("profile.timeline.alert"), tone: alert.severity === "critical" ? "red" : "orange" });
+  const formatFrequency = (frequency?: string | number | null) => {
+    if (frequency == null || frequency === "") return t("profile.frequencyUnknown");
+    const numeric = Number(frequency);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      if (numeric === 1) return t("checkin.everyDay");
+      return copy("checkin.everyDays", { count: numeric });
+    }
+
+    const key = `userForm.frequency.${String(frequency)}`;
+    const label = t(key);
+    return label === key ? String(frequency) : label;
+  };
+
+  const formatScheduleDetail = (frequency?: string | number | null, preferredTime?: string | null) =>
+    copy("profile.timeline.scheduleDetail", {
+      frequency: formatFrequency(frequency),
+      time: preferredTime || t("profile.timeUnknown"),
     });
 
-    return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 6);
+  const formatDateTime = (date?: string | null) => {
+    if (!date) return "";
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toLocaleString();
+  };
+
+  const eventTimeline = (() => {
+    const events: { date?: string | null; label: string; detail?: string; tone: string; icon: LucideIcon }[] = [];
+    if (user.created_at) events.push({ date: user.created_at, label: t("profile.timeline.onboarded"), detail: t("profile.timeline.onboardedDetail"), tone: "primary", icon: UserRound });
+    if (checkins) {
+      const paused = isServicePaused(checkins);
+      events.push({
+        date: recordDate(checkins, ["updated_at", "created_at"]) || user.created_at,
+        label: t(paused ? "profile.timeline.checkinsPaused" : checkins.enabled ? "profile.timeline.checkinsActive" : "profile.timeline.checkinsInactive"),
+        detail: formatScheduleDetail(checkins.frequency, checkins.preferred_time),
+        tone: paused ? "orange" : checkins.enabled ? "teal" : "muted",
+        icon: PhoneCall,
+      });
+
+      const lastDate = recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt"]);
+      if (lastDate) {
+        const outcome = recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome"]);
+        const outcomeKey = outcome ? `checkin.outcome.${outcome}` : "";
+        const outcomeLabel = outcomeKey ? t(outcomeKey) : "";
+        events.push({
+          date: lastDate,
+          label: t("profile.timeline.lastCheckin"),
+          detail: outcomeLabel && outcomeLabel !== outcomeKey ? outcomeLabel : t("checkin.outcomeUnknown"),
+          tone: outcome === "missed" ? "red" : outcome === "confirmed" ? "teal" : "orange",
+          icon: CheckCircle2,
+        });
+      }
+    }
+    if (brainCoach) {
+      const paused = isServicePaused(brainCoach);
+      events.push({
+        date: recordDate(brainCoach, ["updated_at", "created_at"]) || user.created_at,
+        label: t(paused ? "profile.timeline.brainCoachPaused" : brainCoach.enabled ? "profile.timeline.brainCoachActive" : "profile.timeline.brainCoachInactive"),
+        detail: formatScheduleDetail(brainCoach.frequency, brainCoach.preferred_time),
+        tone: paused ? "orange" : brainCoach.enabled ? "primary" : "muted",
+        icon: Brain,
+      });
+    }
+    medications.forEach((med) => {
+      if (med.created_at) events.push({ date: med.created_at, label: copy("profile.timeline.medicationAdded", { item: med.medication_name }), detail: [med.dosage, safeArray(med.schedule_times).join(", ")].filter(Boolean).join(" · "), tone: "orange", icon: Pill });
+    });
+    if (medications.length && !medications.some((med) => med.created_at)) {
+      events.push({
+        date: user.created_at,
+        label: copy("profile.timeline.medicationPlan", { count: medications.length }),
+        detail: medications.map((med) => med.medication_name).filter(Boolean).slice(0, 3).join(", "),
+        tone: "orange",
+        icon: Pill,
+      });
+    }
+    if (careProviders.length) {
+      events.push({
+        date: careProviders.map((provider) => recordDate(provider, ["updated_at", "created_at"])).filter(Boolean).sort().at(-1) || user.created_at,
+        label: copy("profile.timeline.careCoverage", { count: careProviders.length }),
+        detail: [primaryCaregiver?.display_name, primaryProfessional?.display_name].filter(Boolean).join(" · ") || t("careProviders.coverage"),
+        tone: "primary",
+        icon: Users,
+      });
+    }
+    if (data.consent) {
+      events.push({
+        date: recordDate(data.consent, ["updated_at", "created_at"]) || user.created_at,
+        label: t(data.consent.consent_given ? "profile.timeline.consentActive" : "profile.timeline.consentMissing"),
+        detail: t("profile.timeline.consentDetail"),
+        tone: data.consent.consent_given ? "teal" : "orange",
+        icon: ShieldCheck,
+      });
+    }
+    if (healthConditions.length || mobilityNeeds.length) {
+      events.push({
+        date: recordDate(health, ["updated_at", "created_at"]) || user.created_at,
+        label: t("profile.timeline.healthProfile"),
+        detail: copy("profile.timeline.healthProfileDetail", { conditions: healthConditions.length, mobility: mobilityNeeds.length }),
+        tone: "pink",
+        icon: HeartPulse,
+      });
+    }
+    alerts.forEach((alert) => {
+      if (alert.created_at) events.push({ date: alert.created_at, label: alert.message || t("profile.timeline.alert"), detail: alert.resolved_at ? t("profile.timeline.alertResolved") : t("profile.timeline.alertActive"), tone: alert.severity === "critical" ? "red" : "orange", icon: AlertTriangle });
+    });
+
+    return events
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 8);
   })();
 
   const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
@@ -677,15 +797,31 @@ export default function UserProfile() {
             <EmptyLine icon={Clock} label={t("profile.noTimeline")} />
           ) : (
             <div className="grid gap-3 lg:grid-cols-2">
-              {eventTimeline.map((event, index) => (
-                <div key={`${event.date}-${index}`} className="flex gap-3 rounded-xl border border-border bg-muted/25 p-3">
-                  <span className={cn("mt-1 h-3 w-3 shrink-0 rounded-full", event.tone === "red" ? "bg-red-500" : event.tone === "orange" ? "bg-orange-500" : event.tone === "teal" ? "bg-vyva-teal" : "bg-primary")} />
-                  <div>
-                    <p className="font-semibold text-foreground">{event.label}</p>
-                    <p className="text-xs text-muted-foreground">{new Date(event.date).toLocaleString()}</p>
+              {eventTimeline.map((event, index) => {
+                const EventIcon = event.icon;
+                return (
+                  <div key={`${event.label}-${event.date || index}`} className="flex gap-3 rounded-xl border border-border bg-muted/25 p-3">
+                    <span
+                      className={cn(
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+                        event.tone === "red" && "bg-red-50 text-red-600",
+                        event.tone === "orange" && "bg-orange-50 text-orange-600",
+                        event.tone === "teal" && "bg-emerald-50 text-emerald-600",
+                        event.tone === "pink" && "bg-vyva-pink/10 text-vyva-pink",
+                        event.tone === "muted" && "bg-muted text-muted-foreground",
+                        event.tone === "primary" && "bg-primary/10 text-primary",
+                      )}
+                    >
+                      <EventIcon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground">{event.label}</p>
+                      {event.detail && <p className="mt-1 text-sm leading-5 text-muted-foreground">{event.detail}</p>}
+                      {event.date && <p className="mt-1 text-xs font-medium text-muted-foreground">{formatDateTime(event.date)}</p>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
