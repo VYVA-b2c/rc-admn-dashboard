@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
+import { BASE_URL } from "@/lib/apiClient";
 import type { Language } from "@/lib/translations";
 
 interface AuthContextType {
@@ -109,18 +110,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithMagicLink = async (email: string, redirectPath?: string, emailLanguage: Language = "en") => {
     if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: authRedirectUrl(redirectPath),
-        shouldCreateUser: false,
-        data: {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/auth/magic-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          redirectPath: safeRedirectPath(redirectPath),
           language: emailLanguage,
-          email_language: emailLanguage,
-        },
-      },
-    });
-    return { error: error as Error | null };
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        return { error: new Error(body?.error || "Sign-in email could not be sent.") };
+      }
+      return { error: null };
+    } catch {
+      return { error: new Error("Sign-in email could not be sent.") };
+    }
   };
 
   const signInWithOAuth = async (provider: "google" | "azure", redirectPath?: string) => {

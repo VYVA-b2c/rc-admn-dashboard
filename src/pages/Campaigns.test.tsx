@@ -98,4 +98,29 @@ describe("Campaigns", () => {
     expect(screen.getByText("Drafts")).toBeInTheDocument();
     expect(screen.getByText("Queued runs")).toBeInTheDocument();
   });
+
+  it("shows a retry state when campaigns fail to load", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/v1/campaigns-dashboard/campaigns")) {
+        return new Response(JSON.stringify({ error: "API request timed out after 10000ms" }), {
+          status: 500,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ error: "Not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }));
+
+    renderCampaigns();
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Campaigns could not be loaded.").length).toBeGreaterThan(0);
+    });
+
+    expect(screen.getAllByRole("button", { name: "Try again" }).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("API request timed out after 10000ms").length).toBeGreaterThan(0);
+  });
 });

@@ -244,6 +244,7 @@ type CampaignAiSuggestion = {
 type OpportunityUser = GISUser;
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const QUERY_STALE_TIME_MS = 60_000;
 const defaultCampaignChannels: CampaignChannel[] = ["voice"];
 const defaultUploadedAudience = (): UploadedAudienceMetadata => ({
   fileName: "",
@@ -886,6 +887,9 @@ export default function Campaigns() {
       });
       return response.campaigns ?? [];
     },
+    retry: false,
+    staleTime: QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
   });
 
   const campaigns = campaignsQuery.data ?? [];
@@ -914,6 +918,9 @@ export default function Campaigns() {
       });
       return response.runs ?? [];
     },
+    retry: false,
+    staleTime: QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
   });
 
   const runs = runsQuery.data ?? [];
@@ -942,6 +949,9 @@ export default function Campaigns() {
       });
       return response.jobs ?? [];
     },
+    retry: false,
+    staleTime: QUERY_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
   });
 
   const jobs = jobsQuery.data ?? [];
@@ -968,7 +978,7 @@ export default function Campaigns() {
     completed: campaigns.filter((campaign) => operationalState(campaign) === "completed").length,
   }), [campaigns]);
 
-  const noCampaignsCreated = !campaignsQuery.isLoading && campaigns.length === 0;
+  const noCampaignsCreated = !campaignsQuery.isLoading && !campaignsQuery.error && campaigns.length === 0;
   const opportunityUsers = useMemo<OpportunityUser[]>(() => {
     const apiUsers = gisData?.gisUsers ?? [];
     if (apiUsers.length > 0) return apiUsers;
@@ -1688,6 +1698,13 @@ export default function Campaigns() {
           <div className="space-y-3">
             {campaignsQuery.isLoading ? (
               <LoadingCampaignsPanel label={t("login.loading")} />
+            ) : campaignsQuery.error ? (
+              <LoadFailurePanel
+                title={t("campaigns.loadFailedTitle")}
+                description={campaignsQuery.error instanceof Error ? campaignsQuery.error.message : t("campaigns.loadFailedDescription")}
+                onRetry={() => void campaignsQuery.refetch()}
+                retryLabel={t("campaigns.retry")}
+              />
             ) : noCampaignsCreated ? (
               <div className="rounded-2xl border border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-white p-6">
                 <div className="space-y-5">
@@ -1816,7 +1833,14 @@ export default function Campaigns() {
 
           <Card className="rounded-2xl border-border bg-white shadow-sm">
             <CardContent className="space-y-5 p-5">
-              {!selectedCampaign ? (
+              {campaignsQuery.error ? (
+                <LoadFailurePanel
+                  title={t("campaigns.loadFailedTitle")}
+                  description={campaignsQuery.error instanceof Error ? campaignsQuery.error.message : t("campaigns.loadFailedDescription")}
+                  onRetry={() => void campaignsQuery.refetch()}
+                  retryLabel={t("campaigns.retry")}
+                />
+              ) : !selectedCampaign ? (
                 noCampaignsCreated ? (
                   inlineDraftActive && form ? (
                     <div className="rounded-2xl border border-primary/20 bg-primary/5 px-5 py-5">
@@ -2215,6 +2239,14 @@ export default function Campaigns() {
                     </div>
                     {runsQuery.isLoading ? (
                       <Skeleton className="h-24 rounded-2xl" />
+                    ) : runsQuery.error ? (
+                      <LoadFailurePanel
+                        title={t("campaigns.runsLoadFailed")}
+                        description={runsQuery.error instanceof Error ? runsQuery.error.message : t("campaigns.loadFailedDescription")}
+                        onRetry={() => void runsQuery.refetch()}
+                        retryLabel={t("campaigns.retry")}
+                        compact
+                      />
                     ) : runs.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-4 py-6 text-sm text-muted-foreground">
                         {t("campaigns.detail.noRuns")}
@@ -2279,6 +2311,18 @@ export default function Campaigns() {
                             <TableRow>
                               <TableCell colSpan={5}>
                                 <Skeleton className="h-12 w-full" />
+                              </TableCell>
+                            </TableRow>
+                          ) : jobsQuery.error ? (
+                            <TableRow>
+                              <TableCell colSpan={5} className="py-8">
+                                <LoadFailurePanel
+                                  title={t("campaigns.jobsLoadFailed")}
+                                  description={jobsQuery.error instanceof Error ? jobsQuery.error.message : t("campaigns.loadFailedDescription")}
+                                  onRetry={() => void jobsQuery.refetch()}
+                                  retryLabel={t("campaigns.retry")}
+                                  compact
+                                />
                               </TableCell>
                             </TableRow>
                           ) : jobs.length === 0 ? (
@@ -3186,6 +3230,37 @@ function LoadingCampaignsPanel({ label }: { label: string }) {
         <Skeleton className="h-20 rounded-2xl" />
         <Skeleton className="h-20 rounded-2xl" />
         <Skeleton className="h-20 rounded-2xl" />
+      </div>
+    </div>
+  );
+}
+
+function LoadFailurePanel({
+  title,
+  description,
+  onRetry,
+  retryLabel,
+  compact = false,
+}: {
+  title: string;
+  description: string;
+  onRetry: () => void;
+  retryLabel: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={cn(
+      "rounded-2xl border border-dashed border-amber-300 bg-amber-50/70 text-center",
+      compact ? "px-4 py-5" : "px-6 py-8",
+    )}>
+      <div className="mx-auto max-w-xl space-y-3">
+        <p className="text-base font-bold text-foreground">{title}</p>
+        <p className="text-sm leading-6 text-muted-foreground">{description}</p>
+        <div>
+          <Button type="button" variant="outline" className="rounded-full bg-white" onClick={onRetry}>
+            {retryLabel}
+          </Button>
+        </div>
       </div>
     </div>
   );

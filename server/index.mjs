@@ -50,6 +50,11 @@ const publicAppUrl =
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || "/guide/team-access";
 const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || teamInviteGuidePath;
+const userManualUrlOverride =
+  process.env.USER_MANUAL_URL ||
+  process.env.VYVA_USER_MANUAL_URL ||
+  process.env.VITE_USER_MANUAL_URL ||
+  "/manual";
 const teamInviteEmailFrom =
   String(process.env.TEAM_INVITE_EMAIL_FROM || process.env.INVITE_EMAIL_FROM || process.env.EMAIL_FROM || "").trim() || null;
 const teamInviteEmailReplyTo =
@@ -891,6 +896,10 @@ function teamInviteRedirectUrl(origin) {
   return absoluteAppUrl(teamInviteRedirectPath, origin);
 }
 
+function userManualUrl(origin) {
+  return absoluteAppUrl(userManualUrlOverride, origin);
+}
+
 function teamInviteMetadata({ context, role, organization, origin }) {
   const language = inviteEmailLanguage(organization);
   const guideUrl = teamInviteGuideUrl(origin);
@@ -1074,6 +1083,191 @@ function renderTeamInviteEmail({ actionLink, invite }) {
               </td>
             </tr>
             ${guideBlock}
+            <tr>
+              <td style="padding:0 32px 30px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5ff;border:1px solid #ded8ff;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6c4df6;">${escapeHtml(copy.securityTitle)}</p>
+                      <p style="margin:0;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.securityText)}</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 34px;">
+                <p style="margin:0 0 8px;font-size:13px;line-height:1.55;color:#7a8297;">${escapeHtml(copy.fallback)}</p>
+                <p style="margin:0;font-size:12px;line-height:1.55;color:#6c4df6;word-break:break-all;">${safeActionLink}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#17172f;padding:18px 32px;">
+                <p style="margin:0;font-size:12px;line-height:1.6;color:#c8ccda;">${escapeHtml(copy.footer)}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`,
+  };
+}
+
+function consoleMagicLinkCopy(language) {
+  if (language === "de") {
+    return {
+      subject: "Ihr sicherer VYVA Login-Link",
+      eyebrow: "Sicherer Zugang",
+      heading: "Bei VYVA anmelden",
+      intro:
+        "VYVA ist die Einsatzkonsole fuer koordinierte Betreuung, Check-ins, Medikationsnachverfolgung und Risikopriorisierung. Oeffnen Sie die Konsole ueber den sicheren Einmal-Link unten.",
+      button: "Bei VYVA anmelden",
+      platformTitle: "Was Sie in VYVA tun koennen",
+      platformItems: [
+        "Klienten nach Risiko und Kontaktbedarf priorisieren.",
+        "Check-up-Anrufe, Brain-Coach-Routinen und Medikationshinweise pruefen.",
+        "Red-Cross-Teams und Notfallkontakte koordiniert halten.",
+      ],
+      manualTitle: "Benutzerhandbuch",
+      manualText: "Ein vollstaendiges Benutzerhandbuch wird hier verlinkt, sobald es bereitsteht.",
+      manualButton: "Handbuch oeffnen",
+      securityTitle: "Sicherheitshinweis",
+      securityText: "Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie ignorieren. Der Link ist nur fuer dieses Postfach bestimmt.",
+      fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
+      footer: "Automatische VYVA Login-E-Mail fuer autorisierte Konsolennutzer.",
+    };
+  }
+
+  if (language === "es") {
+    return {
+      subject: "Tu enlace seguro de acceso a VYVA",
+      eyebrow: "Acceso seguro",
+      heading: "Iniciar sesion en VYVA",
+      intro:
+        "VYVA es la consola operativa para coordinar atencion, check-ins, medicacion, asignaciones y priorizacion de riesgo. Abre la consola con el enlace seguro de un solo uso.",
+      button: "Abrir VYVA",
+      platformTitle: "Que puedes hacer en VYVA",
+      platformItems: [
+        "Priorizar clientes segun riesgo y necesidad de contacto.",
+        "Revisar llamadas de seguimiento, Brain Coach y medicacion.",
+        "Coordinar equipos de Cruz Roja y contactos de emergencia.",
+      ],
+      manualTitle: "Manual de usuario",
+      manualText: "El manual completo se enlazara aqui en cuanto este disponible.",
+      manualButton: "Abrir manual",
+      securityTitle: "Nota de seguridad",
+      securityText: "Si no solicitaste este correo, puedes ignorarlo. El enlace esta destinado solo a esta bandeja de entrada.",
+      fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
+      footer: "Correo automatico de acceso a VYVA para usuarios autorizados de la consola.",
+    };
+  }
+
+  return {
+    subject: "Your secure VYVA sign-in link",
+    eyebrow: "Secure access",
+    heading: "Sign in to VYVA",
+    intro:
+      "VYVA is the operations console for coordinating care, check-ins, medication follow-up, assignments, and risk prioritization. Open the console with the secure one-time link below.",
+    button: "Open VYVA",
+    platformTitle: "What you can do in VYVA",
+    platformItems: [
+      "Prioritize clients by risk and contact need.",
+      "Review check-up calls, Brain Coach routines, and medication follow-up.",
+      "Coordinate Red Cross staff and emergency contacts.",
+    ],
+    manualTitle: "User manual",
+    manualText: "A full user manual will be linked here once it is available.",
+    manualButton: "Open manual",
+    securityTitle: "Security note",
+    securityText: "If you did not request this email, you can safely ignore it. This link is intended only for this inbox.",
+    fallback: "Button not working? Copy and paste this link into your browser:",
+    footer: "Automated VYVA sign-in email for authorized console users.",
+  };
+}
+
+function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl }) {
+  const copy = consoleMagicLinkCopy(language);
+  const safeActionLink = escapeHtml(actionLink);
+  const safeManualUrl = manualUrl ? escapeHtml(manualUrl) : null;
+  const plainLines = [
+    copy.heading,
+    "",
+    copy.intro,
+    "",
+    `${copy.button}: ${actionLink}`,
+    manualUrl ? `${copy.manualButton}: ${manualUrl}` : null,
+    "",
+    copy.securityText,
+  ].filter(Boolean);
+  const itemList = copy.platformItems
+    .map((item) => `<li style="margin:0 0 8px;color:#5f667a;font-size:14px;line-height:1.55;">${escapeHtml(item)}</li>`)
+    .join("");
+  const manualBlock = safeManualUrl
+    ? `
+            <tr>
+              <td style="padding:0 32px 28px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #dfe5ef;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">${escapeHtml(copy.manualTitle)}</p>
+                      <p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.manualText)}</p>
+                      <a href="${safeManualUrl}" style="display:inline-block;color:#6c4df6;text-decoration:none;font-size:14px;font-weight:700;">${escapeHtml(copy.manualButton)}</a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>`
+    : "";
+
+  return {
+    subject: copy.subject,
+    text: plainLines.join("\n"),
+    html: `<!doctype html>
+<html lang="${escapeHtml(language)}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(copy.subject)}</title>
+  </head>
+  <body style="margin:0;background:#eef3fb;font-family:Arial,Helvetica,sans-serif;color:#17172f;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
+            <tr>
+              <td style="padding:30px 32px 24px;border-bottom:1px solid #edf0f7;">
+                <span style="display:inline-block;width:44px;height:44px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:21px;font-weight:700;line-height:44px;text-align:center;margin-right:12px;">V</span>
+                <span style="font-size:22px;font-weight:700;color:#17172f;vertical-align:middle;">VYVA</span>
+                <span style="display:block;margin-top:7px;margin-left:58px;font-size:11px;letter-spacing:0.28em;text-transform:uppercase;color:#6b7280;">Red Cross console</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 32px 8px;">
+                <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
+                <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">${escapeHtml(copy.heading)}</h1>
+                <p style="margin:0;font-size:16px;line-height:1.65;color:#5f667a;">${escapeHtml(copy.intro)}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:26px 32px 30px;">
+                <a href="${safeActionLink}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;line-height:1;border-radius:14px;padding:17px 24px;box-shadow:0 10px 22px rgba(108,77,246,0.28);">${escapeHtml(copy.button)}</a>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 28px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbfcff;border:1px solid #e3e8f4;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 10px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">${escapeHtml(copy.platformTitle)}</p>
+                      <ul style="margin:0;padding-left:18px;">${itemList}</ul>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            ${manualBlock}
             <tr>
               <td style="padding:0 32px 30px;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5ff;border:1px solid #ded8ff;border-radius:16px;">
@@ -1404,6 +1598,73 @@ async function resolveRequestContext(req, options = {}) {
   if (!user?.id) throw httpError(401, "Invalid session");
   const context = await loadUserContext(user);
   return applyOrganizationOverride(req, { ...context, authToken: token });
+}
+
+function normalizedEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function loginEmailLanguage(value) {
+  const language = String(value || "").trim().toLowerCase();
+  if (language.startsWith("de")) return "de";
+  if (language.startsWith("es")) return "es";
+  return "en";
+}
+
+function loginRedirectPath(value) {
+  const pathValue = String(value || "/").trim();
+  if (!pathValue.startsWith("/") || pathValue.startsWith("//")) return "/";
+  return pathValue;
+}
+
+async function authorizedConsoleEmail(email) {
+  const normalized = normalizedEmail(email);
+  if (!normalized) return false;
+  if (platformAdminEmails().includes(normalized)) return true;
+
+  const rows = await optionalRows(
+    `
+      SELECT
+        p.user_id,
+        p.is_platform_admin,
+        COUNT(r.user_id) FILTER (WHERE r.role IS NOT NULL) AS role_count
+      FROM public.profiles p
+      LEFT JOIN public.user_roles r ON r.user_id = p.user_id
+      WHERE LOWER(p.email) = LOWER($1)
+      GROUP BY p.user_id, p.is_platform_admin
+      LIMIT 1
+    `,
+    [normalized],
+  );
+  const row = rows[0];
+  return Boolean(row?.is_platform_admin) || Number(row?.role_count || 0) > 0;
+}
+
+async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
+  const redirectUrl = absoluteAppUrl(loginRedirectPath(redirectPath), origin);
+  const manualUrl = userManualUrl(origin);
+  const generatedLink = await generateSupabaseTeamMagicLink({
+    email,
+    redirectUrl,
+    metadata: {
+      language,
+      email_language: language,
+      login_source: "vyva_console",
+      manual_url: manualUrl,
+    },
+  });
+  if (generatedLink.error) return { sent: false, error: generatedLink.error, provider: null };
+
+  const rendered = renderConsoleMagicLinkEmail({
+    actionLink: generatedLink.actionLink,
+    language,
+    manualUrl,
+  });
+  return sendRenderedTeamInviteEmail({ to: email, rendered });
 }
 
 function requireAdmin(context) {
@@ -2615,54 +2876,24 @@ function campaignTargetCandidates(campaign, users) {
     .slice(0, 20);
 }
 
-async function ensureCampaignTargets(campaigns, dashboardUsers) {
-  if (!campaigns.length || !dashboardUsers.length) return;
-
-  const counts = await query(
-    `
-      SELECT campaign_id::text, COUNT(*)::int AS count
-      FROM public.campaign_targets
-      WHERE campaign_id = ANY($1::uuid[])
-      GROUP BY campaign_id
-    `,
-    [campaigns.map((campaign) => campaign.id)],
-  );
-  const countMap = new Map(counts.rows.map((row) => [row.campaign_id, Number(row.count || 0)]));
-
-  for (const campaign of campaigns) {
-    if ((countMap.get(campaign.id) || 0) > 0) continue;
-    const candidates = campaignTargetCandidates(campaign, dashboardUsers);
-    for (const [index, user] of candidates.entries()) {
-      const status = targetStatusForCampaign(campaign, user, index);
-      const riskStatus = targetRiskStatus(user);
-      await query(
-        `
-          INSERT INTO public.campaign_targets (
-            organization_id,
-            campaign_id,
-            vyva_user_id,
-            status,
-            reason_key,
-            action,
-            owner,
-            channel
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (campaign_id, vyva_user_id) DO NOTHING
-        `,
-        [
-          campaign.organization_id,
-          campaign.id,
-          user.id,
-          status,
-          targetReasonKey(campaign, user),
-          status === "followUp" || riskStatus === "urgent" ? "prepareCall" : "profile",
-          campaign.owner || null,
-          campaign.channel === "whatsapp" ? "whatsapp" : "phone",
-        ],
-      );
-    }
-  }
+function deriveCampaignTargets(campaign, dashboardUsers) {
+  return campaignTargetCandidates(campaign, dashboardUsers).map((user, index) => {
+    const status = targetStatusForCampaign(campaign, user, index);
+    const riskStatus = targetRiskStatus(user);
+    return {
+      id: `derived:${campaign.id}:${user.id}`,
+      user_id: user.id,
+      user,
+      status,
+      reasonKey: targetReasonKey(campaign, user),
+      action: status === "followUp" || riskStatus === "urgent" ? "prepareCall" : "profile",
+      owner: campaign.owner || null,
+      channel: campaign.channel === "whatsapp" ? "whatsapp" : "phone",
+      city: user.city || "",
+      riskStatus,
+      score: Number(user.riskScore || 0),
+    };
+  });
 }
 
 function normalizeCampaign(row, targets = [], latestRun = null) {
@@ -2705,129 +2936,127 @@ function normalizeCampaign(row, targets = [], latestRun = null) {
 
 async function loadCampaigns(context) {
   const organizationId = scopeOrganizationId(context);
-  const campaignResult = await query(`
-    SELECT
-      id::text,
-      organization_id::text,
-      slug,
-      name,
-      name_key,
-      objective,
-      objective_key,
-      audience,
-      audience_key,
-      template_key,
-      target_rules,
-      due_key,
-      city,
-      owner,
-      type,
-      status,
-      channel,
-      scheduled_at,
-      call_script,
-      call_window_start,
-      call_window_end,
-      retry_limit,
-      execution_type,
-      target_total,
-      contacted_count,
-      confirmed_count,
-      follow_up_count,
-      tone
-    FROM public.campaigns
-    WHERE organization_id = $1
-    ORDER BY
-      CASE status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
-      created_at DESC
-  `, [organizationId]);
+  const [campaignResult, dashboardData] = await Promise.all([
+    query(`
+      SELECT
+        id::text,
+        organization_id::text,
+        slug,
+        name,
+        name_key,
+        objective,
+        objective_key,
+        audience,
+        audience_key,
+        template_key,
+        target_rules,
+        due_key,
+        city,
+        owner,
+        type,
+        status,
+        channel,
+        scheduled_at,
+        call_script,
+        call_window_start,
+        call_window_end,
+        retry_limit,
+        execution_type,
+        target_total,
+        contacted_count,
+        confirmed_count,
+        follow_up_count,
+        tone
+      FROM public.campaigns
+      WHERE organization_id = $1
+      ORDER BY
+        CASE status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
+        created_at DESC
+    `, [organizationId]),
+    loadDashboardUsers(context),
+  ]);
   const campaigns = campaignResult.rows;
-  const dashboardData = await loadDashboardUsers(context);
   const usersById = new Map(dashboardData.gisUsers.map((user) => [user.id, user]));
-
-  await ensureCampaignTargets(campaigns, dashboardData.gisUsers);
-
-  const targetRows = campaigns.length
-    ? await query(
-        `
-          SELECT
-            id::text,
-            campaign_id::text,
-            vyva_user_id::text,
-            status,
-            reason_key,
-            action,
-            owner,
-            channel
-          FROM public.campaign_targets
-          WHERE organization_id = $2 AND campaign_id = ANY($1::uuid[])
-          ORDER BY
-            CASE status WHEN 'followUp' THEN 0 WHEN 'pending' THEN 1 WHEN 'contacted' THEN 2 ELSE 3 END,
-            created_at ASC
-        `,
-        [campaigns.map((campaign) => campaign.id), organizationId],
-      )
-    : { rows: [] };
-
-  const latestRunRows = campaigns.length
-    ? await query(
-        `
-          WITH latest_runs AS (
-            SELECT DISTINCT ON (r.campaign_id)
-              r.id,
-              r.campaign_id,
-              r.status,
-              r.scheduled_at,
-              r.eligible_count,
-              r.skipped_count,
-              r.call_script,
-              r.call_window_start,
-              r.call_window_end,
-              r.retry_limit,
-              r.created_at,
-              r.updated_at
-            FROM public.campaign_call_runs r
-            WHERE r.organization_id = $2 AND r.campaign_id = ANY($1::uuid[])
-            ORDER BY r.campaign_id, r.created_at DESC
-          )
-          SELECT
-            lr.id::text,
-            lr.campaign_id::text,
-            lr.status,
-            lr.scheduled_at,
-            lr.eligible_count,
-            lr.skipped_count,
-            COUNT(*) FILTER (WHERE j.status = 'queued')::int AS queued_count,
-            COUNT(*) FILTER (WHERE j.status = 'pending')::int AS pending_count,
-            COUNT(*) FILTER (WHERE j.status = 'calling')::int AS calling_count,
-            COUNT(*) FILTER (WHERE j.status = 'completed')::int AS completed_count,
-            COUNT(*) FILTER (WHERE j.status = 'failed')::int AS failed_count,
-            COUNT(*) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_count,
-            lr.call_script,
-            lr.call_window_start,
-            lr.call_window_end,
-            lr.retry_limit,
-            lr.created_at,
-            lr.updated_at
-          FROM latest_runs lr
-          LEFT JOIN public.campaign_call_jobs j ON j.run_id = lr.id
-          GROUP BY
-            lr.id,
-            lr.campaign_id,
-            lr.status,
-            lr.scheduled_at,
-            lr.eligible_count,
-            lr.skipped_count,
-            lr.call_script,
-            lr.call_window_start,
-            lr.call_window_end,
-            lr.retry_limit,
-            lr.created_at,
-            lr.updated_at
-        `,
-        [campaigns.map((campaign) => campaign.id), organizationId],
-      )
-    : { rows: [] };
+  const [targetRows, latestRunRows] = campaigns.length
+    ? await Promise.all([
+        query(
+          `
+            SELECT
+              id::text,
+              campaign_id::text,
+              vyva_user_id::text,
+              status,
+              reason_key,
+              action,
+              owner,
+              channel
+            FROM public.campaign_targets
+            WHERE organization_id = $2 AND campaign_id = ANY($1::uuid[])
+            ORDER BY
+              CASE status WHEN 'followUp' THEN 0 WHEN 'pending' THEN 1 WHEN 'contacted' THEN 2 ELSE 3 END,
+              created_at ASC
+          `,
+          [campaigns.map((campaign) => campaign.id), organizationId],
+        ),
+        query(
+          `
+            WITH latest_runs AS (
+              SELECT DISTINCT ON (r.campaign_id)
+                r.id,
+                r.campaign_id,
+                r.status,
+                r.scheduled_at,
+                r.eligible_count,
+                r.skipped_count,
+                r.call_script,
+                r.call_window_start,
+                r.call_window_end,
+                r.retry_limit,
+                r.created_at,
+                r.updated_at
+              FROM public.campaign_call_runs r
+              WHERE r.organization_id = $2 AND r.campaign_id = ANY($1::uuid[])
+              ORDER BY r.campaign_id, r.created_at DESC
+            )
+            SELECT
+              lr.id::text,
+              lr.campaign_id::text,
+              lr.status,
+              lr.scheduled_at,
+              lr.eligible_count,
+              lr.skipped_count,
+              COUNT(*) FILTER (WHERE j.status = 'queued')::int AS queued_count,
+              COUNT(*) FILTER (WHERE j.status = 'pending')::int AS pending_count,
+              COUNT(*) FILTER (WHERE j.status = 'calling')::int AS calling_count,
+              COUNT(*) FILTER (WHERE j.status = 'completed')::int AS completed_count,
+              COUNT(*) FILTER (WHERE j.status = 'failed')::int AS failed_count,
+              COUNT(*) FILTER (WHERE j.status = 'cancelled')::int AS cancelled_count,
+              lr.call_script,
+              lr.call_window_start,
+              lr.call_window_end,
+              lr.retry_limit,
+              lr.created_at,
+              lr.updated_at
+            FROM latest_runs lr
+            LEFT JOIN public.campaign_call_jobs j ON j.run_id = lr.id
+            GROUP BY
+              lr.id,
+              lr.campaign_id,
+              lr.status,
+              lr.scheduled_at,
+              lr.eligible_count,
+              lr.skipped_count,
+              lr.call_script,
+              lr.call_window_start,
+              lr.call_window_end,
+              lr.retry_limit,
+              lr.created_at,
+              lr.updated_at
+          `,
+          [campaigns.map((campaign) => campaign.id), organizationId],
+        ),
+      ])
+    : [{ rows: [] }, { rows: [] }];
   const latestRunByCampaign = new Map(latestRunRows.rows.map((row) => [row.campaign_id, normalizeCallRun(row)]));
 
   const targetsByCampaign = new Map();
@@ -2849,6 +3078,12 @@ async function loadCampaigns(context) {
       score: Number(user.riskScore || 0),
     });
     targetsByCampaign.set(target.campaign_id, bucket);
+  }
+
+  for (const campaign of campaigns) {
+    if (targetsByCampaign.has(campaign.id)) continue;
+    const derivedTargets = deriveCampaignTargets(campaign, dashboardData.gisUsers);
+    if (derivedTargets.length) targetsByCampaign.set(campaign.id, derivedTargets);
   }
 
   return campaigns.map((campaign) => normalizeCampaign(campaign, targetsByCampaign.get(campaign.id) || [], latestRunByCampaign.get(campaign.id) || null));
@@ -5866,6 +6101,34 @@ app.get("/api/health", async (req, res, next) => {
 app.get("/api/v1/me", asyncRoute(async (req, res) => {
   res.json({ user: publicContext(req.context) });
 }));
+
+app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
+  const email = normalizedEmail(req.body?.email);
+  if (!isValidEmail(email)) {
+    res.status(400).json({ error: "Enter a valid email address" });
+    return;
+  }
+
+  const allowed = await authorizedConsoleEmail(email);
+  if (!allowed) {
+    res.json({ sent: true });
+    return;
+  }
+
+  const sent = await sendConsoleMagicLink({
+    email,
+    redirectPath: req.body?.redirectPath,
+    language: loginEmailLanguage(req.body?.language),
+    origin: requestOrigin(req),
+  });
+
+  if (!sent.sent) {
+    res.status(503).json({ error: sent.error || "Sign-in email could not be sent" });
+    return;
+  }
+
+  res.json({ sent: true, provider: sent.provider });
+}, { auth: "none" }));
 
 app.get("/api/v1/organizations", async (req, res, next) => {
   try {
