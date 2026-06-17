@@ -5,11 +5,20 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LanguageProvider } from "@/contexts/LanguageContext";
-import { Toaster } from "@/components/ui/toaster";
 import Campaigns from "@/pages/Campaigns";
 
 const campaignPosts: unknown[] = [];
 let mockedCampaigns: unknown[] = [];
+const toastMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/hooks/use-toast", () => ({
+  toast: toastMock,
+  useToast: () => ({
+    toasts: [],
+    toast: toastMock,
+    dismiss: vi.fn(),
+  }),
+}));
 
 vi.mock("@/contexts/AuthContext", () => ({
   AuthProvider: ({ children }: { children: ReactNode }) => children,
@@ -72,7 +81,6 @@ function renderCampaigns() {
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={["/campaigns"]}>
         <LanguageProvider>
-          <Toaster />
           <Campaigns />
         </LanguageProvider>
       </MemoryRouter>
@@ -98,6 +106,7 @@ describe("Campaigns create flow", () => {
   beforeEach(() => {
     campaignPosts.length = 0;
     mockedCampaigns = [];
+    toastMock.mockClear();
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -277,7 +286,7 @@ describe("Campaigns create flow", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Schedule calls" }));
 
-    expect(await screen.findByText("Add a schedule first")).toBeInTheDocument();
+    expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Add a schedule first" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Edit campaign");
   });
 });
