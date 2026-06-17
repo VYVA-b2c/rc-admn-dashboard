@@ -9,7 +9,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { LanguageSelector } from "@/components/LanguageSelector";
 import { authBypassEnabled } from "@/lib/authMode";
 
 function safeNextPath(value: string | null) {
@@ -19,7 +18,7 @@ function safeNextPath(value: string | null) {
 
 export default function Login() {
   const { session, signInWithMagicLink } = useAuth();
-  const { language, t } = useLanguage();
+  const { t } = useLanguage();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,16 +44,20 @@ export default function Login() {
     magicLinkInFlight.current = true;
     setLoading(true);
     try {
-      const { error } = await signInWithMagicLink(email.trim(), nextPath, language);
+      const { error, delayed } = await signInWithMagicLink(email.trim(), nextPath);
       if (error) {
         const msg = error.message?.toLowerCase() ?? "";
-        if (msg.includes("rate") || msg.includes("429") || msg.includes("too many") || msg.includes("security") || msg.includes("wait")) {
+        if (msg.includes("rate") || msg.includes("429") || msg.includes("too many")) {
           rateLimitUntil.current = Date.now() + 60_000;
           toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
         } else {
           toast.error(t("login.magicLinkFailed"), { description: error.message });
         }
+      } else if (delayed) {
+        rateLimitUntil.current = Date.now() + 60_000;
+        toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkAlreadyRequestedDesc") });
       } else {
+        rateLimitUntil.current = Date.now() + 60_000;
         toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkSentDesc") });
       }
     } finally {
@@ -75,10 +78,7 @@ export default function Login() {
 
         <Card className="border-border/50 shadow-xl">
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="font-display">{t("login.adminSignIn")}</CardTitle>
-              <LanguageSelector />
-            </div>
+            <CardTitle className="font-display">{t("login.adminSignIn")}</CardTitle>
             <CardDescription>{t("login.enterEmailForMagicLink")}</CardDescription>
           </CardHeader>
           <CardContent>

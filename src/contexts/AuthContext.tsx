@@ -2,14 +2,13 @@ import { createContext, useContext, useEffect, useState, useRef, ReactNode } fro
 import { Session, User } from "@supabase/supabase-js";
 import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
 import { AUTH_SESSION_EXPIRED_EVENT, BASE_URL } from "@/lib/apiClient";
-import type { Language } from "@/lib/translations";
 
 interface AuthContextType {
   session: Session | null;
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signInWithMagicLink: (email: string, redirectPath?: string, emailLanguage?: Language) => Promise<{ error: Error | null }>;
+  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null; delayed?: boolean }>;
   signInWithOAuth: (provider: "google" | "azure", redirectPath?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
@@ -159,7 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { error: error as Error | null };
   };
 
-  const signInWithMagicLink = async (email: string, redirectPath?: string, emailLanguage: Language = "en") => {
+  const signInWithMagicLink = async (email: string, redirectPath?: string) => {
     if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     try {
       const response = await fetch(`${BASE_URL}/api/v1/auth/magic-link`, {
@@ -168,14 +167,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({
           email,
           redirectPath: safeRedirectPath(redirectPath),
-          language: emailLanguage,
         }),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         return { error: new Error(body?.error || "Sign-in email could not be sent.") };
       }
-      return { error: null };
+      const body = await response.json().catch(() => null);
+      return { error: null, delayed: Boolean(body?.delayed) };
     } catch {
       return { error: new Error("Sign-in email could not be sent.") };
     }

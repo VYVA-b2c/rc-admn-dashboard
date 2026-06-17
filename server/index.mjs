@@ -1744,19 +1744,33 @@ function loginRedirectPath(value) {
   return pathValue;
 }
 
-async function authorizedConsoleEmail(email) {
+function isMagicLinkRateLimitError(value) {
+  const message = String(value || "").toLowerCase();
+  return (
+    message.includes("rate") ||
+    message.includes("too many") ||
+    message.includes("security purposes") ||
+    message.includes("after 60 seconds") ||
+    message.includes("after 1 minute")
+  );
+}
+
+async function consoleLoginAccess(email) {
   const normalized = normalizedEmail(email);
-  if (!normalized) return false;
-  if (platformAdminEmails().includes(normalized)) return true;
+  if (!normalized) return { allowed: false, language: "en" };
+  const isConfiguredPlatformAdmin = platformAdminEmails().includes(normalized);
 
   const rows = await optionalRows(
     `
       SELECT
         p.user_id,
         p.is_platform_admin,
+        COALESCE(MAX(profile_org.default_language), MAX(role_org.default_language)) AS default_language,
         COUNT(r.user_id) FILTER (WHERE r.role IS NOT NULL) AS role_count
       FROM public.profiles p
       LEFT JOIN public.user_roles r ON r.user_id = p.user_id
+      LEFT JOIN public.organizations profile_org ON profile_org.id = p.organization_id
+      LEFT JOIN public.organizations role_org ON role_org.id = r.organization_id
       WHERE LOWER(p.email) = LOWER($1)
       GROUP BY p.user_id, p.is_platform_admin
       LIMIT 1
@@ -1764,7 +1778,11 @@ async function authorizedConsoleEmail(email) {
     [normalized],
   );
   const row = rows[0];
-  return Boolean(row?.is_platform_admin) || Number(row?.role_count || 0) > 0;
+  const allowed = isConfiguredPlatformAdmin || Boolean(row?.is_platform_admin) || Number(row?.role_count || 0) > 0;
+  return {
+    allowed,
+    language: loginEmailLanguage(row?.default_language || (isConfiguredPlatformAdmin ? "en" : null)),
+  };
 }
 
 async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
@@ -6517,8 +6535,8 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
     return;
   }
 
-  const allowed = await authorizedConsoleEmail(email);
-  if (!allowed) {
+  const loginAccess = await consoleLoginAccess(email);
+  if (!loginAccess.allowed) {
     res.json({ sent: true });
     return;
   }
@@ -6526,11 +6544,15 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
   const sent = await sendConsoleMagicLinkOnce({
     email,
     redirectPath: req.body?.redirectPath,
-    language: loginEmailLanguage(req.body?.language),
+    language: loginAccess.language,
     origin: requestOrigin(req),
   });
 
   if (!sent.sent) {
+    if (isMagicLinkRateLimitError(sent.error)) {
+      res.json({ sent: true, delayed: true, provider: sent.provider });
+      return;
+    }
     res.status(503).json({ error: sent.error || "Sign-in email could not be sent" });
     return;
   }
