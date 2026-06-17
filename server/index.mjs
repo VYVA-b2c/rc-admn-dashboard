@@ -628,6 +628,26 @@ function platformAdminEmails() {
     .filter(Boolean);
 }
 
+function userHasPlatformAdminMetadata(user) {
+  const metadata = user?.app_metadata && typeof user.app_metadata === "object" ? user.app_metadata : {};
+  const truthyFlags = [
+    metadata.is_platform_admin,
+    metadata.isPlatformAdmin,
+    metadata.platform_admin,
+    metadata.platformAdmin,
+  ];
+  if (truthyFlags.some((value) => value === true || String(value).toLowerCase() === "true")) return true;
+
+  const roleValues = [metadata.role, metadata.roles, metadata.user_role, metadata.user_roles].flatMap((value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") return value.split(",");
+    return [];
+  });
+  return roleValues
+    .map((value) => String(value).trim().toLowerCase().replace(/[\s-]+/g, "_"))
+    .some((value) => ["platform_admin", "super_admin", "superadmin"].includes(value));
+}
+
 async function defaultOrganization() {
   const result = await query(
     `
@@ -1163,14 +1183,18 @@ async function loadUserContext(user) {
         o.timezone
       FROM public.profiles p
       LEFT JOIN public.organizations o ON o.id = p.organization_id
-      WHERE p.user_id = $1
+      WHERE p.user_id = $1 OR ($2 <> '' AND LOWER(p.email) = LOWER($2))
+      ORDER BY CASE WHEN p.user_id = $1 THEN 0 ELSE 1 END
       LIMIT 1
     `,
-    [user.id],
+    [user.id, authEmail],
   );
   const profile = profileResult.rows[0] || null;
   const email = String(user.email || profile?.email || "").toLowerCase();
-  const isPlatformAdmin = Boolean(profile?.is_platform_admin) || platformAdminEmails().includes(email);
+  const isPlatformAdmin =
+    Boolean(profile?.is_platform_admin) ||
+    platformAdminEmails().includes(email) ||
+    userHasPlatformAdminMetadata(user);
   const roles = Array.from(new Set(
     rolesResult.rows
       .map((row) => row.role === "admin" ? "admin" : "operator")

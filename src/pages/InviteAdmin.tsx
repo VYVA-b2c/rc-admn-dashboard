@@ -44,7 +44,8 @@ export default function InviteAdmin() {
   const { data: currentContext, isLoading: loadingContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const organizationId = currentUser?.organization?.id;
-  const canManageTeam = Boolean(currentUser?.isAdmin && organizationId && !authBypassEnabled);
+  const hasTeamAccess = Boolean(currentUser?.isAdmin || currentUser?.isPlatformAdmin);
+  const canManageTeam = Boolean(hasTeamAccess && organizationId && !authBypassEnabled);
   const formDisabled = loadingContext || !canManageTeam;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -59,7 +60,7 @@ export default function InviteAdmin() {
       const data = await apiFetch<TeamMembersResponse>("/api/v1/team-members");
       return data.members || [];
     },
-    enabled: !authBypassEnabled && Boolean(currentUser?.isAdmin && organizationId),
+    enabled: !authBypassEnabled && Boolean(hasTeamAccess && organizationId),
     placeholderData: [],
     retry: false,
   });
@@ -71,7 +72,7 @@ export default function InviteAdmin() {
       toast.info(t("invite.previewDisabled"));
       return;
     }
-    if (!currentUser?.isAdmin) {
+    if (!hasTeamAccess) {
       toast.error(t("invite.adminRequired"));
       return;
     }
@@ -146,7 +147,7 @@ export default function InviteAdmin() {
                 ? t("invite.previewDisabled")
                 : loadingContext
                   ? t("invite.teamAccessLoading")
-                  : !currentUser?.isAdmin
+                  : !hasTeamAccess
                     ? t("invite.adminRequired")
                     : t("invite.organizationRequired")}
             </div>
