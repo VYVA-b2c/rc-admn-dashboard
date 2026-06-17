@@ -49,6 +49,12 @@ Deno.serve(async (req) => {
     }
 
     const assignedRole = role || "admin";
+    if (!["admin", "operator"].includes(assignedRole)) {
+      return new Response(JSON.stringify({ error: "Role must be admin or operator" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { data, error } = await supabase.auth.admin.createUser({
       email,
@@ -64,6 +70,7 @@ Deno.serve(async (req) => {
     if (data.user) {
       await supabase.from("user_roles").insert({
         user_id: data.user.id,
+        organization_id: organization_id || null,
         role: assignedRole,
       });
     }

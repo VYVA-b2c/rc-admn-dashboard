@@ -34,6 +34,8 @@ type CreateTeamMemberResponse = {
   member?: AdminUserRow | null;
 };
 
+type TeamRole = "admin" | "operator";
+
 export default function InviteAdmin() {
   const { t } = useLanguage();
   const { data: currentContext, isLoading: loadingContext } = useCurrentUserContext();
@@ -43,7 +45,7 @@ export default function InviteAdmin() {
   const formDisabled = loadingContext || !canManageTeam;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<string>("admin");
+  const [role, setRole] = useState<TeamRole>("admin");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -176,12 +178,11 @@ export default function InviteAdmin() {
             <div className="flex gap-3 items-end">
               <div className="w-48 space-y-1.5">
                 <Label>{t("invite.role")}</Label>
-                <Select value={role} onValueChange={setRole} disabled={formDisabled}>
+                <Select value={role} onValueChange={(value) => setRole(value as TeamRole)} disabled={formDisabled}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="admin">{t("invite.admin")}</SelectItem>
                     <SelectItem value="operator">{t("invite.operator")}</SelectItem>
-                    <SelectItem value="coordinator">{t("invite.coordinator")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -102,14 +102,15 @@ export default function Settings() {
     null;
   const organizationPlaceholder =
     loadingCurrentContext || organizationsQuery.isLoading ? t("settings.loadingOrganization") : t("settings.notAvailable");
-  const canManageOrganizations = Boolean(currentUser?.isPlatformAdmin || currentUser?.isAdmin);
+  const canManageCurrentOrganization = Boolean(currentUser?.isPlatformAdmin || currentUser?.isAdmin);
+  const canManageOrganizationDirectory = Boolean(currentUser?.isPlatformAdmin);
   const roleLabel = loadingCurrentContext
     ? t("settings.loadingOrganization")
     : currentUser?.isPlatformAdmin
       ? t("settings.role.superAdmin")
       : currentUser?.isAdmin
         ? t("settings.role.admin")
-        : t("settings.role.noOrgAdmin");
+        : t("settings.role.operator");
   const roleBadgeClass = currentUser?.isPlatformAdmin || currentUser?.isAdmin
     ? "border-primary/20 bg-primary/10 text-primary"
     : "border-orange-200 bg-orange-50 text-orange-700";
@@ -190,6 +191,7 @@ export default function Settings() {
   };
 
   const openCreateOrganization = () => {
+    if (!canManageOrganizationDirectory) return;
     setOrganizationForm(emptyOrganizationForm);
     setEditingOrganizationId(null);
     setOrganizationDialogMode("create");
@@ -197,6 +199,7 @@ export default function Settings() {
 
   const openEditOrganization = (organization: OrganizationContext) => {
     if (!organization.id) return;
+    if (!canManageOrganizationDirectory && organization.id !== currentOrganization?.id) return;
     setOrganizationForm({
       active: organization.active ?? true,
       country: organization.country ?? "",
@@ -210,6 +213,7 @@ export default function Settings() {
   };
 
   const handleSwitchOrganization = async (nextOrganizationId: string) => {
+    if (!canManageOrganizationDirectory) return;
     setActiveOrganizationId(nextOrganizationId);
     localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, nextOrganizationId);
     await queryClient.invalidateQueries();
@@ -243,12 +247,16 @@ export default function Settings() {
     if (organizationDialogMode === "edit" && editingOrganizationId) {
       updateOrganization.mutate({
         id: editingOrganizationId,
-        active: payload.active,
+        active: canManageOrganizationDirectory ? payload.active : undefined,
         country: payload.country,
         defaultLanguage: payload.defaultLanguage,
         name: payload.name,
         timezone: payload.timezone,
       });
+      return;
+    }
+    if (!canManageOrganizationDirectory) {
+      toast.error(t("settings.platformAdminRequiredDescription"));
       return;
     }
     createOrganization.mutate(payload);
@@ -307,7 +315,7 @@ export default function Settings() {
               <Button
                 type="button"
                 className="rounded-full"
-                disabled={!canManageOrganizations}
+                disabled={!canManageOrganizationDirectory}
                 onClick={openCreateOrganization}
               >
                 <Plus className="h-4 w-4" />
@@ -337,7 +345,7 @@ export default function Settings() {
                   <Select
                     value={currentOrganization?.id || ""}
                     onValueChange={(value) => void handleSwitchOrganization(value)}
-                    disabled={organizations.length === 0}
+                    disabled={!canManageOrganizationDirectory || organizations.length === 0}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder={organizationPlaceholder} />
@@ -356,7 +364,7 @@ export default function Settings() {
                   <Select
                     value={branchLanguage}
                     onValueChange={(value) => setBranchLanguage(value as LanguageCode)}
-                    disabled={!canManageOrganizations}
+                    disabled={!canManageCurrentOrganization}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -375,10 +383,10 @@ export default function Settings() {
                     value={branchTimezone}
                     onChange={(event) => setBranchTimezone(event.target.value)}
                     placeholder="Europe/Madrid"
-                    disabled={!canManageOrganizations}
+                    disabled={!canManageCurrentOrganization}
                   />
                 </div>
-                {canManageOrganizations && (
+                {canManageCurrentOrganization && (
                   <div className="flex items-end">
                     <Button
                       type="button"
@@ -393,7 +401,7 @@ export default function Settings() {
               </div>
             </div>
 
-            {!canManageOrganizations && (
+            {!canManageCurrentOrganization && (
               <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4 text-sm text-orange-800">
                 <p className="font-semibold">{t("settings.orgAdminRequiredTitle")}</p>
                 <p className="mt-1">{t("settings.orgAdminRequiredDescription")}</p>
@@ -414,7 +422,7 @@ export default function Settings() {
                       <Badge variant="outline" className={organization.active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-muted bg-muted text-muted-foreground"}>
                         {organization.active ? t("settings.status.active") : t("settings.status.inactive")}
                       </Badge>
-                      {canManageOrganizations && organization.id && (
+                      {(canManageOrganizationDirectory || organization.id === currentOrganization?.id) && canManageCurrentOrganization && organization.id && (
                         <Button
                           type="button"
                           variant="outline"
@@ -582,6 +590,7 @@ export default function Settings() {
                   id="organization-active"
                   checked={organizationForm.active}
                   onCheckedChange={(checked) => updateOrganizationForm("active", checked)}
+                  disabled={!canManageOrganizationDirectory}
                 />
               </div>
             </div>

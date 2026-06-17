@@ -72,7 +72,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             </div>
 
             <div className="ml-auto flex items-center gap-3">
-              {currentUser?.isAdmin && (organizationsQuery.data?.organizations?.length ?? 0) > 1 && (
+              {currentUser?.isPlatformAdmin && (organizationsQuery.data?.organizations?.length ?? 0) > 1 && (
                 <Select value={organizationId} onValueChange={(value) => void handleOrganizationChange(value)}>
                   <SelectTrigger
                     aria-label={t("layout.switchOrganization")}

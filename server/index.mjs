@@ -4905,7 +4905,9 @@ app.get("/api/v1/organizations", async (req, res, next) => {
         if (databaseOrganizations.length) {
           organizations = context?.isPlatformAdmin
             ? databaseOrganizations
-            : databaseOrganizations.filter((organization) => organization.id === context?.organizationId);
+            : context?.organizationId
+              ? databaseOrganizations.filter((organization) => organization.id === context.organizationId)
+              : databaseOrganizations;
         }
         if (!organizations.length && context?.organization?.id) organizations = [context.organization];
       } catch (error) {
@@ -4959,6 +4961,7 @@ app.patch("/api/v1/organizations/:id", asyncRoute(async (req, res) => {
     res.status(400).json({ error: payload.error });
     return;
   }
+  if (!req.context?.isPlatformAdmin) payload.value.active = null;
   const result = await query(
     `
       UPDATE public.organizations

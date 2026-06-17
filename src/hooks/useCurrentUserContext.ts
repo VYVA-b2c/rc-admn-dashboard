@@ -20,8 +20,8 @@ export type CurrentUserContext = {
   isAdmin: boolean;
   isPlatformAdmin: boolean;
   organization: OrganizationContext | null;
-  role: "admin" | "operator" | "coordinator" | null;
-  roles: Array<"admin" | "operator" | "coordinator">;
+  role: "admin" | "operator" | null;
+  roles: Array<"admin" | "operator">;
   userId: string | null;
 };
 

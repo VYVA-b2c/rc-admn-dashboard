@@ -1927,9 +1927,24 @@ export default function Campaigns() {
                         placeholder={t("campaigns.form.namePlaceholder")}
                       />
                     </div>
-                    <DetailBlock title={t("campaigns.wizard.templateChoice")}>
-                      <p className="text-sm leading-6 text-muted-foreground">{templateDescription(form.templateKey)}</p>
-                    </DetailBlock>
+                    <div className="rounded-2xl border border-border bg-slate-50 p-4">
+                      <div className="mb-3 flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.call.script")}</p>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                        </div>
+                        <Badge className="shrink-0 rounded-full border-0 bg-primary/10 text-primary">
+                          {templateLabel(form.templateKey)}
+                        </Badge>
+                      </div>
+                      <Textarea
+                        id="campaign-template-message"
+                        value={form.callScript}
+                        onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                        placeholder={t("campaigns.call.scriptPlaceholder")}
+                        className="min-h-[220px] resize-y bg-white text-sm leading-6"
+                      />
+                    </div>
                   </aside>
                 </section>
               )}
