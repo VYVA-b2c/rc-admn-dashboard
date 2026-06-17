@@ -36,7 +36,13 @@ email sender is ever used:
 {{ .Data.organization_name }}
 {{ .Data.invited_role_label }}
 {{ .Data.guide_url }}
+{{ .Data.manual_url }}
 ```
+
+`manual_url` is optional. Until the final user manual is ready, the template
+uses `https://rcadmin.vyva.life/manual` as a placeholder. Replace that URL in
+`magic-link.html`, or pass `manual_url` when requesting the magic link, once the
+final guide link is available.
 
 For the current admin-created team invite flow, update the backend email copy in
 `server/index.mjs` instead of editing the hosted Supabase template.
@@ -52,6 +58,10 @@ Recommended subject:
 Paste the full contents of `magic-link.html` into the hosted auth email template
 editor for regular one-time login / magic-link emails, then save and send a
 fresh test magic link. Existing emails in inboxes will not change.
+
+If a test email still shows the plain "One-time login link" design, the hosted
+auth email editor is still using the default template. Paste this file into that
+editor again and save before sending another test email.
 
 ## Sender settings
 
