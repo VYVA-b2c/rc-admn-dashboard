@@ -474,7 +474,14 @@ async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context
   }
 
   const existingShadowId = await loadLocalUserIdForExternalUser(userId, context, client);
-  if (existingShadowId) return { value: existingShadowId };
+  if (existingShadowId) {
+    const externalData = await fetchExternalUserProfileForShadow(userId).catch(() => null);
+    const onboardingCaregivers = externalCaregiversForShadow(externalData);
+    if (onboardingCaregivers.length) {
+      await replaceCaregiversWithClient(client, existingShadowId, onboardingCaregivers, organizationId);
+    }
+    return { value: existingShadowId };
+  }
 
   const externalData = await fetchExternalUserProfileForShadow(userId);
   if (!externalData?.user) return { notFound: true };
@@ -4078,7 +4085,7 @@ async function loadCareProviders(filters = {}, context) {
   const organizationId = scopeOrganizationId(context);
   const search = nullIfBlank(filters.search)?.toLowerCase() || null;
   const type = filters.type && filters.type !== "all" ? normalizeCareProviderType(filters.type) : null;
-  const rows = await optionalRows(
+  const queryCareProviderRows = async () => optionalRows(
     `
       WITH caregiver_counts AS (
         SELECT
@@ -4256,6 +4263,40 @@ async function loadCareProviders(filters = {}, context) {
     `,
     [search, type, organizationId],
   );
+  let rows = await queryCareProviderRows();
+
+  if ((type === null || type === "caregiver") && !rows.some((row) => row.provider_type === "caregiver")) {
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+    const upstreamUsers = Array.isArray(upstream?.data?.gisUsers) ? upstream.data.gisUsers : [];
+    const externalIds = Array.from(
+      new Set(
+        upstreamUsers
+          .map((user) => nullIfBlank(firstValue(user?.id, user?.external_user_id)))
+          .filter(Boolean),
+      ),
+    ).slice(0, 100);
+
+    if (externalIds.length) {
+      const client = await pool.connect();
+      try {
+        let synced = 0;
+        for (const externalId of externalIds) {
+          try {
+            const result = await ensureLocalUserForAssignmentWithClient(client, externalId, context);
+            if (result?.value) synced += 1;
+          } catch (error) {
+            console.warn("Unable to sync caregiver directory for external user:", externalId, error instanceof Error ? error.message : error);
+          }
+        }
+        if (synced > 0) {
+          rows = await queryCareProviderRows();
+        }
+      } finally {
+        client.release();
+      }
+    }
+  }
+
   return rows.map(careProviderAssignmentRow);
 }
 
