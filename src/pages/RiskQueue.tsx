@@ -7,6 +7,7 @@ import {
   BrainCircuit,
   CheckCircle2,
   Clock3,
+  HelpCircle,
   LineChart,
   Loader2,
   Pill,
@@ -19,8 +20,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
 import { useGISData, type GISFieldStaff, type GISUser } from "@/hooks/useGISData";
 import { apiFetch } from "@/lib/apiClient";
@@ -102,6 +105,27 @@ const filterOptions = [
   { value: "noresponse", label: "No response" },
   { value: "unassigned", label: "Unassigned" },
 ] as const;
+
+function HelpButton({ title, body }: { title: string; body: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={title}
+          aria-label={title}
+          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-white text-muted-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <HelpCircle className="h-4 w-4" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 rounded-xl border-border p-4">
+        <p className="text-sm font-bold text-foreground">{title}</p>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{body}</p>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 const demoClients: InsightClient[] = [
   {
@@ -474,6 +498,7 @@ function RiskTrajectory({ client }: { client: InsightClient }) {
 }
 
 export default function RiskQueue() {
+  const { t } = useLanguage();
   const [days, setDays] = useState<(typeof horizonOptions)[number]>(7);
   const [filter, setFilter] = useState<(typeof filterOptions)[number]["value"]>("all");
   const queryClient = useQueryClient();
@@ -516,6 +541,24 @@ export default function RiskQueue() {
     () => Math.max(1, ...(data?.horizon ?? []).map((row) => Math.max(row.hoursNeeded, row.hoursAvailable))),
     [data?.horizon],
   );
+  const kpiHelp = {
+    escalations: {
+      title: t("riskQueue.help.escalations.title"),
+      body: t("riskQueue.help.escalations.body"),
+    },
+    trending: {
+      title: t("riskQueue.help.trending.title"),
+      body: t("riskQueue.help.trending.body"),
+    },
+    adherence: {
+      title: t("riskQueue.help.adherence.title"),
+      body: t("riskQueue.help.adherence.body"),
+    },
+    capacity: {
+      title: t("riskQueue.help.capacity.title"),
+      body: t("riskQueue.help.capacity.body"),
+    },
+  };
 
   if (insightsQuery.isLoading || (insightsQuery.isError && operationalQuery.isLoading)) {
     return (
@@ -546,7 +589,7 @@ export default function RiskQueue() {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-display text-2xl font-bold text-foreground">Predictive insights</h1>
+            <h1 className="font-display text-2xl font-bold text-foreground">{t("riskQueue.title")}</h1>
             {data.source !== "predicted" && (
               <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
                 {data.source === "operational" ? "Operational data" : "Preview data"}
@@ -576,10 +619,10 @@ export default function RiskQueue() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard icon={AlertTriangle} label="Escalations 7d" value={data.kpis.predictedEscalations7d} tone="red" />
-        <KpiCard icon={ArrowUpRight} label="Trending up" value={data.kpis.clientsTrendingUp} tone="orange" />
-        <KpiCard icon={Pill} label="Adherence risk" value={data.kpis.adherenceRiskFlags} tone="amber" />
-        <KpiCard icon={UsersRound} label="Over capacity" value={data.kpis.operatorsOverCapacity} tone="slate" />
+        <KpiCard icon={AlertTriangle} label="Escalations 7d" value={data.kpis.predictedEscalations7d} tone="red" help={kpiHelp.escalations} />
+        <KpiCard icon={ArrowUpRight} label="Trending up" value={data.kpis.clientsTrendingUp} tone="orange" help={kpiHelp.trending} />
+        <KpiCard icon={Pill} label="Adherence risk" value={data.kpis.adherenceRiskFlags} tone="amber" help={kpiHelp.adherence} />
+        <KpiCard icon={UsersRound} label="Over capacity" value={data.kpis.operatorsOverCapacity} tone="slate" help={kpiHelp.capacity} />
       </div>
 
       <Card className="border-border bg-white shadow-sm">
@@ -588,7 +631,10 @@ export default function RiskQueue() {
             <CardTitle className="text-base font-bold">Forecast horizon</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">Daily predicted demand versus available operator hours.</p>
           </div>
-          <Clock3 className="h-5 w-5 text-primary" />
+          <div className="flex items-center gap-2">
+            <HelpButton title={t("riskQueue.help.horizon.title")} body={t("riskQueue.help.horizon.body")} />
+            <Clock3 className="h-5 w-5 text-primary" />
+          </div>
         </CardHeader>
         <CardContent className="px-5 pb-5">
           {data.horizon.length === 0 ? (
@@ -638,22 +684,25 @@ export default function RiskQueue() {
                 <CardTitle className="text-base font-bold">Client trajectories</CardTitle>
                 <p className="mt-1 text-sm text-muted-foreground">Composite score history with 30-day uncertainty cones.</p>
               </div>
-              <div className="flex max-w-full gap-2 overflow-x-auto">
-                {filterOptions.map((option) => (
-                  <Button
-                    key={option.value}
-                    type="button"
-                    size="sm"
-                    variant={filter === option.value ? "default" : "outline"}
-                    onClick={() => setFilter(option.value)}
-                    className={cn(
-                      "h-8 shrink-0 rounded-full px-3 text-xs font-semibold",
-                      filter !== option.value && "border-border bg-white text-muted-foreground",
-                    )}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
+              <div className="flex items-center gap-2">
+                <HelpButton title={t("riskQueue.help.trajectories.title")} body={t("riskQueue.help.trajectories.body")} />
+                <div className="flex max-w-full gap-2 overflow-x-auto">
+                  {filterOptions.map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant={filter === option.value ? "default" : "outline"}
+                      onClick={() => setFilter(option.value)}
+                      className={cn(
+                        "h-8 shrink-0 rounded-full px-3 text-xs font-semibold",
+                        filter !== option.value && "border-border bg-white text-muted-foreground",
+                      )}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
               </div>
             </div>
           </CardHeader>
@@ -673,7 +722,10 @@ export default function RiskQueue() {
                 <CardTitle className="text-base font-bold">Operator capacity</CardTitle>
                 <p className="mt-1 text-sm text-muted-foreground">Current caseload against recommended load.</p>
               </div>
-              <UserRoundCheck className="h-5 w-5 text-primary" />
+              <div className="flex items-center gap-2">
+                <HelpButton title={t("riskQueue.help.operator.title")} body={t("riskQueue.help.operator.body")} />
+                <UserRoundCheck className="h-5 w-5 text-primary" />
+              </div>
             </CardHeader>
             <CardContent className="space-y-4 px-5 pb-5">
               {data.operators.length === 0 ? (
@@ -690,7 +742,10 @@ export default function RiskQueue() {
                 <CardTitle className="text-base font-bold">Reassignment suggestions</CardTitle>
                 <p className="mt-1 text-sm text-muted-foreground">Pending moves generated by the nightly run.</p>
               </div>
-              <BrainCircuit className="h-5 w-5 text-primary" />
+              <div className="flex items-center gap-2">
+                <HelpButton title={t("riskQueue.help.reassignment.title")} body={t("riskQueue.help.reassignment.body")} />
+                <BrainCircuit className="h-5 w-5 text-primary" />
+              </div>
             </CardHeader>
             <CardContent className="space-y-3 px-5 pb-5">
               {data.suggestions.length === 0 ? (
@@ -741,7 +796,19 @@ export default function RiskQueue() {
   );
 }
 
-function KpiCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: number; tone: "red" | "orange" | "amber" | "slate" }) {
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  tone,
+  help,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  tone: "red" | "orange" | "amber" | "slate";
+  help?: { title: string; body: string };
+}) {
   const toneClass = {
     red: "bg-red-50 text-red-700",
     orange: "bg-orange-50 text-orange-700",
@@ -751,12 +818,15 @@ function KpiCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: 
 
   return (
     <Card className="border-border bg-white shadow-sm">
-      <CardContent className="flex h-28 items-center justify-between p-5">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
+      <CardContent className="flex h-28 items-start justify-between gap-3 p-5">
+        <div className="min-w-0">
+          <div className="flex items-start gap-2">
+            <p className="min-w-0 text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
+            {help ? <HelpButton title={help.title} body={help.body} /> : null}
+          </div>
           <p className="mt-2 text-3xl font-bold tracking-tight text-foreground">{value}</p>
         </div>
-        <div className={cn("flex h-11 w-11 items-center justify-center rounded-lg", toneClass)}>
+        <div className={cn("flex h-11 w-11 shrink-0 items-center justify-center rounded-lg", toneClass)}>
           <Icon className="h-5 w-5" />
         </div>
       </CardContent>
