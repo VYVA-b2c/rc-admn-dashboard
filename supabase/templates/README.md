@@ -24,10 +24,23 @@ The app sends this value when requesting a magic link. It uses the language
 selected in Settings, or the browser language when no setting exists. Supported
 values are `en`, `de`, and `es`; the template falls back to English.
 
+Team invite emails also read optional metadata sent by the admin console:
+
+```html
+{{ .Data.invite_type }}
+{{ .Data.organization_name }}
+{{ .Data.invited_role_label }}
+{{ .Data.guide_url }}
+```
+
+When `invite_type` is `team_member`, the template explains that the recipient
+has been added to the console for the named organization and links to the team
+access guide.
+
 Recommended subject:
 
 ```text
-{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}
+{{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Ihre Einladung zur VYVA Konsole{{ else if eq .Data.language "es" }}Tu invitacion a la consola VYVA{{ else }}Your VYVA console invitation{{ end }}{{ else }}{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}{{ end }}
 ```
 
 ## Applying it now

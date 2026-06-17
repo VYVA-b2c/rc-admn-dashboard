@@ -30,7 +30,10 @@ type TeamMembersResponse = {
 };
 
 type CreateTeamMemberResponse = {
-  inviteMode?: "password" | "magic_link_pending";
+  inviteMode?: "password" | "magic_link_pending" | "magic_link_sent" | "magic_link_unavailable";
+  inviteEmailSent?: boolean;
+  inviteEmailError?: string | null;
+  guideUrl?: string | null;
   member?: AdminUserRow | null;
 };
 
@@ -84,17 +87,30 @@ export default function InviteAdmin() {
         method: "POST",
         body: JSON.stringify({ email, password: password || undefined, role }),
       });
-      const inviteInstructions = password
-        ? `Email: ${email}\nPassword: ${password}`
-        : `Email: ${email}\nSign in with the magic link option to activate console access.`;
-      toast.success(t("invite.userCreated"), {
-        description: response.inviteMode === "password" ? t("invite.shareCredentials") : t("invite.magicLinkInviteQueued"),
+      const inviteInstructions = [
+        `Email: ${email}`,
+        response.inviteEmailSent
+          ? "A secure magic-link invite email was sent."
+          : password
+            ? `Temporary password: ${password}`
+            : "Invite email was not sent. Ask the team member to request a magic link from the sign-in page.",
+        response.guideUrl ? `Guide: ${response.guideUrl}` : null,
+      ].filter(Boolean).join("\n");
+      const toastOptions = {
+        description: response.inviteEmailSent
+          ? t("invite.magicLinkInviteSent")
+          : response.inviteEmailError || (password ? t("invite.shareCredentials") : t("invite.magicLinkInviteUnavailable")),
         duration: 15000,
         action: {
-          label: t("invite.copyCredentials"),
+          label: response.inviteEmailSent ? t("invite.copyInviteSummary") : t("invite.copyCredentials"),
           onClick: () => navigator.clipboard.writeText(inviteInstructions),
         },
-      });
+      };
+      if (response.inviteEmailSent) {
+        toast.success(t("invite.userCreated"), toastOptions);
+      } else {
+        toast.warning(t("invite.userCreated"), toastOptions);
+      }
       setEmail("");
       setPassword("");
       refetch();

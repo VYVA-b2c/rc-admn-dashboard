@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}</title>
+    <title>{{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Ihre Einladung zur VYVA Konsole{{ else if eq .Data.language "es" }}Tu invitacion a la consola VYVA{{ else }}Your VYVA console invitation{{ end }}{{ else }}{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}{{ end }}</title>
   </head>
   <body style="margin:0;background:#eef3fb;font-family:Arial,Helvetica,sans-serif;color:#17172f;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
-      {{ if eq .Data.language "de" }}Sicherer Einmal-Link fuer die VYVA Operationskonsole.{{ else if eq .Data.language "es" }}Enlace seguro de un solo uso para la consola VYVA.{{ else }}Secure one-time link for the VYVA operations console.{{ end }}
+      {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Sie wurden zur VYVA Operationskonsole eingeladen.{{ else if eq .Data.language "es" }}Te invitaron a la consola de operaciones VYVA.{{ else }}You have been invited to the VYVA operations console.{{ end }}{{ else }}{{ if eq .Data.language "de" }}Sicherer Einmal-Link fuer die VYVA Operationskonsole.{{ else if eq .Data.language "es" }}Enlace seguro de un solo uso para la consola VYVA.{{ else }}Secure one-time link for the VYVA operations console.{{ end }}{{ end }}
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:32px 12px;">
@@ -33,13 +33,13 @@
             <tr>
               <td style="padding:34px 32px 8px;">
                 <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">
-                  {{ if eq .Data.language "de" }}Sicherer Login{{ else if eq .Data.language "es" }}Acceso seguro{{ else }}Secure sign-in{{ end }}
+                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Teameinladung{{ else if eq .Data.language "es" }}Invitacion de equipo{{ else }}Team invite{{ end }}{{ else }}{{ if eq .Data.language "de" }}Sicherer Login{{ else if eq .Data.language "es" }}Acceso seguro{{ else }}Secure sign-in{{ end }}{{ end }}
                 </p>
                 <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">
-                  {{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Accede a VYVA{{ else }}Sign in to VYVA{{ end }}
+                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Willkommen bei VYVA{{ else if eq .Data.language "es" }}Bienvenido a VYVA{{ else }}Welcome to VYVA{{ end }}{{ else }}{{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Accede a VYVA{{ else }}Sign in to VYVA{{ end }}{{ end }}
                 </h1>
                 <p style="margin:0;font-size:16px;line-height:1.65;color:#5f667a;">
-                  {{ if eq .Data.language "de" }}Nutzen Sie den Button unten, um die VYVA Operationskonsole zu oeffnen. Dieser Link kann nur einmal verwendet werden.{{ else if eq .Data.language "es" }}Usa el boton de abajo para abrir la consola de operaciones VYVA. Este enlace solo se puede usar una vez.{{ else }}Use the button below to open the VYVA operations console. This link can only be used once.{{ end }}
+                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Sie wurden{{ if .Data.organization_name }} fuer {{ .Data.organization_name }}{{ end }} als {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}Teammitglied{{ end }} hinzugefuegt. Nutzen Sie den sicheren Link unten, um die Konsole zu oeffnen.{{ else if eq .Data.language "es" }}Te agregaron{{ if .Data.organization_name }} a {{ .Data.organization_name }}{{ end }} como {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}miembro del equipo{{ end }}. Usa el enlace seguro de abajo para abrir la consola.{{ else }}You were added{{ if .Data.organization_name }} to {{ .Data.organization_name }}{{ end }} as {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}a team member{{ end }}. Use the secure link below to open the console.{{ end }}{{ else }}{{ if eq .Data.language "de" }}Nutzen Sie den Button unten, um die VYVA Operationskonsole zu oeffnen. Dieser Link kann nur einmal verwendet werden.{{ else if eq .Data.language "es" }}Usa el boton de abajo para abrir la consola de operaciones VYVA. Este enlace solo se puede usar una vez.{{ else }}Use the button below to open the VYVA operations console. This link can only be used once.{{ end }}{{ end }}
                 </p>
               </td>
             </tr>
@@ -51,6 +51,28 @@
                 </a>
               </td>
             </tr>
+
+            {{ if .Data.guide_url }}
+            <tr>
+              <td style="padding:0 32px 30px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #dfe5ef;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">
+                        {{ if eq .Data.language "de" }}Interaktiver Guide{{ else if eq .Data.language "es" }}Guia interactiva{{ else }}Interactive guide{{ end }}
+                      </p>
+                      <p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#5f667a;">
+                        {{ if eq .Data.language "de" }}Nach der Anmeldung koennen Sie den Guide oeffnen, um sich in der Konsole zu orientieren.{{ else if eq .Data.language "es" }}Despues de iniciar sesion, puedes abrir la guia para orientarte en la consola.{{ else }}After signing in, open the guide for help getting oriented in the console.{{ end }}
+                      </p>
+                      <a href="{{ .Data.guide_url }}" style="display:inline-block;color:#6c4df6;text-decoration:none;font-size:14px;font-weight:700;">
+                        {{ if eq .Data.language "de" }}Guide oeffnen{{ else if eq .Data.language "es" }}Abrir guia{{ else }}Open guide{{ end }}
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            {{ end }}
 
             <tr>
               <td style="padding:0 32px 30px;">

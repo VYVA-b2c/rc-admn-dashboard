@@ -1446,7 +1446,7 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.email": "Email",
     "invite.tempPassword": "Temporary Password",
     "invite.tempPasswordOptional": "Temporary password (optional)",
-    "invite.passwordOptionalHelp": "Leave blank to activate access through the normal magic-link sign-in.",
+    "invite.passwordOptionalHelp": "Leave blank to send a secure magic-link invite. Use a temporary password only as a backup sign-in method.",
     "invite.min6chars": "Min. 6 characters",
     "invite.role": "Role",
     "invite.admin": "Admin",
@@ -1462,7 +1462,10 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.userCreated": "Team member created successfully",
     "invite.shareCredentials": "Share these sign-in details with the team member",
     "invite.magicLinkInviteQueued": "Ask the team member to sign in with their email magic link to activate access.",
+    "invite.magicLinkInviteSent": "Invite email sent with a secure magic link and guide link.",
+    "invite.magicLinkInviteUnavailable": "Team member was added, but the invite email could not be sent.",
     "invite.copyCredentials": "Copy credentials",
+    "invite.copyInviteSummary": "Copy invite summary",
     "invite.createFailed": "Failed to create team member",
     "invite.passwordTooShort": "Password must be at least 6 characters",
     "invite.adminRequired": "Only admins can add or manage team access.",
@@ -1471,6 +1474,14 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.status": "Status",
     "invite.status.active": "Active",
     "invite.status.pending": "Pending",
+
+    // Team Access Guide
+    "teamGuide.title": "Team access guide",
+    "teamGuide.subtitle": "A guided walkthrough for new console users will live here.",
+    "teamGuide.cardTitle": "Guide content coming soon",
+    "teamGuide.cardDescription": "This is the stable destination for invite emails. The interactive guide content can be added here next.",
+    "teamGuide.openDashboard": "Open dashboard",
+    "teamGuide.manageTeam": "Manage team access",
 
     // Common
     "common.poweredByVyva": "Powered by VYVA",
@@ -2921,7 +2932,7 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.email": "E-Mail",
     "invite.tempPassword": "Temporäres Passwort",
     "invite.tempPasswordOptional": "Temporäres Passwort (optional)",
-    "invite.passwordOptionalHelp": "Leer lassen, um den Zugang ueber den normalen Magic-Link-Login zu aktivieren.",
+    "invite.passwordOptionalHelp": "Leer lassen, um eine sichere Magic-Link-Einladung zu senden. Nutzen Sie ein temporaeres Passwort nur als Backup-Anmeldung.",
     "invite.min6chars": "Mind. 6 Zeichen",
     "invite.role": "Rolle",
     "invite.admin": "Admin",
@@ -2937,7 +2948,10 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.userCreated": "Teammitglied erfolgreich erstellt",
     "invite.shareCredentials": "Teilen Sie diese Zugangsdaten mit dem Teammitglied",
     "invite.magicLinkInviteQueued": "Bitten Sie das Teammitglied, sich per E-Mail-Magic-Link anzumelden, um den Zugang zu aktivieren.",
+    "invite.magicLinkInviteSent": "Einladungs-E-Mail mit sicherem Magic Link und Guide-Link gesendet.",
+    "invite.magicLinkInviteUnavailable": "Teammitglied wurde hinzugefuegt, aber die Einladungs-E-Mail konnte nicht gesendet werden.",
     "invite.copyCredentials": "Zugangsdaten kopieren",
+    "invite.copyInviteSummary": "Einladungsuebersicht kopieren",
     "invite.createFailed": "Teammitglied konnte nicht erstellt werden",
     "invite.passwordTooShort": "Passwort muss mindestens 6 Zeichen lang sein",
     "invite.adminRequired": "Nur Admins koennen Teamzugang hinzufuegen oder verwalten.",
@@ -2946,6 +2960,14 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.status": "Status",
     "invite.status.active": "Aktiv",
     "invite.status.pending": "Ausstehend",
+
+    // Team Access Guide
+    "teamGuide.title": "Teamzugang-Guide",
+    "teamGuide.subtitle": "Hier wird der gefuehrte Einstieg fuer neue Konsolennutzer erscheinen.",
+    "teamGuide.cardTitle": "Guide-Inhalte folgen",
+    "teamGuide.cardDescription": "Dies ist das stabile Ziel fuer Einladungs-E-Mails. Die interaktiven Guide-Inhalte koennen hier als Naechstes ergaenzt werden.",
+    "teamGuide.openDashboard": "Dashboard oeffnen",
+    "teamGuide.manageTeam": "Teamzugang verwalten",
 
     // Common
     "common.poweredByVyva": "Powered by VYVA",
@@ -4085,7 +4107,7 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.email": "Email",
     "invite.tempPassword": "Contrasena temporal",
     "invite.tempPasswordOptional": "Contrasena temporal (opcional)",
-    "invite.passwordOptionalHelp": "Dejalo vacio para activar el acceso con el inicio de sesion por enlace magico.",
+    "invite.passwordOptionalHelp": "Dejalo vacio para enviar una invitacion segura por enlace magico. Usa una contrasena temporal solo como acceso de respaldo.",
     "invite.min6chars": "Min. 6 caracteres",
     "invite.role": "Rol",
     "invite.admin": "Admin",
@@ -4101,7 +4123,10 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.userCreated": "Miembro del equipo creado",
     "invite.shareCredentials": "Comparte estos datos de acceso con el miembro del equipo",
     "invite.magicLinkInviteQueued": "Pide al miembro del equipo que inicie sesion con su enlace magico de email para activar el acceso.",
+    "invite.magicLinkInviteSent": "Email de invitacion enviado con enlace magico seguro y enlace a la guia.",
+    "invite.magicLinkInviteUnavailable": "El miembro del equipo fue agregado, pero no se pudo enviar el email de invitacion.",
     "invite.copyCredentials": "Copiar datos de acceso",
+    "invite.copyInviteSummary": "Copiar resumen de invitacion",
     "invite.createFailed": "No se pudo crear el miembro del equipo",
     "invite.passwordTooShort": "La contrasena debe tener al menos 6 caracteres",
     "invite.adminRequired": "Solo los admins pueden agregar o gestionar acceso del equipo.",
@@ -4110,6 +4135,14 @@ const translations: Record<Language, Record<string, string>> = {
     "invite.status": "Estado",
     "invite.status.active": "Activo",
     "invite.status.pending": "Pendiente",
+
+    // Team Access Guide
+    "teamGuide.title": "Guia de acceso del equipo",
+    "teamGuide.subtitle": "Aqui vivira el recorrido guiado para nuevos usuarios de la consola.",
+    "teamGuide.cardTitle": "Contenido de la guia proximamente",
+    "teamGuide.cardDescription": "Este es el destino estable para los emails de invitacion. El contenido interactivo de la guia se puede agregar aqui despues.",
+    "teamGuide.openDashboard": "Abrir panel",
+    "teamGuide.manageTeam": "Gestionar acceso",
 
     // Prepare Call
     "callPrep.title": "Preparar llamada — {name}",

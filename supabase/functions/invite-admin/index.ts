@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { email, password, role, organization_id } = await req.json();
+    const { email, password, role, organization_id, invite_metadata } = await req.json();
     if (!email || !password) {
       return new Response(JSON.stringify({ error: "Email and password are required" }), {
         status: 400,
@@ -63,6 +63,7 @@ Deno.serve(async (req) => {
       user_metadata: {
         invited_role: assignedRole,
         organization_id: organization_id || null,
+        ...(invite_metadata && typeof invite_metadata === "object" ? invite_metadata : {}),
       },
     });
     if (error) throw error;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
 const { Pool } = pg;
 
@@ -40,11 +41,21 @@ const supabaseInviteAdminFunctionUrl =
   process.env.SUPABASE_INVITE_ADMIN_URL ||
   process.env.LOVABLE_INVITE_ADMIN_URL ||
   (supabaseBaseUrl ? `${supabaseBaseUrl}/functions/v1/invite-admin` : null);
+const publicAppUrl =
+  process.env.PUBLIC_APP_URL ||
+  process.env.APP_URL ||
+  process.env.VITE_APP_URL ||
+  process.env.VITE_PUBLIC_APP_URL ||
+  null;
+const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
+const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
+const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || "/guide/team-access";
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
   (!isProduction && (!supabaseUrl || !supabaseAnonKey));
 const tokenUserCache = new Map();
+let supabaseInviteAuthClient = null;
 
 function sslConfig(connectionString) {
   if (!connectionString) return undefined;
@@ -675,6 +686,117 @@ async function verifySupabaseToken(token) {
   return user;
 }
 
+function supabaseTeamInviteClient() {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  if (!supabaseInviteAuthClient) {
+    supabaseInviteAuthClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    });
+  }
+  return supabaseInviteAuthClient;
+}
+
+function requestOrigin(req) {
+  const origin = req.get("origin");
+  if (origin) return origin;
+
+  const host = req.get("x-forwarded-host") || req.get("host");
+  if (!host) return null;
+  const protocol = (req.get("x-forwarded-proto") || req.protocol || "https").split(",")[0].trim();
+  return `${protocol}://${host}`;
+}
+
+function trimTrailingSlash(value) {
+  return value ? String(value).replace(/\/$/, "") : null;
+}
+
+function appBaseUrl(origin) {
+  return trimTrailingSlash(publicAppUrl || origin);
+}
+
+function absoluteAppUrl(pathOrUrl, origin) {
+  if (!pathOrUrl) return null;
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+
+  const baseUrl = appBaseUrl(origin);
+  if (!baseUrl) return null;
+  const normalizedPath = String(pathOrUrl).startsWith("/") ? String(pathOrUrl) : `/${pathOrUrl}`;
+  return new URL(normalizedPath, `${baseUrl}/`).toString();
+}
+
+function inviteEmailLanguage(organization) {
+  const language = String(organization?.defaultLanguage || organization?.default_language || "").toLowerCase();
+  if (language.startsWith("de")) return "de";
+  if (language.startsWith("es")) return "es";
+  return "en";
+}
+
+function inviteRoleLabel(role, language) {
+  if (role === "admin") {
+    if (language === "de") return "Admin";
+    if (language === "es") return "admin";
+    return "admin";
+  }
+  if (language === "de") return "Operator";
+  if (language === "es") return "operador";
+  return "operator";
+}
+
+function teamInviteGuideUrl(origin) {
+  return absoluteAppUrl(teamInviteGuideUrlOverride || teamInviteGuidePath, origin);
+}
+
+function teamInviteRedirectUrl(origin) {
+  return absoluteAppUrl(teamInviteRedirectPath, origin);
+}
+
+function teamInviteMetadata({ context, role, organization, origin }) {
+  const language = inviteEmailLanguage(organization);
+  const guideUrl = teamInviteGuideUrl(origin);
+  const redirectUrl = teamInviteRedirectUrl(origin);
+  return {
+    metadata: {
+      invite_type: "team_member",
+      language,
+      email_language: language,
+      invited_role: role,
+      invited_role_label: inviteRoleLabel(role, language),
+      invited_by_email: context?.email || null,
+      organization_id: organization?.id || null,
+      organization_name: organization?.name || null,
+      guide_url: guideUrl,
+    },
+    guideUrl,
+    language,
+    redirectUrl,
+  };
+}
+
+async function sendSupabaseTeamMagicLinkInvite({ email, metadata, redirectUrl }) {
+  const supabase = supabaseTeamInviteClient();
+  if (!supabase) {
+    return { sent: false, error: "Supabase Auth is not configured" };
+  }
+
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: redirectUrl || undefined,
+      data: metadata,
+    },
+  });
+
+  if (error) {
+    return { sent: false, error: error.message || "Invite email could not be sent" };
+  }
+  return { sent: true, error: null };
+}
+
 async function reconcilePendingTeamMemberByEmail(userId, email) {
   if (!email || !pool) return;
   const pendingResult = await query(
@@ -1194,7 +1316,7 @@ function pendingTeamUserId(email) {
   return `pending:${String(email || "").toLowerCase()}`;
 }
 
-async function createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId }) {
+async function createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId, metadata = {} }) {
   const response = await fetch(`${supabaseBaseUrl}/auth/v1/admin/users`, {
     method: "POST",
     headers: {
@@ -1209,6 +1331,7 @@ async function createSupabaseAuthUserWithServiceRole({ email, password, role, or
       user_metadata: {
         invited_role: role,
         organization_id: organizationId,
+        ...metadata,
       },
     }),
   });
@@ -1221,7 +1344,7 @@ async function createSupabaseAuthUserWithServiceRole({ email, password, role, or
   return body;
 }
 
-async function createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken }) {
+async function createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken, metadata = {} }) {
   if (!supabaseInviteAdminFunctionUrl || !supabaseAnonKey || !authToken) {
     throw httpError(503, "Team invite service is not configured", true);
   }
@@ -1238,6 +1361,7 @@ async function createSupabaseAuthUserWithInviteFunction({ email, password, role,
       password,
       role,
       organization_id: organizationId,
+      invite_metadata: metadata,
     }),
   });
 
@@ -1251,11 +1375,11 @@ async function createSupabaseAuthUserWithInviteFunction({ email, password, role,
   return userId ? { ...body, id: userId, user: { ...(body.user || {}), id: userId } } : body;
 }
 
-async function createSupabaseAuthUser({ email, password, role, organizationId, authToken }) {
+async function createSupabaseAuthUser({ email, password, role, organizationId, authToken, metadata = {} }) {
   if (supabaseBaseUrl && supabaseServiceRoleKey) {
-    return createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId });
+    return createSupabaseAuthUserWithServiceRole({ email, password, role, organizationId, metadata });
   }
-  return createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken });
+  return createSupabaseAuthUserWithInviteFunction({ email, password, role, organizationId, authToken, metadata });
 }
 
 async function loadTeamMembers(context) {
@@ -1297,11 +1421,21 @@ function teamInviteAuthConfigured(authToken) {
   return Boolean((supabaseBaseUrl && supabaseServiceRoleKey) || (supabaseInviteAdminFunctionUrl && supabaseAnonKey && authToken));
 }
 
-async function createTeamMember(payload, context) {
+async function createTeamMember(payload, context, options = {}) {
   requireAdmin(context);
   const organizationId = scopeOrganizationId(context);
   const member = normalizeTeamMemberPayload(payload);
   if (member.error) return member;
+
+  const organization = context?.organization?.id === organizationId
+    ? context.organization
+    : await loadOrganizationById(organizationId);
+  const invite = teamInviteMetadata({
+    context,
+    role: member.value.role,
+    organization,
+    origin: options.origin,
+  });
 
   let userId = pendingTeamUserId(member.value.email);
   let inviteMode = "magic_link_pending";
@@ -1313,6 +1447,7 @@ async function createTeamMember(payload, context) {
         role: member.value.role,
         organizationId,
         authToken: context.authToken,
+        metadata: invite.metadata,
       });
       userId = authUserIdFromInviteResponse(authUser) || userId;
       inviteMode = "password";
@@ -1355,9 +1490,30 @@ async function createTeamMember(payload, context) {
     client.release();
   }
 
+  const inviteEmail = await sendSupabaseTeamMagicLinkInvite({
+    email: member.value.email,
+    metadata: invite.metadata,
+    redirectUrl: invite.redirectUrl,
+  }).catch((error) => ({
+    sent: false,
+    error: error?.message || "Invite email could not be sent",
+  }));
+  if (inviteEmail.sent) {
+    inviteMode = "magic_link_sent";
+  } else {
+    console.warn("Team magic-link invite email was not sent.", {
+      error: inviteEmail.error,
+      email: member.value.email,
+    });
+    if (inviteMode === "magic_link_pending") inviteMode = "magic_link_unavailable";
+  }
+
   const members = await loadTeamMembers(context);
   return {
     inviteMode,
+    inviteEmailSent: Boolean(inviteEmail.sent),
+    inviteEmailError: inviteEmail.sent ? null : inviteEmail.error,
+    guideUrl: invite.guideUrl,
     value: members.find((item) => item.user_id === userId && item.role === member.value.role) || null,
   };
 }
@@ -4997,12 +5153,18 @@ app.get("/api/v1/team-members", asyncRoute(async (req, res) => {
 }));
 
 app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
-  const result = await createTeamMember(req.body, req.context);
+  const result = await createTeamMember(req.body, req.context, { origin: requestOrigin(req) });
   if (result.error) {
     res.status(400).json({ error: result.error });
     return;
   }
-  res.status(201).json({ inviteMode: result.inviteMode, member: result.value });
+  res.status(201).json({
+    inviteMode: result.inviteMode,
+    inviteEmailSent: result.inviteEmailSent,
+    inviteEmailError: result.inviteEmailError,
+    guideUrl: result.guideUrl,
+    member: result.value,
+  });
 }));
 
 app.get("/api/v1/user-dashboard/users", async (req, res, next) => {

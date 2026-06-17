@@ -24,6 +24,7 @@ import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
 import MedicationMonitoring from "@/pages/MedicationMonitoring";
 import BrainCoachMonitoring from "@/pages/BrainCoachMonitoring";
+import TeamAccessGuide from "@/pages/TeamAccessGuide";
 import NotFound from "@/pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -167,6 +168,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <InviteAdmin />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/guide/team-access"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <TeamAccessGuide />
                   </DashboardLayout>
                 </ProtectedRoute>
               }
