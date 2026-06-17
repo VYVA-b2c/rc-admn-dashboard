@@ -10,12 +10,11 @@ import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import type { CareProviderOption } from "@/lib/careProviders";
-import { providerCoverageLabel, providerPrimaryMeta, providerSourceKey, providerTypeShortKey } from "@/lib/careProviders";
+import { providerCoverageLabel, providerPrimaryMeta, providerSourceKey } from "@/lib/careProviders";
 import { demoCareProviders } from "@/lib/operationalDemoData";
 
 async function fetchCareProviders() {
@@ -29,7 +28,6 @@ async function fetchCareProviders() {
 
 export default function EmergencyContacts() {
   const [search, setSearch] = useState("");
-  const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [addCaregiverOpen, setAddCaregiverOpen] = useState(false);
   const navigate = useNavigate();
   const { t } = useLanguage();
@@ -40,22 +38,42 @@ export default function EmergencyContacts() {
     retry: false,
   });
   const sourceProviders = authBypassEnabled && providers.length === 0 ? demoCareProviders : providers;
+  const emergencyContacts = useMemo(
+    () => sourceProviders.filter((provider) => provider.provider_type === "caregiver"),
+    [sourceProviders],
+  );
+  const redCrossStaff = useMemo(
+    () => sourceProviders.filter((provider) => provider.provider_type === "field_staff"),
+    [sourceProviders],
+  );
 
   const filtered = useMemo(() => {
     const normalized = search.trim().toLowerCase();
-    if (!normalized) return sourceProviders;
-    return sourceProviders.filter((provider) => (
+    if (!normalized) return emergencyContacts;
+    return emergencyContacts.filter((provider) => (
+      (provider.display_name ?? "").toLowerCase().includes(normalized) ||
+      provider.phone?.toLowerCase().includes(normalized) ||
+      provider.role?.toLowerCase().includes(normalized) ||
+      provider.linked_users?.some((user) => user.name?.toLowerCase().includes(normalized) || user.city?.toLowerCase().includes(normalized))
+    ));
+  }, [emergencyContacts, search]);
+
+  const filteredStaff = useMemo(() => {
+    const normalized = search.trim().toLowerCase();
+    if (!normalized) return redCrossStaff;
+    return redCrossStaff.filter((provider) => (
       (provider.display_name ?? "").toLowerCase().includes(normalized) ||
       provider.phone?.toLowerCase().includes(normalized) ||
       provider.role?.toLowerCase().includes(normalized) ||
       provider.team?.toLowerCase().includes(normalized) ||
       provider.linked_users?.some((user) => user.name?.toLowerCase().includes(normalized) || user.city?.toLowerCase().includes(normalized))
     ));
-  }, [sourceProviders, search]);
+  }, [redCrossStaff, search]);
 
-  const informalCount = sourceProviders.filter((provider) => provider.provider_type === "caregiver").length;
-  const professionalCount = sourceProviders.filter((provider) => provider.provider_type === "field_staff").length;
-  const assignmentCount = sourceProviders.reduce((total, provider) => total + Number(provider.assignment_count || 0), 0);
+  const informalCount = emergencyContacts.length;
+  const professionalCount = redCrossStaff.length;
+  const assignmentCount = emergencyContacts.reduce((total, provider) => total + Number(provider.assignment_count || 0), 0);
+  const onboardingCount = emergencyContacts.filter((provider) => provider.source === "onboarding").length;
 
   return (
     <div className="space-y-5">
@@ -81,7 +99,7 @@ export default function EmergencyContacts() {
             type="button"
             className="h-10 rounded-full px-4 text-sm font-bold shadow-sm"
             disabled={authBypassEnabled}
-            onClick={() => setAddProviderOpen(true)}
+            onClick={() => setAddCaregiverOpen(true)}
           >
             <Plus className="mr-2 h-4 w-4" />
             {t("careProviders.addProvider")}
@@ -91,8 +109,8 @@ export default function EmergencyContacts() {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <MetricCard label={t("careProviders.informalShort")} value={informalCount} />
-        <MetricCard label={t("careProviders.professionalShort")} value={professionalCount} />
-        <MetricCard label={t("careProviders.assignments")} value={assignmentCount} />
+        <MetricCard label={t("careProviders.linkedClients")} value={assignmentCount} />
+        <MetricCard label={t("careProviders.onboardingShort")} value={onboardingCount} />
       </div>
 
       <Card className="overflow-hidden rounded-2xl border-border bg-white shadow-sm">
@@ -114,9 +132,9 @@ export default function EmergencyContacts() {
               <TableHeader>
                 <TableRow className="bg-muted/40 hover:bg-muted/40">
                   <TableHead className="min-w-[220px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.provider")}</TableHead>
-                  <TableHead className="min-w-[110px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.type")}</TableHead>
+                  <TableHead className="min-w-[180px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.relationship")}</TableHead>
                   <TableHead className="min-w-[180px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.phone")}</TableHead>
-                  <TableHead className="min-w-[160px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.status")}</TableHead>
+                  <TableHead className="min-w-[160px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.sourceLabel")}</TableHead>
                   <TableHead className="min-w-[260px] text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.linkedUsers")}</TableHead>
                   <TableHead className="min-w-[120px] text-right text-xs font-bold uppercase tracking-[0.12em]">{t("careProviders.assignments")}</TableHead>
                 </TableRow>
@@ -133,13 +151,13 @@ export default function EmergencyContacts() {
                 ) : filtered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="py-14 text-center text-muted-foreground">
-                      {sourceProviders.length === 0 ? t("careProviders.noProviders") : t("careProviders.noMatches")}
+                      {emergencyContacts.length === 0 ? t("careProviders.noEmergencyContacts") : t("careProviders.noMatches")}
                     </TableCell>
                   </TableRow>
                 ) : (
                   filtered.map((provider) => {
                     const linkedUsers = provider.linked_users ?? [];
-                    const sourceKey = provider.provider_type === "caregiver" ? providerSourceKey(provider.source) : null;
+                    const sourceKey = providerSourceKey(provider.source);
                     return (
                       <TableRow key={`${provider.provider_type}-${provider.provider_id ?? provider.id}`} className="bg-white hover:bg-primary/5">
                         <TableCell>
@@ -163,12 +181,18 @@ export default function EmergencyContacts() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={provider.provider_type === "field_staff" ? "default" : "secondary"} className="whitespace-nowrap rounded-full px-3 py-1">
-                            {t(providerTypeShortKey(provider.provider_type))}
-                          </Badge>
+                          <span className="text-sm text-muted-foreground">{providerCoverageLabel(provider) || "—"}</span>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{provider.phone || t("profile.noPhone")}</TableCell>
-                        <TableCell className="text-sm font-semibold text-muted-foreground">{provider.status || t("profile.active")}</TableCell>
+                        <TableCell>
+                          {sourceKey ? (
+                            <Badge variant="secondary" className="rounded-full px-3 py-1 text-[11px]">
+                              {t(sourceKey)}
+                            </Badge>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
                         <TableCell>
                           {linkedUsers.length === 0 ? (
                             <span className="text-sm text-muted-foreground">{t("careProviders.noLinkedUsers")}</span>
@@ -203,45 +227,50 @@ export default function EmergencyContacts() {
         </CardContent>
       </Card>
 
-      <Dialog open={addProviderOpen} onOpenChange={setAddProviderOpen}>
-        <DialogContent className="max-w-2xl rounded-2xl border-border bg-white">
-          <DialogHeader>
-            <DialogTitle>{t("careProviders.addProviderTitle")}</DialogTitle>
-            <DialogDescription>{t("careProviders.addProviderDescription")}</DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4 pt-2 md:grid-cols-2">
-            <div className="rounded-2xl border border-border bg-muted/20 p-5">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <UsersRound className="h-5 w-5" />
-              </div>
-              <h3 className="text-base font-bold text-foreground">{t("careProviders.addEmergencyContactTitle")}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("careProviders.addEmergencyContactDescription")}</p>
-              <Button
-                type="button"
-                className="mt-5 rounded-full"
-                onClick={() => {
-                  setAddProviderOpen(false);
-                  setAddCaregiverOpen(true);
-                }}
-              >
-                {t("careProviders.addEmergencyContactAction")}
-              </Button>
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardContent className="p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <BriefcaseMedical className="h-5 w-5" />
             </div>
-
-            <div className="rounded-2xl border border-border bg-muted/20 p-5">
-              <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <BriefcaseMedical className="h-5 w-5" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-foreground">{t("careProviders.staffPanelTitle")}</h2>
+                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("careProviders.staffPanelDescription")}</p>
+                </div>
+                <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-semibold">
+                  {professionalCount} {t("careProviders.professionalShort")}
+                </Badge>
               </div>
-              <h3 className="text-base font-bold text-foreground">{t("careProviders.addRedCrossStaffTitle")}</h3>
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">{t("careProviders.addRedCrossStaffDescription")}</p>
-              <div className="mt-5 rounded-xl border border-dashed border-border bg-white px-4 py-3 text-sm text-muted-foreground">
-                {t("careProviders.addRedCrossStaffNote")}
+
+              <div className="mt-4 rounded-xl border border-dashed border-border bg-muted/20 px-4 py-4">
+                <p className="text-sm text-muted-foreground">{t("careProviders.staffPanelNote")}</p>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                {filteredStaff.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{t("careProviders.noStaffDirectory")}</p>
+                ) : (
+                  filteredStaff.slice(0, 6).map((provider) => (
+                    <div key={`${provider.provider_type}-${provider.provider_id ?? provider.id}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {[provider.role, provider.team].filter(Boolean).join(" / ") || t("careProviders.professional")}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs font-semibold">
+                        {provider.assignment_count || 0} {t("careProviders.assignments")}
+                      </Badge>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </CardContent>
+      </Card>
 
       <EditCaregiverDialog open={addCaregiverOpen} onOpenChange={setAddCaregiverOpen} />
     </div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Brain, Pencil, Power, PowerOff, Search, UserRound } from "lucide-react";
+import { Brain, PauseCircle, Pencil, Play, Power, PowerOff, Search, UserRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +36,10 @@ type BrainCoachSession = {
   enabled: boolean;
   frequency?: string | null;
   preferred_time?: string | null;
+  paused_until?: string | null;
+  pause_reason?: string | null;
+  pause_source?: string | null;
+  is_paused?: boolean;
 };
 
 type BrainCoachSessionResponse =
@@ -144,6 +148,10 @@ function normalizeFallbackResponse(response: ScheduledCallFallbackResponse): Bra
               : true,
       frequency: pickString(item.frequency, item.frequency_days) ?? null,
       preferred_time: item.preferred_time ?? item.preferredTime ?? null,
+      paused_until: item.paused_until ?? null,
+      pause_reason: item.pause_reason ?? null,
+      pause_source: item.pause_source ?? null,
+      is_paused: Boolean(item.is_paused),
     };
   }).filter((item) => item.user_id);
 }
@@ -157,6 +165,30 @@ function formatFrequency(value: string | null | undefined, t: (key: string) => s
 
 function statusLabel(enabled: boolean, t: (key: string) => string) {
   return enabled ? t("brainCoach.active") : t("brainCoach.inactive");
+}
+
+function isPaused(session: Pick<BrainCoachSession, "is_paused" | "paused_until">) {
+  if (session.is_paused) return true;
+  if (!session.paused_until) return false;
+  return new Date(session.paused_until).getTime() > Date.now();
+}
+
+function formatPausedUntil(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function pauseDescription(session: BrainCoachSession, t: (key: string) => string) {
+  const until = formatPausedUntil(session.paused_until);
+  const sourceKey = session.pause_source ? `routineCalls.pauseSource.${session.pause_source}` : "";
+  const sourceLabel = sourceKey ? t(sourceKey) : "";
+  const source = sourceLabel && sourceLabel !== sourceKey ? sourceLabel : "";
+  const explanation = until
+    ? t("routineCalls.pauseExplanation").replace("{date}", until)
+    : t("routineCalls.pauseExplanationOpen");
+  return source ? `${source} · ${explanation}` : explanation;
 }
 
 export default function BrainCoachMonitoring() {
@@ -216,8 +248,8 @@ export default function BrainCoachMonitoring() {
 
   const saveMutation = useMutation({
     mutationFn: (payload: { session: BrainCoachSession; form: FormState }) =>
-      apiFetch(`/api/v1/user-dashboard/brain-coach/${payload.session.user_id}`, {
-        method: "PUT",
+      apiFetch(`/api/v1/brain-coach-dashboard/sessions/${payload.session.user_id}`, {
+        method: "PATCH",
         body: JSON.stringify({
           enabled: payload.form.enabled,
           frequency: payload.form.frequency,
@@ -240,8 +272,8 @@ export default function BrainCoachMonitoring() {
 
   const toggleMutation = useMutation({
     mutationFn: (session: BrainCoachSession) =>
-      apiFetch(`/api/v1/user-dashboard/brain-coach/${session.user_id}`, {
-        method: "PUT",
+      apiFetch(`/api/v1/brain-coach-dashboard/sessions/${session.user_id}`, {
+        method: "PATCH",
         body: JSON.stringify({
           enabled: !session.enabled,
           frequency: session.frequency || "weekly",
@@ -255,6 +287,57 @@ export default function BrainCoachMonitoring() {
     onError: (mutationError) => {
       toast({
         title: t("brainCoach.saveFailed"),
+        description: mutationError instanceof Error ? mutationError.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: (session: BrainCoachSession) =>
+      apiFetch("/api/v1/routine-calls/pause", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: String(session.user_id),
+          service: "brain_coach",
+          days: 30,
+          pause_source: "staff",
+          pause_reason: "Paused by operations team",
+        }),
+      }),
+    onSuccess: () => {
+      toast({ title: t("routineCalls.paused") });
+      queryClient.invalidateQueries({ queryKey: ["brain-coach-monitoring"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["user-profile"] });
+    },
+    onError: (mutationError) => {
+      toast({
+        title: t("routineCalls.pauseFailed"),
+        description: mutationError instanceof Error ? mutationError.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (session: BrainCoachSession) =>
+      apiFetch("/api/v1/routine-calls/resume", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: String(session.user_id),
+          service: "brain_coach",
+        }),
+      }),
+    onSuccess: () => {
+      toast({ title: t("routineCalls.resumed") });
+      queryClient.invalidateQueries({ queryKey: ["brain-coach-monitoring"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["user-profile"] });
+    },
+    onError: (mutationError) => {
+      toast({
+        title: t("routineCalls.resumeFailed"),
         description: mutationError instanceof Error ? mutationError.message : undefined,
         variant: "destructive",
       });
@@ -369,61 +452,81 @@ export default function BrainCoachMonitoring() {
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((session) => (
-                <TableRow
-                  key={session.id}
-                  className="cursor-pointer"
-                  onClick={() => navigate(`/users/${session.user_id}`)}
-                >
-                  <TableCell>
-                    <div className="font-medium text-foreground">{session.userName}</div>
-                    {session.city && <div className="text-xs text-muted-foreground">{session.city}</div>}
-                  </TableCell>
-                  <TableCell>{session.userPhone || "-"}</TableCell>
-                  <TableCell>{statusLabel(session.enabled, t)}</TableCell>
-                  <TableCell>{formatFrequency(session.frequency, t)}</TableCell>
-                  <TableCell>{session.preferred_time || "-"}</TableCell>
-                  {canEdit && (
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setEditingSession(session);
-                          }}
-                          aria-label={t("brainCoach.edit")}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleMutation.mutate(session);
-                          }}
-                          aria-label={session.enabled ? t("brainCoach.disable") : t("brainCoach.enable")}
-                        >
-                          {session.enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            navigate(`/users/${session.user_id}`);
-                          }}
-                          aria-label={t("brainCoach.openProfile")}
-                        >
-                          <UserRound className="h-4 w-4" />
-                        </Button>
+              filtered.map((session) => {
+                const paused = isPaused(session);
+
+                return (
+                  <TableRow
+                    key={session.id}
+                    className="cursor-pointer"
+                    onClick={() => navigate(`/users/${session.user_id}`)}
+                  >
+                    <TableCell>
+                      <div className="font-medium text-foreground">{session.userName}</div>
+                      {session.city && <div className="text-xs text-muted-foreground">{session.city}</div>}
+                    </TableCell>
+                    <TableCell>{session.userPhone || "-"}</TableCell>
+                    <TableCell>
+                      <div className="space-y-1">
+                        <div>{paused ? t("routineCalls.pausedLabel") : statusLabel(session.enabled, t)}</div>
+                        {paused && <p className="max-w-[280px] text-xs text-amber-700">{pauseDescription(session, t)}</p>}
                       </div>
                     </TableCell>
-                  )}
-                </TableRow>
-              ))
+                    <TableCell>{formatFrequency(session.frequency, t)}</TableCell>
+                    <TableCell>{session.preferred_time || "-"}</TableCell>
+                    {canEdit && (
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setEditingSession(session);
+                            }}
+                            aria-label={t("brainCoach.edit")}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleMutation.mutate(session);
+                            }}
+                            aria-label={session.enabled ? t("brainCoach.disable") : t("brainCoach.enable")}
+                          >
+                            {session.enabled ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              paused ? resumeMutation.mutate(session) : pauseMutation.mutate(session);
+                            }}
+                            aria-label={paused ? t("routineCalls.resumeAction") : t("routineCalls.pauseAction")}
+                          >
+                            {paused ? <Play className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              navigate(`/users/${session.user_id}`);
+                            }}
+                            aria-label={t("brainCoach.openProfile")}
+                          >
+                            <UserRound className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

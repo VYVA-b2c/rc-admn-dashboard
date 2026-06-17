@@ -317,13 +317,32 @@ async function loadExternalUserCareProviders(externalUserId, context) {
   return localUserId ? loadUserCareProviders(localUserId, context) : [];
 }
 
-function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId) {
+async function loadExternalUserLocalServices(externalUserId, context) {
+  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
+  if (!localUserId) return { checkins: null, brainCoach: null };
+
+  const [checkins, brainCoach] = await Promise.all([
+    optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
+    optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
+  ]);
+
+  return {
+    checkins: checkins[0] ? normalizeCheckin({ ...checkins[0], user_name: "", user_phone: null, city: null, first_name: null, last_name: null }) : null,
+    brainCoach: brainCoach[0] ? normalizeBrainCoachSession({ ...brainCoach[0], user_name: "", user_phone: null, city: null }) : null,
+  };
+}
+
+function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}) {
   const normalized = normalizeExternalProfilePayload(data);
-  if (!Array.isArray(careProviders) || !careProviders.length) return normalized;
+  const hasProviders = Array.isArray(careProviders) && careProviders.length;
+  const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach);
+  if (!hasProviders && !hasServices) return normalized;
   return {
     ...normalized,
-    careProviders,
-    caregivers: careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)),
+    careProviders: hasProviders ? careProviders : normalized.careProviders,
+    caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
+    checkins: localServices?.checkins || normalized.checkins,
+    brainCoach: localServices?.brainCoach || normalized.brainCoach,
   };
 }
 
@@ -968,6 +987,86 @@ async function userBelongsToOrganization(userId, context, client = { query }) {
   return Boolean(result.rows[0]);
 }
 
+async function resolveContextFieldStaffIds(context, client = { query }) {
+  if (!context?.organizationId || !context?.fullName) return [];
+  if (Array.isArray(context.fieldStaffIds)) return context.fieldStaffIds;
+
+  const result = await client.query(
+    `
+      SELECT id::text
+      FROM public.field_staff
+      WHERE organization_id = $1
+        AND active = true
+        AND LOWER(full_name) = LOWER($2)
+    `,
+    [context.organizationId, context.fullName],
+  );
+
+  const ids = result.rows.map((row) => row.id);
+  context.fieldStaffIds = ids;
+  return ids;
+}
+
+async function loadCheckinAccessMap(userIds, context, client = { query }) {
+  if (!context?.organizationId) return new Map();
+
+  const ids = Array.from(new Set((userIds || []).map((value) => String(value || "").trim()).filter(Boolean)));
+  const uuidIds = ids.filter(isUuid);
+  if (!uuidIds.length) return new Map();
+
+  const fieldStaffIds = context.isAdmin ? [] : await resolveContextFieldStaffIds(context, client);
+  const result = await client.query(
+    `
+      SELECT
+        u.id::text AS user_id,
+        COALESCE(consent.consent_given, false) AS consent_given,
+        MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
+        BOOL_OR(
+          a.provider_type = 'field_staff'
+          AND a.field_staff_id IS NOT NULL
+          AND a.field_staff_id = ANY($3::uuid[])
+        ) AS assigned_to_current_provider
+      FROM public.vyva_users u
+      LEFT JOIN public.vyva_user_consent consent ON consent.vyva_user_id = u.id
+      LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE u.organization_id = $1
+        AND u.id = ANY($2::uuid[])
+      GROUP BY u.id, consent.consent_given
+    `,
+    [context.organizationId, uuidIds, fieldStaffIds],
+  );
+
+  const map = new Map();
+  for (const row of result.rows) {
+    const consentGiven = Boolean(row.consent_given);
+    const assignedToCurrentProvider = Boolean(row.assigned_to_current_provider);
+    const canEdit = consentGiven && (Boolean(context.isAdmin) || assignedToCurrentProvider);
+    map.set(String(row.user_id), {
+      consent_given: consentGiven,
+      assigned_to_current_provider: assignedToCurrentProvider,
+      assigned_provider_name: row.primary_professional_name || null,
+      can_edit: canEdit,
+      edit_block_reason: !consentGiven
+        ? "consent_required"
+        : canEdit
+          ? null
+          : "assigned_provider_required",
+    });
+  }
+
+  return map;
+}
+
+async function requireCheckinScheduleAccess(userId, context, client = { query }) {
+  if (!(await userBelongsToOrganization(userId, context, client))) throw httpError(404, "User not found");
+
+  const access = (await loadCheckinAccessMap([userId], context, client)).get(String(userId));
+  if (!access?.consent_given) throw httpError(403, "Client consent required");
+  if (!access.can_edit) throw httpError(403, "Assigned provider or admin access required");
+  return access;
+}
+
 function authUserIdFromInviteResponse(body) {
   return String(
     body?.id ||
@@ -1374,6 +1473,160 @@ async function loadDashboardUsers(context) {
   };
 }
 
+function parseInsightsDays(value) {
+  const days = Number(value || 7);
+  return [7, 14, 30].includes(days) ? days : 7;
+}
+
+function insightRiskBand(score) {
+  const numeric = Number(score || 0);
+  if (numeric >= 67) return "high";
+  if (numeric >= 38) return "moderate";
+  return "low";
+}
+
+function ageFromDateOfBirth(dateOfBirth) {
+  if (!dateOfBirth) return null;
+  const birth = new Date(dateOfBirth);
+  if (Number.isNaN(birth.getTime())) return null;
+  return Math.floor((Date.now() - birth.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+}
+
+function normalizeInsightFactors(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function insightFactorText(factors) {
+  return normalizeInsightFactors(factors)
+    .map((factor) => `${factor?.signal || ""} ${factor?.label || ""}`.toLowerCase())
+    .join(" ");
+}
+
+function insightClientMatchesFilter(client, filter) {
+  if (!filter || filter === "all") return true;
+  const factorText = insightFactorText(client.factors);
+  if (filter === "high") return client.band === "high";
+  if (filter === "mood") return factorText.includes("mood");
+  if (filter === "medication") return factorText.includes("medication") || factorText.includes("meds");
+  if (filter === "noresponse") return factorText.includes("response") || factorText.includes("missed calls");
+  if (filter === "unassigned") return !client.operator;
+  return true;
+}
+
+function forecastWindowText(client) {
+  const forecast = client.forecast?.mid || [];
+  const currentScore = Number(client.score || 0);
+  const currentBand = insightRiskBand(currentScore);
+  const highIndex = forecast.findIndex((score) => insightRiskBand(score) === "high");
+  const factorText = insightFactorText(client.factors);
+
+  if (!client.operator) return "Needs an assigned operator before risk peaks";
+  if (currentBand !== "high" && highIndex >= 0) {
+    const horizonDay = highIndex + 1;
+    return `Risk likely to peak in ${Math.max(1, horizonDay - 2)}-${horizonDay} days`;
+  }
+  if (currentBand === "high" && Number(client.delta || 0) > 0) {
+    return factorText.includes("response")
+      ? "Escalation likely if unreached this week"
+      : "High risk is still rising";
+  }
+  if (Number(client.delta || 0) < 0) return "Improving - keep current cadence";
+  return "Stable - no action needed";
+}
+
+function insightOperatorRow(row) {
+  return {
+    id: row.operator_id,
+    name: row.name,
+    current: Number(row.current_caseload || 0),
+    capacity: Number(row.capacity_hours || 0),
+    recommended: Number(row.recommended_caseload || 0),
+  };
+}
+
+async function loadInsightOperatorRows(organizationId, operatorIds = []) {
+  const idFilter = operatorIds.length ? operatorIds : null;
+  const rows = await optionalRows(
+    `
+      WITH latest_week AS (
+        SELECT MAX(week_start) AS week_start
+        FROM public.operator_capacity_weekly
+        WHERE organization_id = $1
+      )
+      SELECT
+        ocw.operator_id::text,
+        fs.full_name AS name,
+        ocw.capacity_hours,
+        ocw.current_caseload,
+        ocw.recommended_caseload
+      FROM public.operator_capacity_weekly ocw
+      JOIN latest_week lw ON lw.week_start = ocw.week_start
+      JOIN public.field_staff fs ON fs.id = ocw.operator_id
+      WHERE ocw.organization_id = $1
+        AND ($2::uuid[] IS NULL OR ocw.operator_id = ANY($2::uuid[]))
+      ORDER BY fs.full_name ASC
+    `,
+    [organizationId, idFilter],
+  );
+  return rows.map(insightOperatorRow);
+}
+
+async function refreshOperatorCaseloadsWithClient(client, operatorIds, organizationId) {
+  const ids = Array.from(new Set(operatorIds.filter(Boolean)));
+  if (!ids.length) return [];
+
+  const weekResult = await client.query(
+    `
+      SELECT MAX(week_start) AS week_start
+      FROM public.operator_capacity_weekly
+      WHERE organization_id = $1
+    `,
+    [organizationId],
+  );
+  const weekStart = weekResult.rows[0]?.week_start ? formatDate(weekResult.rows[0].week_start) : mondayOfWeek(formatDate(new Date()));
+
+  await client.query(
+    `
+      WITH current_counts AS (
+        SELECT
+          a.field_staff_id,
+          COUNT(*)::int AS current_caseload
+        FROM public.vyva_user_care_provider_assignments a
+        JOIN public.vyva_users u ON u.id = a.vyva_user_id
+        WHERE a.provider_type = 'field_staff'
+          AND a.is_primary = true
+          AND u.organization_id = $2
+          AND a.field_staff_id = ANY($1::uuid[])
+        GROUP BY a.field_staff_id
+      )
+      UPDATE public.operator_capacity_weekly ocw
+      SET current_caseload = COALESCE(cc.current_caseload, 0), updated_at = now()
+      FROM unnest($1::uuid[]) AS operator_ids(operator_id)
+      LEFT JOIN current_counts cc ON cc.field_staff_id = operator_ids.operator_id
+      WHERE ocw.operator_id = operator_ids.operator_id
+        AND ocw.organization_id = $2
+        AND ocw.week_start = $3::date
+    `,
+    [ids, organizationId, weekStart],
+  );
+
+  return loadInsightOperatorRows(organizationId, ids);
+}
+
+function mondayOfWeek(dateText) {
+  const date = new Date(`${dateText}T00:00:00Z`);
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - day + 1);
+  return formatDate(date);
+}
+
 function campaignTone(type, status) {
   if (type === "medication") return "purple";
   if (type === "wellbeing") return "green";
@@ -1401,6 +1654,7 @@ const CAMPAIGN_TEMPLATE_KEYS = [
   "medication_reminder",
   "wellbeing_check",
   "service_update",
+  "custom_campaign",
 ];
 
 function isCampaignTemplateKey(value) {
@@ -1434,6 +1688,7 @@ function resolveCampaignTemplateKey(rowOrPayload) {
 }
 
 function callTemplateReasonKey(templateKey, user) {
+  if (templateKey === "custom_campaign") return "campaigns.targets.reason.generalAnnouncement";
   if (templateKey === "medication_reminder") return "campaigns.targets.reason.publicHealth";
   if (templateKey === "service_update") return "campaigns.targets.reason.service";
   if (templateKey === "wellbeing_check") return "campaigns.targets.reason.safetyAdvisory";
@@ -1446,6 +1701,9 @@ function callTemplateReasonKey(templateKey, user) {
 }
 
 function campaignUserMatchesTemplate(templateKey, user) {
+  if (templateKey === "custom_campaign") {
+    return Boolean(user.phone);
+  }
   if (templateKey === "medication_reminder") {
     return Boolean(user.phone) && (Number(user.healthConditions || 0) > 0 || Number(user.riskScore || 0) >= 40);
   }
@@ -2095,6 +2353,8 @@ async function loadCampaignCallJobs(runId, context) {
 }
 
 function normalizeCheckin(row) {
+  const pausedUntil = row.paused_until ? new Date(row.paused_until).toISOString() : null;
+  const isPaused = Boolean(pausedUntil && new Date(pausedUntil).getTime() > Date.now());
   return {
     id: row.id,
     user_id: row.user_id,
@@ -2107,6 +2367,14 @@ function normalizeCheckin(row) {
     preferred_time: row.preferred_time,
     enabled: Boolean(row.is_active),
     frequency: row.frequency,
+    paused_until: pausedUntil,
+    pause_reason: row.pause_reason || null,
+    pause_source: row.pause_source || null,
+    is_paused: isPaused,
+    consent_given: Boolean(row.consent_given),
+    assigned_provider_name: row.assigned_provider_name || null,
+    can_edit: Boolean(row.can_edit),
+    edit_block_reason: row.edit_block_reason || null,
     user: {
       id: row.user_id,
       first_name: row.first_name,
@@ -2183,13 +2451,170 @@ function mapUpstreamBrainCoachSessions(payload) {
                 : true,
         frequency: frequency == null ? null : String(frequency),
         preferred_time: item?.preferred_time ?? item?.preferredTime ?? null,
+        paused_until: item?.paused_until ?? item?.pausedUntil ?? null,
+        pause_reason: item?.pause_reason ?? item?.pauseReason ?? null,
+        pause_source: item?.pause_source ?? item?.pauseSource ?? null,
+        is_paused: Boolean(item?.is_paused ?? item?.isPaused),
       };
     })
     .filter((item) => item.user_id);
 }
 
+function routinePauseStateFromRow(row) {
+  const pausedUntil = row?.paused_until ? new Date(row.paused_until).toISOString() : null;
+  return {
+    paused_until: pausedUntil,
+    pause_reason: row?.pause_reason || null,
+    pause_source: row?.pause_source || null,
+    is_paused: Boolean(pausedUntil && new Date(pausedUntil).getTime() > Date.now()),
+  };
+}
+
+function mergeRoutinePauseIntoItem(item, overlay) {
+  if (!overlay) return item;
+  return {
+    ...item,
+    id: overlay.id ?? item?.id,
+    enabled: typeof overlay.enabled === "boolean" ? overlay.enabled : item?.enabled,
+    is_active: typeof overlay.is_active === "boolean" ? overlay.is_active : item?.is_active,
+    active: typeof overlay.is_active === "boolean" ? overlay.is_active : item?.active,
+    frequency: overlay.frequency ?? item?.frequency ?? item?.frequency_days ?? item?.cadence ?? null,
+    preferred_time: overlay.preferred_time ?? item?.preferred_time ?? item?.preferredTime ?? null,
+    paused_until: overlay.paused_until,
+    pause_reason: overlay.pause_reason,
+    pause_source: overlay.pause_source,
+    is_paused: overlay.is_paused,
+  };
+}
+
+async function loadRoutineServiceOverlayMap(serviceType, userIds, context) {
+  if (!context?.organizationId) return new Map();
+
+  const ids = Array.from(new Set(userIds.map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length) return new Map();
+
+  const uuidIds = ids.filter(isUuid);
+  const table = serviceType === "brain_coach" ? "public.vyva_user_brain_coach" : "public.vyva_user_checkins";
+  const rows = await optionalRows(
+    `
+      SELECT
+        s.id::text AS overlay_id,
+        u.id::text AS local_user_id,
+        u.external_user_id,
+        s.enabled,
+        s.frequency,
+        s.preferred_time,
+        s.paused_until,
+        s.pause_reason,
+        s.pause_source
+      FROM ${table} s
+      JOIN public.vyva_users u ON u.id = s.vyva_user_id
+      WHERE u.organization_id = $1
+        AND (u.id = ANY($2::uuid[]) OR u.external_user_id = ANY($3::text[]))
+    `,
+    [scopeOrganizationId(context), uuidIds, ids],
+  );
+
+  const map = new Map();
+  for (const row of rows) {
+    const overlay = {
+      id: row.overlay_id,
+      is_active: Boolean(row.enabled),
+      enabled: Boolean(row.enabled),
+      frequency: row.frequency ?? null,
+      preferred_time: row.preferred_time ?? null,
+      ...routinePauseStateFromRow(row),
+    };
+    map.set(String(row.local_user_id), overlay);
+    if (row.external_user_id) map.set(String(row.external_user_id), overlay);
+  }
+  return map;
+}
+
+async function loadRoutineServiceAccessMap(userIds, context) {
+  if (!context?.organizationId) return new Map();
+
+  const ids = Array.from(new Set((userIds || []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (!ids.length) return new Map();
+
+  const uuidIds = ids.filter(isUuid);
+  const fieldStaffIds = context.isAdmin ? [] : await resolveContextFieldStaffIds(context);
+  const rows = await optionalRows(
+    `
+      SELECT
+        u.id::text AS local_user_id,
+        u.external_user_id,
+        COALESCE(consent.consent_given, false) AS consent_given,
+        MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS assigned_provider_name,
+        BOOL_OR(
+          a.provider_type = 'field_staff'
+          AND a.field_staff_id IS NOT NULL
+          AND a.field_staff_id = ANY($4::uuid[])
+        ) AS assigned_to_current_provider
+      FROM public.vyva_users u
+      LEFT JOIN public.vyva_user_consent consent ON consent.vyva_user_id = u.id
+      LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE u.organization_id = $1
+        AND (u.id = ANY($2::uuid[]) OR u.external_user_id = ANY($3::text[]))
+      GROUP BY u.id, u.external_user_id, consent.consent_given
+    `,
+    [scopeOrganizationId(context), uuidIds, ids, fieldStaffIds],
+  );
+
+  const map = new Map();
+  for (const row of rows) {
+    const consentGiven = Boolean(row.consent_given);
+    const assignedToCurrentProvider = Boolean(row.assigned_to_current_provider);
+    const canEdit = consentGiven && (Boolean(context.isAdmin) || assignedToCurrentProvider);
+    const access = {
+      consent_given: consentGiven,
+      assigned_provider_name: row.assigned_provider_name || null,
+      can_edit: canEdit,
+      edit_block_reason: !consentGiven
+        ? "consent_required"
+        : canEdit
+          ? null
+          : "assigned_provider_required",
+    };
+    map.set(String(row.local_user_id), access);
+    if (row.external_user_id) map.set(String(row.external_user_id), access);
+  }
+
+  return map;
+}
+
+async function overlayRoutineServicePayload(payload, serviceType, context) {
+  if (!context) return payload;
+
+  const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
+  if (!list.length) return payload;
+
+  const userIds = list.map((item) =>
+    String(item?.user_id ?? item?.vyva_user_id ?? item?.user?.id ?? item?.vyva_users?.id ?? "").trim(),
+  ).filter(Boolean);
+  const overlays = await loadRoutineServiceOverlayMap(serviceType, userIds, context);
+  const accessMap = await loadRoutineServiceAccessMap(userIds, context);
+
+  const augmented = list.map((item) => {
+    const candidateId = String(item?.user_id ?? item?.vyva_user_id ?? item?.user?.id ?? item?.vyva_users?.id ?? "").trim();
+    const merged = mergeRoutinePauseIntoItem(item, overlays.get(candidateId));
+    const access = accessMap.get(candidateId);
+    return access ? { ...merged, ...access } : merged;
+  });
+
+  if (Array.isArray(payload)) return augmented;
+  if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.checkins)) return { ...payload, checkins: augmented };
+    if (Array.isArray(payload.data)) return { ...payload, data: augmented };
+    if (Array.isArray(payload.sessions)) return { ...payload, sessions: augmented };
+  }
+  return serviceType === "brain_coach" ? { sessions: augmented } : { checkins: augmented };
+}
+
 async function loadCheckins(context) {
   const organizationId = scopeOrganizationId(context);
+  const fieldStaffIds = context.isAdmin ? [] : await resolveContextFieldStaffIds(context);
   const result = await query(`
     SELECT
       c.id::text,
@@ -2197,20 +2622,62 @@ async function loadCheckins(context) {
       c.enabled AS is_active,
       c.frequency,
       c.preferred_time,
+      c.paused_until,
+      c.pause_reason,
+      c.pause_source,
       u.first_name,
       u.last_name,
       u.first_name || ' ' || u.last_name AS user_name,
       u.phone AS user_phone,
-      u.city
+      u.city,
+      COALESCE(consent.consent_given, false) AS consent_given,
+      MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS assigned_provider_name,
+      CASE
+        WHEN COALESCE(consent.consent_given, false) = false THEN false
+        WHEN $2::boolean = true THEN true
+        ELSE BOOL_OR(
+          a.provider_type = 'field_staff'
+          AND a.field_staff_id IS NOT NULL
+          AND a.field_staff_id = ANY($3::uuid[])
+        )
+      END AS can_edit,
+      CASE
+        WHEN COALESCE(consent.consent_given, false) = false THEN 'consent_required'
+        WHEN $2::boolean = true THEN NULL
+        WHEN BOOL_OR(
+          a.provider_type = 'field_staff'
+          AND a.field_staff_id IS NOT NULL
+          AND a.field_staff_id = ANY($3::uuid[])
+        ) THEN NULL
+        ELSE 'assigned_provider_required'
+      END AS edit_block_reason
     FROM public.vyva_user_checkins c
     JOIN public.vyva_users u ON u.id = c.vyva_user_id
+    LEFT JOIN public.vyva_user_consent consent ON consent.vyva_user_id = u.id
+    LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
+    LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
     WHERE u.organization_id = $1
+    GROUP BY
+      c.id,
+      c.vyva_user_id,
+      c.enabled,
+      c.frequency,
+      c.preferred_time,
+      c.paused_until,
+      c.pause_reason,
+      c.pause_source,
+      u.first_name,
+      u.last_name,
+      u.phone,
+      u.city,
+      consent.consent_given
     ORDER BY c.enabled DESC, u.last_name ASC, u.first_name ASC
-  `, [organizationId]);
+  `, [organizationId, Boolean(context.isAdmin), fieldStaffIds]);
   return result.rows.map(normalizeCheckin);
 }
 
 function normalizeBrainCoachSession(row) {
+  const pauseState = routinePauseStateFromRow(row);
   return {
     id: row.id,
     user_id: row.user_id,
@@ -2220,6 +2687,7 @@ function normalizeBrainCoachSession(row) {
     enabled: Boolean(row.enabled),
     frequency: row.frequency,
     preferred_time: row.preferred_time,
+    ...pauseState,
   };
 }
 
@@ -2232,6 +2700,9 @@ async function loadBrainCoachSessions(context) {
       bc.enabled,
       bc.frequency,
       bc.preferred_time,
+      bc.paused_until,
+      bc.pause_reason,
+      bc.pause_source,
       u.first_name,
       u.last_name,
       u.first_name || ' ' || u.last_name AS user_name,
@@ -3068,20 +3539,44 @@ async function upsertServiceWithClient(client, table, userId, config) {
     await client.query(
       `
         UPDATE public.${table}
-        SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
+        SET
+          enabled = $2,
+          frequency = $3,
+          preferred_time = $4,
+          paused_until = CASE WHEN $5 THEN $6::timestamptz ELSE paused_until END,
+          pause_reason = CASE WHEN $5 THEN $7 ELSE pause_reason END,
+          pause_source = CASE WHEN $5 THEN $8 ELSE pause_source END,
+          updated_at = now()
         WHERE id = $1
       `,
-      [existing.rows[0].id, config.enabled, config.frequency, config.preferred_time],
+      [
+        existing.rows[0].id,
+        config.enabled,
+        config.frequency,
+        config.preferred_time,
+        config.pause_present,
+        config.paused_until,
+        config.pause_reason,
+        config.pause_source,
+      ],
     );
     return;
   }
 
   await client.query(
     `
-      INSERT INTO public.${table} (vyva_user_id, enabled, frequency, preferred_time)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO public.${table} (vyva_user_id, enabled, frequency, preferred_time, paused_until, pause_reason, pause_source)
+      VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7)
     `,
-    [userId, config.enabled, config.frequency, config.preferred_time],
+    [
+      userId,
+      config.enabled,
+      config.frequency,
+      config.preferred_time,
+      config.pause_present ? config.paused_until : null,
+      config.pause_present ? config.pause_reason : null,
+      config.pause_present ? config.pause_source : null,
+    ],
   );
 }
 
@@ -3404,13 +3899,31 @@ async function upsertHealth(userId, payload, context) {
 
 function normalizeServicePayload(payload) {
   const preferredTime = nullIfBlank(firstValue(payload?.preferred_time, payload?.preferredTime, payload?.time));
+  const pauseFieldsPresent =
+    hasOwnPayloadKey(payload, "paused_until") ||
+    hasOwnPayloadKey(payload, "pausedUntil") ||
+    hasOwnPayloadKey(payload, "pause_reason") ||
+    hasOwnPayloadKey(payload, "pauseReason") ||
+    hasOwnPayloadKey(payload, "pause_source") ||
+    hasOwnPayloadKey(payload, "pauseSource");
+  const pausedUntilInput = nullIfBlank(firstValue(payload?.paused_until, payload?.pausedUntil));
+  let pausedUntil = null;
   if (preferredTime && !/^\d{2}:\d{2}$/.test(preferredTime)) return { error: "preferred_time must be HH:mm" };
+  if (pausedUntilInput) {
+    const parsed = new Date(pausedUntilInput);
+    if (Number.isNaN(parsed.getTime())) return { error: "paused_until must be a valid ISO date" };
+    pausedUntil = parsed.toISOString();
+  }
 
   return {
     value: {
       enabled: optionalBooleanValue(payload?.enabled, payload?.is_active, payload?.active) ?? false,
       frequency: nullIfBlank(firstValue(payload?.frequency, payload?.frequency_days, payload?.frequencyDays)),
       preferred_time: preferredTime,
+      paused_until: pausedUntil,
+      pause_reason: nullIfBlank(firstValue(payload?.pause_reason, payload?.pauseReason)),
+      pause_source: nullIfBlank(firstValue(payload?.pause_source, payload?.pauseSource)),
+      pause_present: pauseFieldsPresent,
     },
   };
 }
@@ -3420,20 +3933,60 @@ async function updateCheckinConfig(checkinId, payload, context) {
   const config = normalizeServicePayload(payload);
   if (config.error) return config;
 
-  const result = await query(
+  const existing = await query(
     `
-      UPDATE public.vyva_user_checkins c
-      SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
-      FROM public.vyva_users u
+      SELECT c.id::text, c.vyva_user_id::text AS user_id
+      FROM public.vyva_user_checkins c
+      JOIN public.vyva_users u ON u.id = c.vyva_user_id
       WHERE c.id = $1
-        AND u.id = c.vyva_user_id
-        AND u.organization_id = $5
-      RETURNING c.*, c.id::text, c.vyva_user_id::text
+        AND u.organization_id = $2
+      LIMIT 1
     `,
-    [checkinId, config.value.enabled, config.value.frequency, config.value.preferred_time, organizationId],
+    [checkinId, organizationId],
   );
 
-  if (!result.rows[0]) return { notFound: true };
+  let userId = existing.rows[0]?.user_id || null;
+  if (!userId) {
+    userId = nullIfBlank(firstValue(payload?.user_id, payload?.userId, payload?.vyva_user_id, payload?.vyvaUserId));
+  }
+  if (!userId) return { notFound: true };
+
+  await requireCheckinScheduleAccess(userId, context);
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_checkins (
+        vyva_user_id,
+        enabled,
+        frequency,
+        preferred_time,
+        paused_until,
+        pause_reason,
+        pause_source
+      )
+      VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7)
+      ON CONFLICT (vyva_user_id) DO UPDATE SET
+        enabled = EXCLUDED.enabled,
+        frequency = EXCLUDED.frequency,
+        preferred_time = EXCLUDED.preferred_time,
+        paused_until = CASE WHEN $8 THEN EXCLUDED.paused_until ELSE public.vyva_user_checkins.paused_until END,
+        pause_reason = CASE WHEN $8 THEN EXCLUDED.pause_reason ELSE public.vyva_user_checkins.pause_reason END,
+        pause_source = CASE WHEN $8 THEN EXCLUDED.pause_source ELSE public.vyva_user_checkins.pause_source END,
+        updated_at = now()
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [
+      userId,
+      config.value.enabled,
+      config.value.frequency,
+      config.value.preferred_time,
+      config.value.paused_until,
+      config.value.pause_reason,
+      config.value.pause_source,
+      config.value.pause_present,
+    ],
+  );
+
   return { value: result.rows[0] };
 }
 
@@ -3447,24 +4000,190 @@ async function upsertBrainCoachConfig(userId, payload, context) {
     const result = await query(
       `
         UPDATE public.vyva_user_brain_coach
-        SET enabled = $2, frequency = $3, preferred_time = $4, updated_at = now()
+        SET
+          enabled = $2,
+          frequency = $3,
+          preferred_time = $4,
+          paused_until = CASE WHEN $5 THEN $6::timestamptz ELSE paused_until END,
+          pause_reason = CASE WHEN $5 THEN $7 ELSE pause_reason END,
+          pause_source = CASE WHEN $5 THEN $8 ELSE pause_source END,
+          updated_at = now()
         WHERE id = $1
         RETURNING *, id::text, vyva_user_id::text
       `,
-      [existing.rows[0].id, config.value.enabled, config.value.frequency, config.value.preferred_time],
+      [
+        existing.rows[0].id,
+        config.value.enabled,
+        config.value.frequency,
+        config.value.preferred_time,
+        config.value.pause_present,
+        config.value.paused_until,
+        config.value.pause_reason,
+        config.value.pause_source,
+      ],
     );
     return { value: result.rows[0] };
   }
 
   const result = await query(
     `
-      INSERT INTO public.vyva_user_brain_coach (vyva_user_id, enabled, frequency, preferred_time)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO public.vyva_user_brain_coach (vyva_user_id, enabled, frequency, preferred_time, paused_until, pause_reason, pause_source)
+      VALUES ($1, $2, $3, $4, $5::timestamptz, $6, $7)
       RETURNING *, id::text, vyva_user_id::text
     `,
-    [userId, config.value.enabled, config.value.frequency, config.value.preferred_time],
+    [
+      userId,
+      config.value.enabled,
+      config.value.frequency,
+      config.value.preferred_time,
+      config.value.pause_present ? config.value.paused_until : null,
+      config.value.pause_present ? config.value.pause_reason : null,
+      config.value.pause_present ? config.value.pause_source : null,
+    ],
   );
   return { value: result.rows[0] };
+}
+
+function normalizeRoutineServiceKey(value) {
+  const normalized = normalizeServiceType(value);
+  return normalized === "brain_coach" ? "brain_coach" : normalized === "checkin" || normalized === "check_up_call" || normalized === "scheduled_call" ? "checkin" : null;
+}
+
+function buildPausedUntilIso(days = 30) {
+  const safeDays = Number.isInteger(days) && days > 0 ? days : 30;
+  return new Date(Date.now() + safeDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function routinePauseConsequence(serviceKey, pausedUntil) {
+  const label = serviceKey === "brain_coach" ? "Brain Coach sessions" : "routine check-in calls";
+  const untilText = pausedUntil ? ` until ${new Date(pausedUntil).toLocaleString("en-GB", { timeZone: "UTC", dateStyle: "medium", timeStyle: "short" })} UTC` : "";
+  return `${label} are paused${untilText}. Urgent safety outreach may still continue.`;
+}
+
+async function pauseRoutineService(rawUserId, payload, context) {
+  const serviceKey = normalizeRoutineServiceKey(firstValue(payload?.service, payload?.service_type));
+  if (!serviceKey) return { error: "service is required" };
+
+  const pausedUntil = nullIfBlank(firstValue(payload?.paused_until, payload?.pausedUntil)) || buildPausedUntilIso(Number(payload?.days || 30));
+  const pauseConfig = normalizeServicePayload({
+    paused_until: pausedUntil,
+    pause_reason: firstValue(payload?.pause_reason, payload?.pauseReason) || "Requested by client",
+    pause_source: firstValue(payload?.pause_source, payload?.pauseSource) || "voice",
+  });
+  if (pauseConfig.error) return pauseConfig;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const resolvedUser = await ensureLocalUserForAssignmentWithClient(client, rawUserId, context);
+    if (resolvedUser.error || resolvedUser.notFound) {
+      await client.query("ROLLBACK");
+      return resolvedUser;
+    }
+    await requireCheckinScheduleAccess(resolvedUser.value, context, client);
+
+    const table = serviceKey === "brain_coach" ? "public.vyva_user_brain_coach" : "public.vyva_user_checkins";
+    const existing = await client.query(`SELECT id::text FROM ${table} WHERE vyva_user_id = $1 LIMIT 1`, [resolvedUser.value]);
+    if (existing.rows[0]) {
+      await client.query(
+        `
+          UPDATE ${table}
+          SET
+            paused_until = $2::timestamptz,
+            pause_reason = $3,
+            pause_source = $4,
+            updated_at = now()
+          WHERE vyva_user_id = $1
+        `,
+        [
+          resolvedUser.value,
+          pauseConfig.value.paused_until,
+          pauseConfig.value.pause_reason,
+          pauseConfig.value.pause_source,
+        ],
+      );
+    } else {
+      await client.query(
+        `
+          INSERT INTO ${table} (vyva_user_id, enabled, frequency, preferred_time, paused_until, pause_reason, pause_source)
+          VALUES ($1, true, NULL, NULL, $2::timestamptz, $3, $4)
+        `,
+        [
+          resolvedUser.value,
+          pauseConfig.value.paused_until,
+          pauseConfig.value.pause_reason,
+          pauseConfig.value.pause_source,
+        ],
+      );
+    }
+    await client.query("COMMIT");
+
+    return {
+      value: {
+        service: serviceKey,
+        user_id: resolvedUser.value,
+        paused_until: pauseConfig.value.paused_until,
+        pause_reason: pauseConfig.value.pause_reason,
+        pause_source: pauseConfig.value.pause_source,
+        is_paused: true,
+        consequence: routinePauseConsequence(serviceKey, pauseConfig.value.paused_until),
+      },
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function resumeRoutineService(rawUserId, payload, context) {
+  const serviceKey = normalizeRoutineServiceKey(firstValue(payload?.service, payload?.service_type));
+  if (!serviceKey) return { error: "service is required" };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const resolvedUser = await ensureLocalUserForAssignmentWithClient(client, rawUserId, context);
+    if (resolvedUser.error || resolvedUser.notFound) {
+      await client.query("ROLLBACK");
+      return resolvedUser;
+    }
+    await requireCheckinScheduleAccess(resolvedUser.value, context, client);
+
+    const table = serviceKey === "brain_coach" ? "public.vyva_user_brain_coach" : "public.vyva_user_checkins";
+    const existing = await client.query(`SELECT id::text FROM ${table} WHERE vyva_user_id = $1 LIMIT 1`, [resolvedUser.value]);
+    if (!existing.rows[0]) {
+      await client.query("ROLLBACK");
+      return { notFound: true };
+    }
+
+    await client.query(
+      `
+        UPDATE ${table}
+        SET paused_until = NULL, pause_reason = NULL, pause_source = NULL, updated_at = now()
+        WHERE vyva_user_id = $1
+      `,
+      [resolvedUser.value],
+    );
+    await client.query("COMMIT");
+
+    return {
+      value: {
+        service: serviceKey,
+        user_id: resolvedUser.value,
+        paused_until: null,
+        pause_reason: null,
+        pause_source: null,
+        is_paused: false,
+      },
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function firstValue(...values) {
@@ -4046,15 +4765,17 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
     });
     if (upstream?.ok) {
       let careProviders = [];
+      let localServices = { checkins: null, brainCoach: null };
       if (pool) {
         try {
           req.context = await resolveRequestContext(req);
           careProviders = await loadExternalUserCareProviders(userId, req.context);
+          localServices = await loadExternalUserLocalServices(userId, req.context);
         } catch (error) {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId));
+      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -4230,6 +4951,14 @@ app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, re
   if (handleVyvaBackendResponse(res, upstream)) return;
 
   sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body, req.context));
+}));
+
+app.post("/api/v1/routine-calls/pause", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await pauseRoutineService(req.body?.user_id, req.body, req.context));
+}));
+
+app.post("/api/v1/routine-calls/resume", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await resumeRoutineService(req.body?.user_id, req.body, req.context));
 }));
 
 async function phoneRegistrationRoute(req, res) {
@@ -4548,12 +5277,424 @@ app.get("/api/v1/operational/field-staff", asyncRoute(async (req, res) => {
   })));
 }));
 
+app.get("/api/insights/kpis", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const rows = await optionalRows(
+    `
+      WITH latest_forecast_batch AS (
+        SELECT MAX(forecast_generated_at) AS batch
+        FROM public.client_risk_forecasts
+        WHERE organization_id = $1
+      ),
+      forecast_7d AS (
+        SELECT client_id, MAX(predicted_score) AS max_score
+        FROM public.client_risk_forecasts
+        WHERE organization_id = $1
+          AND forecast_generated_at = (SELECT batch FROM latest_forecast_batch)
+          AND horizon_day BETWEEN 1 AND 7
+        GROUP BY client_id
+      ),
+      latest_scores AS (
+        SELECT DISTINCT ON (client_id)
+          client_id,
+          delta_from_prior,
+          contributing_factors
+        FROM public.client_risk_scores_daily
+        WHERE organization_id = $1
+        ORDER BY client_id, score_date DESC
+      ),
+      latest_week AS (
+        SELECT MAX(week_start) AS week_start
+        FROM public.operator_capacity_weekly
+        WHERE organization_id = $1
+      )
+      SELECT
+        (SELECT COUNT(*)::int FROM forecast_7d WHERE max_score >= 67) AS predicted_escalations_7d,
+        (SELECT COUNT(*)::int FROM latest_scores WHERE delta_from_prior > 0) AS clients_trending_up,
+        (
+          SELECT COUNT(*)::int
+          FROM latest_scores
+          WHERE EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements(COALESCE(contributing_factors, '[]'::jsonb)) factor
+            WHERE factor->>'signal' = 'medication'
+              OR factor->>'label' ILIKE '%meds%'
+          )
+        ) AS adherence_risk_flags,
+        (
+          SELECT COUNT(*)::int
+          FROM public.operator_capacity_weekly ocw
+          JOIN latest_week lw ON lw.week_start = ocw.week_start
+          WHERE ocw.organization_id = $1
+            AND ocw.current_caseload > GREATEST(ocw.recommended_caseload, FLOOR(ocw.capacity_hours / 3))
+        ) AS operators_over_capacity
+    `,
+    [organizationId],
+  );
+  const row = rows[0] || {};
+  res.json({
+    predictedEscalations7d: Number(row.predicted_escalations_7d || 0),
+    clientsTrendingUp: Number(row.clients_trending_up || 0),
+    adherenceRiskFlags: Number(row.adherence_risk_flags || 0),
+    operatorsOverCapacity: Number(row.operators_over_capacity || 0),
+  });
+}));
+
+app.get("/api/insights/horizon", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const days = parseInsightsDays(req.query.days);
+  const rows = await optionalRows(
+    `
+      WITH latest_batch AS (
+        SELECT MAX(generated_at) AS generated_at
+        FROM public.daily_resource_forecast
+        WHERE organization_id = $1
+      )
+      SELECT
+        forecast_date::text,
+        predicted_urgent_count,
+        predicted_review_count,
+        predicted_medication_count,
+        predicted_noresponse_count,
+        predicted_hours_needed,
+        available_hours
+      FROM public.daily_resource_forecast
+      WHERE organization_id = $1
+        AND generated_at = (SELECT generated_at FROM latest_batch)
+        AND forecast_date > CURRENT_DATE
+      ORDER BY forecast_date ASC
+      LIMIT $2
+    `,
+    [organizationId, days],
+  );
+
+  res.json(rows.map((row) => ({
+    date: row.forecast_date,
+    urgent: Number(row.predicted_urgent_count || 0),
+    review: Number(row.predicted_review_count || 0),
+    medication: Number(row.predicted_medication_count || 0),
+    noResponse: Number(row.predicted_noresponse_count || 0),
+    hoursNeeded: Number(row.predicted_hours_needed || 0),
+    hoursAvailable: Number(row.available_hours || 0),
+  })));
+}));
+
+app.get("/api/insights/clients", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const filter = String(req.query.filter || "all");
+  const days = parseInsightsDays(req.query.days || 30);
+  const [clientRows, historyRows, forecastRows] = await Promise.all([
+    optionalRows(
+      `
+        WITH latest_scores AS (
+          SELECT DISTINCT ON (client_id)
+            client_id,
+            composite_score,
+            risk_band,
+            delta_from_prior,
+            contributing_factors,
+            score_date
+          FROM public.client_risk_scores_daily
+          WHERE organization_id = $1
+          ORDER BY client_id, score_date DESC
+        ),
+        primary_assignments AS (
+          SELECT DISTINCT ON (a.vyva_user_id)
+            a.vyva_user_id,
+            fs.full_name AS operator_name
+          FROM public.vyva_user_care_provider_assignments a
+          JOIN public.field_staff fs ON fs.id = a.field_staff_id
+          WHERE a.provider_type = 'field_staff'
+          ORDER BY a.vyva_user_id, a.is_primary DESC, a.created_at DESC
+        )
+        SELECT
+          u.id::text,
+          u.first_name || ' ' || u.last_name AS name,
+          u.date_of_birth::text,
+          COALESCE(NULLIF(u.city, ''), u.country, 'Unknown') AS zone,
+          pa.operator_name,
+          ls.composite_score,
+          ls.delta_from_prior,
+          ls.risk_band,
+          ls.contributing_factors
+        FROM latest_scores ls
+        JOIN public.vyva_users u ON u.id = ls.client_id
+        LEFT JOIN primary_assignments pa ON pa.vyva_user_id = u.id
+        WHERE u.organization_id = $1
+        ORDER BY
+          CASE ls.risk_band WHEN 'high' THEN 0 WHEN 'moderate' THEN 1 ELSE 2 END,
+          ls.composite_score DESC,
+          u.last_name ASC
+      `,
+      [organizationId],
+    ),
+    optionalRows(
+      `
+        WITH ranked AS (
+          SELECT
+            client_id,
+            score_date,
+            composite_score,
+            ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY score_date DESC) AS rn
+          FROM public.client_risk_scores_daily
+          WHERE organization_id = $1
+        )
+        SELECT
+          client_id::text,
+          JSON_AGG(composite_score ORDER BY score_date ASC) AS history
+        FROM ranked
+        WHERE rn <= 14
+        GROUP BY client_id
+      `,
+      [organizationId],
+    ),
+    optionalRows(
+      `
+        WITH latest_batch AS (
+          SELECT MAX(forecast_generated_at) AS forecast_generated_at
+          FROM public.client_risk_forecasts
+          WHERE organization_id = $1
+        )
+        SELECT
+          client_id::text,
+          horizon_day,
+          predicted_score,
+          predicted_low,
+          predicted_high
+        FROM public.client_risk_forecasts
+        WHERE organization_id = $1
+          AND forecast_generated_at = (SELECT forecast_generated_at FROM latest_batch)
+          AND horizon_day <= $2
+        ORDER BY client_id, horizon_day ASC
+      `,
+      [organizationId, days],
+    ),
+  ]);
+
+  const histories = new Map(historyRows.map((row) => [
+    row.client_id,
+    Array.isArray(row.history) ? row.history.map(Number) : [],
+  ]));
+  const forecasts = forecastRows.reduce((map, row) => {
+    const current = map.get(row.client_id) || { mid: [], low: [], high: [] };
+    current.mid.push(Number(row.predicted_score || 0));
+    current.low.push(Number(row.predicted_low || 0));
+    current.high.push(Number(row.predicted_high || 0));
+    map.set(row.client_id, current);
+    return map;
+  }, new Map());
+
+  const clients = clientRows.map((row) => {
+    const factors = normalizeInsightFactors(row.contributing_factors);
+    const client = {
+      id: row.id,
+      name: row.name,
+      age: ageFromDateOfBirth(row.date_of_birth),
+      zone: row.zone,
+      operator: row.operator_name || null,
+      score: Number(row.composite_score || 0),
+      delta: Number(row.delta_from_prior || 0),
+      band: row.risk_band || insightRiskBand(row.composite_score),
+      history: histories.get(row.id) || [],
+      forecast: forecasts.get(row.id) || { mid: [], low: [], high: [] },
+      factors: factors.map((factor) => ({
+        signal: factor.signal || null,
+        label: factor.label || "Signal",
+        severity: factor.severity || "moderate",
+      })),
+      window: "",
+    };
+    client.window = forecastWindowText(client);
+    return client;
+  }).filter((client) => insightClientMatchesFilter(client, filter));
+
+  res.json(clients);
+}));
+
+app.get("/api/insights/operators", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  res.json(await loadInsightOperatorRows(organizationId));
+}));
+
+app.get("/api/insights/suggestions", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const status = String(req.query.status || "pending");
+  const rows = await optionalRows(
+    `
+      SELECT
+        rs.id::text,
+        COALESCE(source.full_name, 'Unassigned') AS from_name,
+        target.full_name AS to_name,
+        COUNT(rsc.client_id)::int AS client_count,
+        rs.reason,
+        rs.status
+      FROM public.reassignment_suggestions rs
+      JOIN public.field_staff target ON target.id = rs.to_operator_id
+      LEFT JOIN public.field_staff source ON source.id = rs.from_operator_id
+      LEFT JOIN public.reassignment_suggestion_clients rsc ON rsc.suggestion_id = rs.id
+      WHERE rs.organization_id = $1
+        AND ($2::text = 'all' OR rs.status = $2)
+      GROUP BY rs.id, source.full_name, target.full_name
+      ORDER BY rs.suggested_at DESC
+      LIMIT 50
+    `,
+    [organizationId, status],
+  );
+
+  res.json(rows.map((row) => ({
+    id: row.id,
+    from: row.from_name,
+    to: row.to_name,
+    clientCount: Number(row.client_count || 0),
+    reason: row.reason,
+    status: row.status,
+  })));
+}));
+
+app.post("/api/insights/suggestions/:id/apply", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query("BEGIN");
+    const suggestionResult = await dbClient.query(
+      `
+        SELECT
+          id::text,
+          from_operator_id::text,
+          to_operator_id::text,
+          status
+        FROM public.reassignment_suggestions
+        WHERE id = $1
+          AND organization_id = $2
+        FOR UPDATE
+      `,
+      [req.params.id, organizationId],
+    );
+    const suggestion = suggestionResult.rows[0];
+    if (!suggestion) {
+      await dbClient.query("ROLLBACK");
+      res.status(404).json({ error: "Suggestion not found" });
+      return;
+    }
+    if (suggestion.status !== "pending") {
+      await dbClient.query("ROLLBACK");
+      res.status(409).json({ error: "Suggestion is no longer pending" });
+      return;
+    }
+
+    const clients = await dbClient.query(
+      `
+        SELECT rsc.client_id::text
+        FROM public.reassignment_suggestion_clients rsc
+        JOIN public.vyva_users u ON u.id = rsc.client_id
+        WHERE rsc.suggestion_id = $1
+          AND u.organization_id = $2
+      `,
+      [suggestion.id, organizationId],
+    );
+
+    for (const row of clients.rows) {
+      if (suggestion.from_operator_id) {
+        await dbClient.query(
+          `
+            DELETE FROM public.vyva_user_care_provider_assignments
+            WHERE vyva_user_id = $1
+              AND provider_type = 'field_staff'
+              AND field_staff_id = $2
+          `,
+          [row.client_id, suggestion.from_operator_id],
+        );
+      }
+
+      await dbClient.query(
+        `
+          UPDATE public.vyva_user_care_provider_assignments
+          SET is_primary = false, updated_at = now()
+          WHERE vyva_user_id = $1
+            AND provider_type = 'field_staff'
+        `,
+        [row.client_id],
+      );
+
+      await dbClient.query(
+        `
+          INSERT INTO public.vyva_user_care_provider_assignments (
+            vyva_user_id,
+            provider_type,
+            field_staff_id,
+            is_primary,
+            relationship_label,
+            notes
+          )
+          VALUES ($1, 'field_staff', $2, true, 'Primary field provider', 'Applied from predictive insights suggestion')
+          ON CONFLICT (vyva_user_id, field_staff_id) WHERE provider_type = 'field_staff' AND field_staff_id IS NOT NULL
+          DO UPDATE SET
+            is_primary = true,
+            relationship_label = COALESCE(public.vyva_user_care_provider_assignments.relationship_label, EXCLUDED.relationship_label),
+            notes = EXCLUDED.notes,
+            updated_at = now()
+        `,
+        [row.client_id, suggestion.to_operator_id],
+      );
+    }
+
+    await dbClient.query(
+      `
+        UPDATE public.reassignment_suggestions
+        SET status = 'applied', applied_at = now(), applied_by = $2
+        WHERE id = $1
+      `,
+      [suggestion.id, req.context.userId || null],
+    );
+
+    const operators = await refreshOperatorCaseloadsWithClient(
+      dbClient,
+      [suggestion.from_operator_id, suggestion.to_operator_id],
+      organizationId,
+    );
+
+    await dbClient.query("COMMIT");
+    res.json({ operators });
+  } catch (error) {
+    await dbClient.query("ROLLBACK");
+    throw error;
+  } finally {
+    dbClient.release();
+  }
+}));
+
+app.post("/api/insights/suggestions/:id/dismiss", asyncRoute(async (req, res) => {
+  const organizationId = scopeOrganizationId(req.context);
+  const result = await query(
+    `
+      UPDATE public.reassignment_suggestions
+      SET status = 'dismissed'
+      WHERE id = $1
+        AND organization_id = $2
+        AND status = 'pending'
+      RETURNING id::text, status
+    `,
+    [req.params.id, organizationId],
+  );
+  if (!result.rows[0]) {
+    res.status(404).json({ error: "Suggestion not found" });
+    return;
+  }
+  res.json({ id: result.rows[0].id, status: result.rows[0].status });
+}));
+
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
     const mode = String(req.query.service_type || "").toLowerCase() === "brain_coach" ? "brain_coach" : "standard";
     const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
     if (upstream?.ok) {
-      res.json(filterUpstreamCheckins(upstream.data, mode));
+      let context = null;
+      try {
+        context = await resolveRequestContext(req);
+      } catch {
+        context = null;
+      }
+      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(upstream.data, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -4583,6 +5724,7 @@ app.post("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
     res.status(404).json({ error: "User not found" });
     return;
   }
+  await requireCheckinScheduleAccess(req.body.user_id, req.context);
 
   const result = await query(
     `
@@ -4594,37 +5736,34 @@ app.post("/api/v1/checkins-dashboard/checkins", asyncRoute(async (req, res) => {
   );
 
   const checkins = await loadCheckins(req.context);
-  res.status(201).json(checkins.find((item) => item.id === result.rows[0]?.id) || { id: result.rows[0]?.id });
+  res.status(201).json(
+    checkins.find((item) => item.id === result.rows[0]?.id || String(item.user_id) === String(req.body.user_id)) || { id: result.rows[0]?.id },
+  );
 }));
 
 app.patch("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res) => {
-  requireAdmin(req.context);
-  const organizationId = scopeOrganizationId(req.context);
   const validationError = validateCheckinPayload(req.body);
   if (validationError) {
     res.status(400).json({ error: validationError });
     return;
   }
 
-  const result = await query(
-    `
-      UPDATE public.vyva_user_checkins c
-      SET enabled = $2, frequency = $3, preferred_time = $4
-      FROM public.vyva_users u
-      WHERE c.id = $1
-        AND u.id = c.vyva_user_id
-        AND u.organization_id = $5
-      RETURNING c.id::text
-    `,
-    [req.params.id, Boolean(req.body.is_active), String(req.body.frequency_days), req.body.preferred_time || null, organizationId],
-  );
-  if (!result.rows[0]) {
+  const result = await updateCheckinConfig(req.params.id, req.body, req.context);
+  if (result.notFound) {
     res.status(404).json({ error: "Scheduled call not found" });
+    return;
+  }
+  if (result.error) {
+    res.status(400).json({ error: result.error });
     return;
   }
 
   const checkins = await loadCheckins(req.context);
-  res.json(checkins.find((item) => item.id === req.params.id) || { id: req.params.id });
+  res.json(
+    checkins.find(
+      (item) => item.id === result.value?.id || item.id === req.params.id || String(item.user_id) === String(result.value?.vyva_user_id ?? req.body?.user_id),
+    ) || { id: result.value?.id || req.params.id },
+  );
 }));
 
 app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res) => {
@@ -4647,7 +5786,13 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
   try {
     const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
     if (upstream?.ok) {
-      res.json(upstream.data);
+      let context = null;
+      try {
+        context = await resolveRequestContext(req);
+      } catch {
+        context = null;
+      }
+      res.json(await overlayRoutineServicePayload(upstream.data, "brain_coach", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -4657,7 +5802,13 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
 
     const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
     if (checkinsUpstream?.ok) {
-      res.json({ sessions: mapUpstreamBrainCoachSessions(checkinsUpstream.data) });
+      let context = null;
+      try {
+        context = await resolveRequestContext(req);
+      } catch {
+        context = null;
+      }
+      res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(checkinsUpstream.data) }, "brain_coach", context));
       return;
     }
     if (!pool) {
@@ -4671,6 +5822,22 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
     next(error);
   }
 });
+
+app.patch("/api/v1/brain-coach-dashboard/sessions/:user_id", asyncRoute(async (req, res) => {
+  requireAdmin(req.context);
+  const result = await upsertBrainCoachConfig(req.params.user_id, req.body, req.context);
+  if (result.notFound) {
+    res.status(404).json({ error: "Brain Coach session not found" });
+    return;
+  }
+  if (result.error) {
+    res.status(400).json({ error: result.error });
+    return;
+  }
+
+  const sessions = await loadBrainCoachSessions(req.context);
+  res.json(sessions.find((item) => String(item.user_id) === String(req.params.user_id)) || result.value);
+}));
 
 app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
   try {

@@ -172,6 +172,9 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_checkins (
   enabled BOOLEAN NOT NULL DEFAULT false,
   frequency TEXT,
   preferred_time TEXT,
+  paused_until TIMESTAMPTZ,
+  pause_reason TEXT,
+  pause_source TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -182,6 +185,9 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_brain_coach (
   enabled BOOLEAN NOT NULL DEFAULT false,
   frequency TEXT,
   preferred_time TEXT,
+  paused_until TIMESTAMPTZ,
+  pause_reason TEXT,
+  pause_source TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -316,6 +322,95 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_care_provider_assignments (
   )
 );
 
+CREATE TABLE IF NOT EXISTS public.client_risk_signals_daily (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  signal_date DATE NOT NULL,
+  mood_risk NUMERIC(5,2),
+  medication_risk NUMERIC(5,2),
+  checkin_risk NUMERIC(5,2),
+  response_risk NUMERIC(5,2),
+  brain_coach_risk NUMERIC(5,2),
+  manual_flag_risk NUMERIC(5,2) NOT NULL DEFAULT 0,
+  raw_inputs JSONB,
+  computed_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (client_id, signal_date)
+);
+
+CREATE TABLE IF NOT EXISTS public.client_risk_scores_daily (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  score_date DATE NOT NULL,
+  composite_score NUMERIC(5,2) NOT NULL,
+  risk_band TEXT NOT NULL CHECK (risk_band IN ('low','moderate','high')),
+  delta_from_prior NUMERIC(5,2),
+  contributing_factors JSONB,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (client_id, score_date)
+);
+
+CREATE TABLE IF NOT EXISTS public.client_risk_forecasts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  forecast_generated_at TIMESTAMPTZ NOT NULL,
+  forecast_date DATE NOT NULL,
+  horizon_day INTEGER NOT NULL CHECK (horizon_day BETWEEN 1 AND 30),
+  predicted_score NUMERIC(5,2) NOT NULL,
+  predicted_low NUMERIC(5,2) NOT NULL,
+  predicted_high NUMERIC(5,2) NOT NULL,
+  model_confidence NUMERIC(4,3),
+  UNIQUE (client_id, forecast_generated_at, horizon_day)
+);
+
+CREATE TABLE IF NOT EXISTS public.operator_capacity_weekly (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  operator_id UUID NOT NULL REFERENCES public.field_staff(id) ON DELETE CASCADE,
+  week_start DATE NOT NULL,
+  capacity_hours NUMERIC(6,2) NOT NULL DEFAULT 32,
+  current_caseload INTEGER NOT NULL DEFAULT 0,
+  recommended_caseload INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (operator_id, week_start)
+);
+
+CREATE TABLE IF NOT EXISTS public.daily_resource_forecast (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  forecast_date DATE NOT NULL,
+  predicted_urgent_count INTEGER NOT NULL DEFAULT 0,
+  predicted_review_count INTEGER NOT NULL DEFAULT 0,
+  predicted_medication_count INTEGER NOT NULL DEFAULT 0,
+  predicted_noresponse_count INTEGER NOT NULL DEFAULT 0,
+  predicted_hours_needed NUMERIC(6,2) NOT NULL,
+  available_hours NUMERIC(6,2) NOT NULL,
+  generated_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE (organization_id, forecast_date, generated_at)
+);
+
+CREATE TABLE IF NOT EXISTS public.reassignment_suggestions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  generation_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  suggested_at TIMESTAMPTZ DEFAULT now(),
+  from_operator_id UUID REFERENCES public.field_staff(id),
+  to_operator_id UUID NOT NULL REFERENCES public.field_staff(id),
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','applied','dismissed')),
+  applied_at TIMESTAMPTZ,
+  applied_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.reassignment_suggestion_clients (
+  suggestion_id UUID NOT NULL REFERENCES public.reassignment_suggestions(id) ON DELETE CASCADE,
+  client_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  PRIMARY KEY (suggestion_id, client_id)
+);
+
 CREATE TABLE IF NOT EXISTS public.campaigns (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   organization_id UUID REFERENCES public.organizations(id),
@@ -410,6 +505,12 @@ ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_start TEXT;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_end TEXT;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS retry_limit INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS execution_type TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE public.vyva_user_checkins ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ;
+ALTER TABLE public.vyva_user_checkins ADD COLUMN IF NOT EXISTS pause_reason TEXT;
+ALTER TABLE public.vyva_user_checkins ADD COLUMN IF NOT EXISTS pause_source TEXT;
+ALTER TABLE public.vyva_user_brain_coach ADD COLUMN IF NOT EXISTS paused_until TIMESTAMPTZ;
+ALTER TABLE public.vyva_user_brain_coach ADD COLUMN IF NOT EXISTS pause_reason TEXT;
+ALTER TABLE public.vyva_user_brain_coach ADD COLUMN IF NOT EXISTS pause_source TEXT;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS is_platform_admin BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE public.user_roles ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
@@ -543,6 +644,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_care_provider_primary_caregiver
 CREATE UNIQUE INDEX IF NOT EXISTS idx_care_provider_primary_field_staff
   ON public.vyva_user_care_provider_assignments(vyva_user_id)
   WHERE provider_type = 'field_staff' AND is_primary = true;
+CREATE INDEX IF NOT EXISTS idx_crsd_client_date ON public.client_risk_signals_daily (client_id, signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_crsd_organization_date ON public.client_risk_signals_daily (organization_id, signal_date DESC);
+CREATE INDEX IF NOT EXISTS idx_crscd_client_date ON public.client_risk_scores_daily (client_id, score_date DESC);
+CREATE INDEX IF NOT EXISTS idx_crscd_organization_date ON public.client_risk_scores_daily (organization_id, score_date DESC);
+CREATE INDEX IF NOT EXISTS idx_crf_client_horizon ON public.client_risk_forecasts (client_id, forecast_generated_at DESC, horizon_day);
+CREATE INDEX IF NOT EXISTS idx_crf_organization_batch ON public.client_risk_forecasts (organization_id, forecast_generated_at DESC, horizon_day);
+CREATE INDEX IF NOT EXISTS idx_drf_date ON public.daily_resource_forecast (organization_id, forecast_date, generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rs_status ON public.reassignment_suggestions (organization_id, status, suggested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ocw_operator_week ON public.operator_capacity_weekly (operator_id, week_start DESC);
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_campaign ON public.campaign_targets(campaign_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_targets_user ON public.campaign_targets(vyva_user_id);
 CREATE INDEX IF NOT EXISTS idx_campaign_call_runs_campaign ON public.campaign_call_runs(campaign_id);
@@ -758,6 +868,9 @@ CREATE TRIGGER update_care_provider_contacts_updated_at BEFORE UPDATE ON public.
 
 DROP TRIGGER IF EXISTS update_care_provider_assignments_updated_at ON public.vyva_user_care_provider_assignments;
 CREATE TRIGGER update_care_provider_assignments_updated_at BEFORE UPDATE ON public.vyva_user_care_provider_assignments FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_operator_capacity_weekly_updated_at ON public.operator_capacity_weekly;
+CREATE TRIGGER update_operator_capacity_weekly_updated_at BEFORE UPDATE ON public.operator_capacity_weekly FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_campaigns_updated_at ON public.campaigns;
 CREATE TRIGGER update_campaigns_updated_at BEFORE UPDATE ON public.campaigns FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();

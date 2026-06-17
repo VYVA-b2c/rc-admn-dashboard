@@ -5,7 +5,9 @@ import {
   Calendar,
   CheckCircle,
   Info,
+  PauseCircle,
   Pencil,
+  Play,
   PhoneCall,
   Plus,
   Power,
@@ -70,7 +72,15 @@ type ScheduledCallApiItem = Partial<ScheduledCall> & {
   preferredTime?: string | null;
   active?: boolean;
   enabled?: boolean;
+  is_paused?: boolean;
   frequency?: number | string | null;
+  pause_reason?: string | null;
+  pause_source?: string | null;
+  paused_until?: string | null;
+  consent_given?: boolean;
+  assigned_provider_name?: string | null;
+  can_edit?: boolean;
+  edit_block_reason?: "consent_required" | "assigned_provider_required" | null;
   vyva_user_id?: number | string;
   user?: {
     id?: number | string;
@@ -151,6 +161,14 @@ function normalizeScheduledCall(raw: ScheduledCallApiItem): ScheduledCall {
             : true,
     frequency_days: Number.isInteger(frequency) && frequency > 0 ? frequency : 1,
     preferred_time: raw.preferred_time ?? raw.preferredTime ?? null,
+    paused_until: raw.paused_until ?? null,
+    pause_reason: raw.pause_reason ?? null,
+    pause_source: raw.pause_source ?? null,
+    is_paused: Boolean(raw.is_paused),
+    consent_given: typeof raw.consent_given === "boolean" ? raw.consent_given : undefined,
+    assigned_provider_name: raw.assigned_provider_name ?? null,
+    can_edit: Boolean(raw.can_edit),
+    edit_block_reason: raw.edit_block_reason ?? null,
   };
 }
 
@@ -211,6 +229,36 @@ function formatPreferredTime(value?: string | null) {
   return value.slice(0, 5);
 }
 
+function isPaused(call: Pick<ScheduledCallRow, "is_paused" | "paused_until">) {
+  if (call.is_paused) return true;
+  if (!call.paused_until) return false;
+  return new Date(call.paused_until).getTime() > Date.now();
+}
+
+function formatPausedUntil(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function pauseDescription(call: ScheduledCallRow, t: (key: string) => string) {
+  const until = formatPausedUntil(call.paused_until);
+  const sourceKey = call.pause_source ? `routineCalls.pauseSource.${call.pause_source}` : "";
+  const sourceLabel = sourceKey ? t(sourceKey) : "";
+  const source = sourceLabel && sourceLabel !== sourceKey ? sourceLabel : "";
+  const explanation = until
+    ? t("routineCalls.pauseExplanation").replace("{date}", until)
+    : t("routineCalls.pauseExplanationOpen");
+  return source ? `${source} · ${explanation}` : explanation;
+}
+
+function editPermissionLabel(call: ScheduledCallRow, t: (key: string) => string) {
+  if (call.edit_block_reason === "consent_required") return t("checkin.permission.consentRequired");
+  if (call.edit_block_reason === "assigned_provider_required") return t("checkin.permission.assignedProviderRequired");
+  return t("checkin.permission.readOnly");
+}
+
 export default function CheckInMonitoring() {
   const CHECKIN_REQUEST_TIMEOUT_MS = 10_000;
   const [search, setSearch] = useState("");
@@ -222,7 +270,6 @@ export default function CheckInMonitoring() {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
-  const baseCanEdit = isAdmin && !authBypassEnabled;
 
   const {
     data: checkinsData,
@@ -254,7 +301,8 @@ export default function CheckInMonitoring() {
 
   const checkins = useMemo(() => checkinsData ?? [], [checkinsData]);
   const usingFallbackData = useMemo(() => checkins.some((call) => call.isFallback), [checkins]);
-  const canEdit = baseCanEdit && !usingFallbackData;
+  const canCreate = isAdmin && !authBypassEnabled && !usingFallbackData;
+  const canShowActions = !usingFallbackData && (isAdmin || checkins.some((call) => call.can_edit));
 
   useEffect(() => {
     if (!isError) return;
@@ -267,7 +315,7 @@ export default function CheckInMonitoring() {
 
   const { data: users = [], isLoading: usersLoading } = useQuery({
     queryKey: ["scheduled-call-users"],
-    enabled: baseCanEdit,
+    enabled: canCreate,
     retry: false,
     queryFn: async (): Promise<ScheduledCallUser[]> => {
       try {
@@ -350,6 +398,57 @@ export default function CheckInMonitoring() {
     },
   });
 
+  const pauseMutation = useMutation({
+    mutationFn: (call: ScheduledCallRow) =>
+      apiFetch("/api/v1/routine-calls/pause", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: String(call.user_id),
+          service: "checkin",
+          days: 30,
+          pause_source: "staff",
+          pause_reason: "Paused by operations team",
+        }),
+      }),
+    onSuccess: () => {
+      toast({ title: t("routineCalls.paused") });
+      queryClient.invalidateQueries({ queryKey: ["checkin-monitoring"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["user-profile"] });
+    },
+    onError: (error) => {
+      toast({
+        title: t("routineCalls.pauseFailed"),
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (call: ScheduledCallRow) =>
+      apiFetch("/api/v1/routine-calls/resume", {
+        method: "POST",
+        body: JSON.stringify({
+          user_id: String(call.user_id),
+          service: "checkin",
+        }),
+      }),
+    onSuccess: () => {
+      toast({ title: t("routineCalls.resumed") });
+      queryClient.invalidateQueries({ queryKey: ["checkin-monitoring"] });
+      queryClient.invalidateQueries({ queryKey: ["users"] });
+      queryClient.invalidateQueries({ queryKey: ["user-profile"] });
+    },
+    onError: (error) => {
+      toast({
+        title: t("routineCalls.resumeFailed"),
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
+
   const stats = useMemo(() => {
     return {
       total: checkins.length,
@@ -400,7 +499,7 @@ export default function CheckInMonitoring() {
     }
   };
 
-  const actionColSpan = canEdit ? 8 : 7;
+  const actionColSpan = canShowActions ? 8 : 7;
 
   return (
     <div className="space-y-6">
@@ -411,7 +510,7 @@ export default function CheckInMonitoring() {
           </div>
           <h1 className="font-display text-2xl font-bold text-foreground">{t("checkin.title")}</h1>
         </div>
-        {canEdit && (
+        {canCreate && (
           <Button onClick={openCreateDialog} disabled={usersLoading} className="rounded-xl">
             <Plus className="h-4 w-4" />
             {t("checkin.addScheduledCall")}
@@ -457,7 +556,7 @@ export default function CheckInMonitoring() {
               <TableHead>{t("checkin.lastCheckin")}</TableHead>
               <TableHead>{t("checkin.frequency")}</TableHead>
               <TableHead>{t("checkin.preferredTime")}</TableHead>
-              {canEdit && <TableHead className="text-right">{t("checkin.actions")}</TableHead>}
+              {canShowActions && <TableHead className="text-right">{t("checkin.actions")}</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -483,7 +582,10 @@ export default function CheckInMonitoring() {
               </TableRow>
             ) : (
               filtered.map((c) => {
-                const canWriteRow = Boolean(c.id);
+                const canWriteRow = Boolean(c.user_id);
+                const paused = isPaused(c);
+                const canManageRow = Boolean(c.can_edit && canWriteRow);
+                const canDeleteRow = Boolean(isAdmin && canWriteRow);
 
                 return (
                   <TableRow
@@ -497,49 +599,74 @@ export default function CheckInMonitoring() {
                     <TableCell className="text-muted-foreground">{c.userPhone || "?"}</TableCell>
                     <TableCell>{typeLabel(c.type, t)}</TableCell>
                     <TableCell>
-                      <Badge variant={c.is_active ? "default" : "secondary"} className="text-xs">
-                        {c.is_active ? t("checkin.active") : t("checkin.inactive")}
-                      </Badge>
+                      <div className="space-y-1">
+                        <Badge variant={paused ? "secondary" : c.is_active ? "default" : "secondary"} className="text-xs">
+                          {paused ? t("routineCalls.pausedLabel") : c.is_active ? t("checkin.active") : t("checkin.inactive")}
+                        </Badge>
+                        {paused && <p className="max-w-[280px] text-xs text-amber-700">{pauseDescription(c, t)}</p>}
+                      </div>
                     </TableCell>
                     <TableCell>{lastOutcomeLabel(c, t)}</TableCell>
                     <TableCell>{formatFrequencyLabel(c, t)}</TableCell>
                     <TableCell>{formatPreferredTime(c.preferred_time)}</TableCell>
-                    {canEdit && (
+                    {canShowActions && (
                       <TableCell onClick={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title={t("checkin.edit")}
-                            aria-label={`${t("checkin.edit")} ${c.userName}`}
-                            className="h-8 w-8 rounded-xl"
-                            disabled={!canWriteRow}
-                            onClick={() => openEditDialog(c)}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title={c.is_active ? t("checkin.disable") : t("checkin.enable")}
-                            aria-label={`${c.is_active ? t("checkin.disable") : t("checkin.enable")} ${c.userName}`}
-                            className="h-8 w-8 rounded-xl"
-                            disabled={!canWriteRow || toggleMutation.isPending}
-                            onClick={() => toggleMutation.mutate(c)}
-                          >
-                            {c.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            title={t("checkin.delete")}
-                            aria-label={`${t("checkin.delete")} ${c.userName}`}
-                            className="h-8 w-8 rounded-xl text-destructive hover:text-destructive"
-                            disabled={!canWriteRow}
-                            onClick={() => setDeleteTarget(c)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {canManageRow && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={t("checkin.edit")}
+                                aria-label={`${t("checkin.edit")} ${c.userName}`}
+                                className="h-8 w-8 rounded-xl"
+                                disabled={toggleMutation.isPending || saveMutation.isPending}
+                                onClick={() => openEditDialog(c)}
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={c.is_active ? t("checkin.disable") : t("checkin.enable")}
+                                aria-label={`${c.is_active ? t("checkin.disable") : t("checkin.enable")} ${c.userName}`}
+                                className="h-8 w-8 rounded-xl"
+                                disabled={toggleMutation.isPending}
+                                onClick={() => toggleMutation.mutate(c)}
+                              >
+                                {c.is_active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                title={paused ? t("routineCalls.resumeAction") : t("routineCalls.pauseAction")}
+                                aria-label={`${paused ? t("routineCalls.resumeAction") : t("routineCalls.pauseAction")} ${c.userName}`}
+                                className="h-8 w-8 rounded-xl"
+                                disabled={pauseMutation.isPending || resumeMutation.isPending}
+                                onClick={() => (paused ? resumeMutation.mutate(c) : pauseMutation.mutate(c))}
+                              >
+                                {paused ? <Play className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
+                              </Button>
+                            </>
+                          )}
+                          {canDeleteRow && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("checkin.delete")}
+                              aria-label={`${t("checkin.delete")} ${c.userName}`}
+                              className="h-8 w-8 rounded-xl text-destructive hover:text-destructive"
+                              disabled={!canWriteRow}
+                              onClick={() => setDeleteTarget(c)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {!canManageRow && !canDeleteRow && (
+                            <span className="max-w-[220px] text-right text-xs text-muted-foreground">
+                              {editPermissionLabel(c, t)}
+                            </span>
+                          )}
                         </div>
                       </TableCell>
                     )}
@@ -551,7 +678,7 @@ export default function CheckInMonitoring() {
         </Table>
       </div>
 
-      {canEdit && (
+      {canShowActions && (
         <>
           <ScheduledCallDialog
             open={dialogOpen}

@@ -8,6 +8,14 @@ export interface ScheduledCall {
   is_active: boolean;
   frequency_days: number;
   preferred_time?: string | null;
+  paused_until?: string | null;
+  pause_reason?: string | null;
+  pause_source?: string | null;
+  is_paused?: boolean;
+  consent_given?: boolean;
+  assigned_provider_name?: string | null;
+  can_edit?: boolean;
+  edit_block_reason?: "consent_required" | "assigned_provider_required" | null;
 }
 
 export interface ScheduledCallUser {
@@ -25,4 +33,7 @@ export interface ScheduledCallPayload {
   is_active: boolean;
   frequency_days: number;
   preferred_time: string | null;
+  paused_until?: string | null;
+  pause_reason?: string | null;
+  pause_source?: string | null;
 }

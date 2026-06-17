@@ -74,6 +74,10 @@ export interface OperationalService extends ProfileRecord {
   enabled?: boolean;
   frequency?: string | null;
   preferred_time?: string | null;
+  paused_until?: string | null;
+  pause_reason?: string | null;
+  pause_source?: string | null;
+  is_paused?: boolean;
 }
 
 export interface OperationalCaregiver extends ProfileRecord {

@@ -258,6 +258,8 @@ export default function UserProfile() {
   const careProviders = safeArray(data.careProviders).length
     ? safeArray(data.careProviders)
     : caregivers.map(providerFromCaregiver);
+  const emergencyContacts = careProviders.filter((provider) => provider.provider_type === "caregiver");
+  const redCrossStaffProviders = careProviders.filter((provider) => provider.provider_type === "field_staff");
   const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
   const primaryProfessional = careProviders.find((provider) => provider.provider_type === "field_staff" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "field_staff") ?? null;
   const sensors = safeArray(data.sensors);
@@ -558,6 +560,9 @@ export default function UserProfile() {
                 enabled={Boolean(checkins?.enabled)}
                 frequency={checkins?.frequency}
                 preferredTime={checkins?.preferred_time}
+                pausedUntil={checkins?.paused_until}
+                pauseSource={checkins?.pause_source}
+                isPaused={Boolean(checkins?.is_paused)}
                 onEdit={showAdminControls && checkins ? () => setEditCheckinOpen(true) : undefined}
               />
               <ServiceSummary
@@ -565,6 +570,9 @@ export default function UserProfile() {
                 enabled={Boolean(brainCoach?.enabled)}
                 frequency={brainCoach?.frequency}
                 preferredTime={brainCoach?.preferred_time}
+                pausedUntil={brainCoach?.paused_until}
+                pauseSource={brainCoach?.pause_source}
+                isPaused={Boolean(brainCoach?.is_paused)}
                 onEdit={showAdminControls && brainCoach ? () => setEditBrainOpen(true) : undefined}
               />
             </div>
@@ -591,49 +599,36 @@ export default function UserProfile() {
             {careProviders.length === 0 ? (
               <EmptyLine icon={Users} label={t("careProviders.noProviders")} />
             ) : (
-              <div className="space-y-2">
-                {careProviders.map((provider) => (
-                  <div key={provider.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
-                        <Badge variant={provider.is_primary ? "default" : "secondary"} className="rounded-full text-[11px]">
-                          {provider.is_primary ? t("careProviders.primary") : t(providerTypeKey(provider.provider_type))}
-                        </Badge>
-                      </div>
-                      <p className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground">
-                        <Phone className="h-3.5 w-3.5" />
-                        {provider.phone || t("profile.noPhone")}
-                      </p>
-                      {providerCoverageLabel(provider) && (
-                        <p className="mt-1 text-xs font-semibold text-muted-foreground">{providerCoverageLabel(provider)}</p>
-                      )}
-                    </div>
-                    {canAssignProviders && (
-                      <div className="flex gap-1">
-                        {showAdminControls && provider.provider_type === "caregiver" && (
-                          <AdminIconButton
-                            label={t("profile.editCaregiver")}
-                            onClick={() => {
-                              setEditCaregiverTarget({
-                                id: provider.id,
-                                assignment_id: provider.id,
-                                care_provider_contact_id: provider.provider_id,
-                                caretaker_name: provider.display_name,
-                                caretaker_phone: provider.phone,
-                                is_primary: provider.is_primary,
-                                relationship_label: provider.relationship_label,
-                                notes: provider.notes,
-                              });
-                              setEditCaregiverOpen(true);
-                            }}
-                          />
-                        )}
-                        <AdminIconButton label={t("careProviders.unassign")} icon={Trash2} danger onClick={() => handleUnassignCareProvider(provider.id)} />
-                      </div>
-                    )}
-                  </div>
-                ))}
+              <div className="space-y-4">
+                <ProviderGroup
+                  title={t("careProviders.informalShort")}
+                  providers={emergencyContacts}
+                  emptyLabel={t("careProviders.noEmergencyContacts")}
+                  canAssignProviders={canAssignProviders}
+                  showAdminControls={showAdminControls}
+                  onEditCaregiver={(provider) => {
+                    setEditCaregiverTarget({
+                      id: provider.id,
+                      assignment_id: provider.id,
+                      care_provider_contact_id: provider.provider_id,
+                      caretaker_name: provider.display_name,
+                      caretaker_phone: provider.phone,
+                      is_primary: provider.is_primary,
+                      relationship_label: provider.relationship_label,
+                      notes: provider.notes,
+                    });
+                    setEditCaregiverOpen(true);
+                  }}
+                  onUnassign={handleUnassignCareProvider}
+                />
+                <ProviderGroup
+                  title={t("careProviders.professionalShort")}
+                  providers={redCrossStaffProviders}
+                  emptyLabel={t("careProviders.noPrimaryProfessional")}
+                  canAssignProviders={canAssignProviders}
+                  showAdminControls={showAdminControls}
+                  onUnassign={handleUnassignCareProvider}
+                />
               </div>
             )}
           </CardContent>
@@ -896,32 +891,115 @@ function ProviderHighlight({
   );
 }
 
+function ProviderGroup({
+  title,
+  providers,
+  emptyLabel,
+  canAssignProviders,
+  showAdminControls,
+  onEditCaregiver,
+  onUnassign,
+}: {
+  title: string;
+  providers: OperationalCareProviderAssignment[];
+  emptyLabel: string;
+  canAssignProviders: boolean;
+  showAdminControls: boolean;
+  onEditCaregiver?: (provider: OperationalCareProviderAssignment) => void;
+  onUnassign: (assignmentId: string) => void;
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{title}</p>
+      {providers.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-muted/20 px-3 py-4 text-sm font-medium text-muted-foreground">
+          {emptyLabel}
+        </div>
+      ) : (
+        providers.map((provider) => (
+          <div key={provider.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+                <Badge variant={provider.is_primary ? "default" : "secondary"} className="rounded-full text-[11px]">
+                  {provider.is_primary ? t("careProviders.primary") : t(providerTypeKey(provider.provider_type))}
+                </Badge>
+              </div>
+              <p className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground">
+                <Phone className="h-3.5 w-3.5" />
+                {provider.phone || t("profile.noPhone")}
+              </p>
+              {providerCoverageLabel(provider) && (
+                <p className="mt-1 text-xs font-semibold text-muted-foreground">{providerCoverageLabel(provider)}</p>
+              )}
+            </div>
+            {canAssignProviders && (
+              <div className="flex gap-1">
+                {showAdminControls && provider.provider_type === "caregiver" && onEditCaregiver && (
+                  <AdminIconButton
+                    label={t("profile.editCaregiver")}
+                    onClick={() => onEditCaregiver(provider)}
+                  />
+                )}
+                <AdminIconButton label={t("careProviders.unassign")} icon={Trash2} danger onClick={() => onUnassign(provider.id)} />
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 function ServiceSummary({
   enabled,
   frequency,
+  isPaused,
   onEdit,
+  pauseSource,
+  pausedUntil,
   preferredTime,
   title,
 }: {
   enabled: boolean;
   frequency?: string | null;
+  isPaused?: boolean;
   onEdit?: () => void;
+  pauseSource?: string | null;
+  pausedUntil?: string | null;
   preferredTime?: string | null;
   title: string;
 }) {
   const { t } = useLanguage();
+  const paused = Boolean(isPaused || (pausedUntil && new Date(pausedUntil).getTime() > Date.now()));
+  const until = pausedUntil
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(pausedUntil))
+    : null;
+  const sourceKey = pauseSource ? `routineCalls.pauseSource.${pauseSource}` : "";
+  const sourceLabel = sourceKey ? t(sourceKey) : "";
+  const source = sourceLabel && sourceLabel !== sourceKey ? sourceLabel : "";
+  const explanation = until
+    ? t("routineCalls.pauseExplanation").replace("{date}", until)
+    : t("routineCalls.pauseExplanationOpen");
 
   return (
     <div className="rounded-xl border border-border bg-muted/25 p-3">
       <div className="flex items-center justify-between gap-2">
         <p className="font-semibold text-foreground">{title}</p>
-        <Badge variant={enabled ? "default" : "secondary"} className="rounded-full text-[11px]">
-          {enabled ? t("profile.active") : t("profile.inactive")}
+        <Badge variant={paused ? "secondary" : enabled ? "default" : "secondary"} className="rounded-full text-[11px]">
+          {paused ? t("routineCalls.pausedLabel") : enabled ? t("profile.active") : t("profile.inactive")}
         </Badge>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">
         {frequency || t("profile.frequencyUnknown")} · {preferredTime || t("profile.timeUnknown")}
       </p>
+      {paused && (
+        <p className="mt-2 text-xs font-medium text-amber-700">
+          {source ? `${source} · ${explanation}` : explanation}
+        </p>
+      )}
       {onEdit && (
         <Button variant="ghost" size="sm" className="mt-2 h-8 rounded-full px-3 text-xs text-primary hover:bg-primary/10 hover:text-primary" onClick={onEdit}>
           <Pencil className="mr-1.5 h-3.5 w-3.5" />

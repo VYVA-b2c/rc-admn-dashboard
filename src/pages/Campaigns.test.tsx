@@ -92,7 +92,7 @@ describe("Campaigns", () => {
     expect(screen.getByRole("heading", { name: "VYVA Call Campaigns" })).toBeInTheDocument();
 
     await waitFor(() => {
-      expect(screen.getByText("Heatwave alert - Madrid")).toBeInTheDocument();
+      expect(screen.getAllByText("Heatwave alert - Madrid").length).toBeGreaterThan(0);
     });
 
     expect(screen.getByText("Drafts")).toBeInTheDocument();

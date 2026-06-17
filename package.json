@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "db:init": "node scripts/init-replit-db.mjs",
+    "insights:nightly": "node scripts/run-insights-nightly.mjs",
     "lint": "eslint .",
     "preview": "npm run build && npm run start",
     "start": "node server/index.mjs --production",

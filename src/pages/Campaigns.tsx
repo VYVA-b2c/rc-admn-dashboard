@@ -1,7 +1,10 @@
 ﻿import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import {
   CalendarClock,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Clock3,
   Flame,
@@ -47,7 +50,8 @@ type TemplateKey =
   | "heatwave_alert"
   | "medication_reminder"
   | "wellbeing_check"
-  | "service_update";
+  | "service_update"
+  | "custom_campaign";
 
 type CampaignState = "draft" | "scheduled" | "queued" | "completed" | "cancelled" | "failed";
 type FilterKey = "all" | CampaignState;
@@ -192,11 +196,33 @@ const templateKeys: TemplateKey[] = [
   "service_update",
 ];
 
+const createTemplateKeys: TemplateKey[] = [
+  "general_announcement",
+  "heatwave_alert",
+  "medication_reminder",
+  "wellbeing_check",
+  "service_update",
+  "custom_campaign",
+];
+
+function isTemplateKey(value: string | null): value is TemplateKey {
+  return value === "general_announcement"
+    || value === "heatwave_alert"
+    || value === "medication_reminder"
+    || value === "wellbeing_check"
+    || value === "service_update"
+    || value === "custom_campaign";
+}
+
 function templateType(templateKey: TemplateKey) {
   if (templateKey === "medication_reminder") return "medication";
   if (templateKey === "wellbeing_check") return "wellbeing";
   if (templateKey === "service_update") return "service";
   return "safety";
+}
+
+function isCustomTemplate(templateKey: TemplateKey) {
+  return templateKey === "custom_campaign";
 }
 
 function defaultForm(templateKey: TemplateKey, getTemplateScript: (key: TemplateKey) => string): CampaignFormState {
@@ -275,6 +301,8 @@ function stateClasses(state: CampaignState) {
 
 function templateIcon(templateKey: TemplateKey) {
   switch (templateKey) {
+    case "custom_campaign":
+      return Sparkles;
     case "heatwave_alert":
       return Flame;
     case "medication_reminder":
@@ -326,6 +354,7 @@ function runJobStatusKey(status?: string | null) {
 }
 
 function campaignOpportunityMatchesTemplate(user: OpportunityUser, templateKey: TemplateKey) {
+  if (templateKey === "custom_campaign") return Boolean(user.phone);
   if (templateKey === "medication_reminder") return Boolean(user.phone) && (Number(user.healthConditions || 0) > 0 || Number(user.riskScore || 0) >= 40);
   if (templateKey === "wellbeing_check") return Boolean(user.phone) && ((user.careProviderCount ?? 0) < 1 || Number(user.activeAlerts || 0) > 0 || Number(user.riskScore || 0) >= 50);
   if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 || Number(user.activeAlerts || 0) > 0;
@@ -334,6 +363,7 @@ function campaignOpportunityMatchesTemplate(user: OpportunityUser, templateKey: 
 }
 
 function campaignOpportunityReasonKey(user: OpportunityUser, templateKey: TemplateKey) {
+  if (templateKey === "custom_campaign") return "campaigns.targets.reason.generalAnnouncement";
   if (templateKey === "medication_reminder") return "campaigns.targets.reason.publicHealth";
   if (templateKey === "wellbeing_check") return "campaigns.targets.reason.safetyAdvisory";
   if (templateKey === "service_update") return (user.careProviderCount ?? 0) < 1 ? "usersList.nextAction.assign" : "campaigns.targets.reason.service";
@@ -342,12 +372,16 @@ function campaignOpportunityReasonKey(user: OpportunityUser, templateKey: Templa
 }
 
 export default function Campaigns() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [guideDialogOpen, setGuideDialogOpen] = useState(false);
+  const [guideExpanded, setGuideExpanded] = useState(false);
+  const [guidePromptShown, setGuidePromptShown] = useState(false);
   const [form, setForm] = useState<CampaignFormState | null>(null);
   const [previewAction, setPreviewAction] = useState<PreviewAction>("preview");
   const [previewData, setPreviewData] = useState<CallPreview | null>(null);
@@ -386,7 +420,7 @@ export default function Campaigns() {
 
   const templateScript = (templateKey: TemplateKey) => {
     const translated = t(`campaigns.template.${templateKey}.script`);
-    if (translated === `campaigns.template.${templateKey}.script`) return t("campaigns.call.defaultScript");
+    if (translated === `campaigns.template.${templateKey}.script`) return isCustomTemplate(templateKey) ? "" : t("campaigns.call.defaultScript");
     return translated;
   };
 
@@ -401,7 +435,9 @@ export default function Campaigns() {
             ? "campaigns.ai.medication.name"
             : templateKey === "wellbeing_check"
               ? "campaigns.ai.wellbeing.name"
-              : "campaigns.ai.service.name";
+              : templateKey === "service_update"
+                ? "campaigns.ai.service.name"
+                : "campaigns.ai.general.name";
     return t(key).replace("{city}", cityLabel);
   };
 
@@ -416,7 +452,9 @@ export default function Campaigns() {
             ? "campaigns.ai.medication.audience"
             : templateKey === "wellbeing_check"
               ? "campaigns.ai.wellbeing.audience"
-              : "campaigns.ai.service.audience";
+              : templateKey === "service_update"
+                ? "campaigns.ai.service.audience"
+                : "campaigns.ai.general.audience";
     return t(key).replace("{city}", cityLabel);
   };
 
@@ -432,7 +470,9 @@ export default function Campaigns() {
             ? "campaigns.ai.medication.objective"
             : templateKey === "wellbeing_check"
               ? "campaigns.ai.wellbeing.objective"
-              : "campaigns.ai.service.objective";
+              : templateKey === "service_update"
+                ? "campaigns.ai.service.objective"
+                : "campaigns.ai.general.objective";
     return t(key).replace("{city}", cityLabel).replace("{channel}", channel);
   };
 
@@ -446,7 +486,9 @@ export default function Campaigns() {
             ? "campaigns.ai.medication.callScript"
             : templateKey === "wellbeing_check"
               ? "campaigns.ai.wellbeing.callScript"
-              : "campaigns.ai.service.callScript";
+              : templateKey === "service_update"
+                ? "campaigns.ai.service.callScript"
+                : "campaigns.ai.general.callScript";
     return t(key);
   };
 
@@ -460,7 +502,9 @@ export default function Campaigns() {
             ? "campaigns.ai.medication"
             : templateKey === "wellbeing_check"
               ? "campaigns.ai.wellbeing"
-              : "campaigns.ai.service";
+              : templateKey === "service_update"
+                ? "campaigns.ai.service"
+                : "campaigns.ai.general";
     return [t(`${prefix}.focus1`), t(`${prefix}.focus2`), t(`${prefix}.focus3`)];
   };
 
@@ -636,15 +680,33 @@ export default function Campaigns() {
   const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
     setForm({
       ...defaultForm(templateKey, templateScript),
-      name: templateLabel(templateKey),
-      objective: templateObjective(templateKey, ""),
-      audience: templateAudience(templateKey, ""),
+      name: isCustomTemplate(templateKey) ? "" : templateLabel(templateKey),
+      objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, ""),
+      audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, ""),
     });
     setAiSuggestion(null);
     setEditorOpen(true);
   };
 
+  const syncCreateIntent = (templateKey: TemplateKey = "general_announcement", mode?: "ai") => {
+    const next = new URLSearchParams(searchParams);
+    next.set("createCampaign", "1");
+    next.set("template", templateKey);
+    if (mode === "ai") next.set("mode", mode);
+    else next.delete("mode");
+    setSearchParams(next, { replace: true });
+  };
+
+  const clearCreateIntent = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("createCampaign");
+    next.delete("template");
+    next.delete("mode");
+    setSearchParams(next, { replace: true });
+  };
+
   const openEditDialog = (campaign: Campaign) => {
+    clearCreateIntent();
     setForm({
       id: campaign.id,
       name: campaign.name,
@@ -846,6 +908,26 @@ export default function Campaigns() {
     selectedCampaign && (canManageCampaigns || (canDraftCampaigns && operationalState(selectedCampaign) === "draft")),
   );
 
+  useEffect(() => {
+    if (!canDraftCampaigns) return;
+    if (searchParams.get("createCampaign") !== "1") return;
+    if (editorOpen) return;
+
+    const requestedTemplate = searchParams.get("template");
+    const templateKey = isTemplateKey(requestedTemplate) ? requestedTemplate : "general_announcement";
+    openCreateDialog(templateKey);
+
+    if (searchParams.get("mode") === "ai") {
+      setForm((current) => current ? { ...current, aiPrompt: "" } : current);
+    }
+  }, [canDraftCampaigns, editorOpen, searchParams]);
+
+  useEffect(() => {
+    if (!noCampaignsCreated || guidePromptShown) return;
+    setGuideDialogOpen(true);
+    setGuidePromptShown(true);
+  }, [guidePromptShown, noCampaignsCreated]);
+
   return (
     <div className="mx-auto max-w-[1680px] space-y-5">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -862,8 +944,7 @@ export default function Campaigns() {
               variant="outline"
               className="h-10 rounded-full px-4 text-sm font-bold"
               onClick={() => {
-                openCreateDialog();
-                setForm((current) => current ? { ...current, aiPrompt: "" } : current);
+                syncCreateIntent("general_announcement", "ai");
               }}
             >
               <Sparkles className="mr-2 h-4 w-4 text-primary" />
@@ -874,7 +955,7 @@ export default function Campaigns() {
             <Button
               type="button"
               className="h-10 rounded-full bg-primary px-4 text-sm font-bold text-primary-foreground hover:bg-primary/90"
-              onClick={openCreateDialog}
+              onClick={() => syncCreateIntent("general_announcement")}
             >
               <Plus className="mr-2 h-4 w-4" />
               {t("campaigns.newCampaign")}
@@ -959,7 +1040,7 @@ export default function Campaigns() {
                           key={templateKey}
                           type="button"
                           className="rounded-2xl border border-border bg-white p-4 text-left shadow-sm transition hover:border-primary/30 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-70"
-                          onClick={() => canDraftCampaigns && openCreateDialog(templateKey)}
+                          onClick={() => canDraftCampaigns && syncCreateIntent(templateKey)}
                           disabled={!canDraftCampaigns}
                         >
                           <div className="space-y-4">
@@ -1063,91 +1144,183 @@ export default function Campaigns() {
               {!selectedCampaign ? (
                 noCampaignsCreated ? (
                   <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
-                    <div className="space-y-5">
+                    <div className="space-y-4">
                       <div className="space-y-2">
-                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.panelTitle")}</h3>
-                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.panelDescription")}</p>
-                      </div>
-                      <div className="space-y-3">
-                        <StepLine number="1" title={t("campaigns.empty.stepOneTitle")} description={t("campaigns.empty.stepOneDescription")} />
-                        <StepLine number="2" title={t("campaigns.empty.stepTwoTitle")} description={t("campaigns.empty.stepTwoDescription")} />
-                        <StepLine number="3" title={t("campaigns.empty.stepThreeTitle")} description={t("campaigns.empty.stepThreeDescription")} />
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.quickGuideTitle")}</h3>
+                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.empty.quickGuideDescription")}</p>
                       </div>
 
-                      <div className="grid gap-4">
-                        <DetailBlock title={t("campaigns.empty.snapshotTitle")}>
-                          <div className="space-y-3">
-                            <SnapshotLine
-                              label={t("campaigns.metric.queuedRuns")}
-                              value={String(templateOpportunities.find((item) => item.templateKey === "general_announcement")?.matching.length ?? 0)}
-                              detail={t("campaigns.empty.snapshotGeneral")}
-                            />
-                            <SnapshotLine
-                              label={t("campaigns.template.medication_reminder.title")}
-                              value={String(templateOpportunities.find((item) => item.templateKey === "medication_reminder")?.matching.length ?? 0)}
-                              detail={t("campaigns.empty.snapshotMedication")}
-                            />
-                            <SnapshotLine
-                              label={t("campaigns.template.wellbeing_check.title")}
-                              value={String(templateOpportunities.find((item) => item.templateKey === "wellbeing_check")?.matching.length ?? 0)}
-                              detail={t("campaigns.empty.snapshotWellbeing")}
-                            />
-                          </div>
-                        </DetailBlock>
-
-                        <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
-                          {likelyRecipients.length === 0 ? (
-                            <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="rounded-full"
+                          onClick={() => setGuideDialogOpen(true)}
+                        >
+                          {t("campaigns.empty.openGuide")}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="rounded-full"
+                          onClick={() => setGuideExpanded((current) => !current)}
+                        >
+                          {guideExpanded ? (
+                            <ChevronUp className="mr-2 h-4 w-4" />
                           ) : (
-                            <div className="space-y-3">
-                              {likelyRecipients.slice(0, 3).map((user) => {
-                                const templateKey =
-                                  Number(user.criticalAlerts || 0) > 0
-                                    ? "heatwave_alert"
-                                    : (user.careProviderCount ?? 0) < 1
-                                      ? "service_update"
-                                      : Number(user.healthConditions || 0) > 0
-                                        ? "medication_reminder"
-                                        : Number(user.riskScore || 0) >= 50
-                                          ? "wellbeing_check"
-                                          : "general_announcement";
-                                return (
-                                  <div key={user.id} className="rounded-2xl bg-slate-50 px-4 py-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                      <div>
-                                        <p className="font-semibold text-foreground">{`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown"}</p>
-                                        <p className="text-sm text-muted-foreground">
-                                          {[user.city || t("campaigns.scope.allCities"), t(campaignOpportunityReasonKey(user, templateKey))]
-                                            .filter(Boolean)
-                                            .join(" · ")}
-                                        </p>
-                                      </div>
-                                      <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
-                                        {templateLabel(templateKey)}
-                                      </Badge>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                            <ChevronDown className="mr-2 h-4 w-4" />
                           )}
-                        </DetailBlock>
-
-                        <DetailBlock title={t("campaigns.empty.gapsTitle")}>
-                          <div className="space-y-3">
-                            <GapLine label={t("campaigns.empty.gap.noPhone")} value={operationalGaps.missingPhone} />
-                            <GapLine label={t("campaigns.empty.gap.checkins")} value={operationalGaps.checkinsOff} />
-                            <GapLine label={t("campaigns.empty.gap.medication")} value={operationalGaps.medicationSignals} />
-                            <GapLine label={t("campaigns.empty.gap.unassigned")} value={operationalGaps.unassignedCoverage} />
-                            <GapLine label={t("campaigns.empty.gap.urgent")} value={operationalGaps.urgentSignals} />
-                          </div>
-                        </DetailBlock>
+                          {guideExpanded ? t("campaigns.empty.hideGuide") : t("campaigns.empty.showGuide")}
+                        </Button>
                       </div>
+
+                      {guideExpanded && (
+                        <div className="space-y-5 border-t border-border pt-4">
+                          <div className="space-y-3">
+                            <StepLine number="1" title={t("campaigns.empty.stepOneTitle")} description={t("campaigns.empty.stepOneDescription")} />
+                            <StepLine number="2" title={t("campaigns.empty.stepTwoTitle")} description={t("campaigns.empty.stepTwoDescription")} />
+                            <StepLine number="3" title={t("campaigns.empty.stepThreeTitle")} description={t("campaigns.empty.stepThreeDescription")} />
+                          </div>
+
+                          <div className="grid gap-4">
+                            <DetailBlock title={t("campaigns.empty.snapshotTitle")}>
+                              <div className="space-y-3">
+                                <SnapshotLine
+                                  label={t("campaigns.metric.queuedRuns")}
+                                  value={String(templateOpportunities.find((item) => item.templateKey === "general_announcement")?.matching.length ?? 0)}
+                                  detail={t("campaigns.empty.snapshotGeneral")}
+                                />
+                                <SnapshotLine
+                                  label={t("campaigns.template.medication_reminder.title")}
+                                  value={String(templateOpportunities.find((item) => item.templateKey === "medication_reminder")?.matching.length ?? 0)}
+                                  detail={t("campaigns.empty.snapshotMedication")}
+                                />
+                                <SnapshotLine
+                                  label={t("campaigns.template.wellbeing_check.title")}
+                                  value={String(templateOpportunities.find((item) => item.templateKey === "wellbeing_check")?.matching.length ?? 0)}
+                                  detail={t("campaigns.empty.snapshotWellbeing")}
+                                />
+                              </div>
+                            </DetailBlock>
+
+                            <DetailBlock title={t("campaigns.empty.campaignStatusTitle")}>
+                              {campaigns.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">{t("campaigns.empty.campaignStatusEmpty")}</p>
+                              ) : (
+                                <div className="space-y-3">
+                                  {campaigns.slice(0, 4).map((campaign) => {
+                                    const state = operationalState(campaign);
+                                    return (
+                                      <button
+                                        key={campaign.id}
+                                        type="button"
+                                        className="flex w-full items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3 text-left transition hover:bg-slate-100"
+                                        onClick={() => setSelectedCampaignId(campaign.id)}
+                                      >
+                                        <div className="min-w-0">
+                                          <p className="truncate font-semibold text-foreground">{campaign.name}</p>
+                                          <p className="text-sm text-muted-foreground">
+                                            {[campaign.city || t("campaigns.scope.allCities"), formatDateTime(campaign.latestRun?.scheduledAt ?? campaign.scheduledAt)]
+                                              .filter(Boolean)
+                                              .join(" · ")}
+                                          </p>
+                                        </div>
+                                        <Badge className={cn("shrink-0 rounded-full border-0 px-3 py-1 font-semibold", stateClasses(state))}>
+                                          {t(`campaigns.state.${state}`)}
+                                        </Badge>
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </DetailBlock>
+
+                            <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
+                              {likelyRecipients.length === 0 ? (
+                                <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                              ) : (
+                                <div className="space-y-3">
+                                  {likelyRecipients.slice(0, 3).map((user) => {
+                                    const templateKey =
+                                      Number(user.criticalAlerts || 0) > 0
+                                        ? "heatwave_alert"
+                                        : (user.careProviderCount ?? 0) < 1
+                                          ? "service_update"
+                                          : Number(user.healthConditions || 0) > 0
+                                            ? "medication_reminder"
+                                            : Number(user.riskScore || 0) >= 50
+                                              ? "wellbeing_check"
+                                              : "general_announcement";
+                                    return (
+                                      <div key={user.id} className="rounded-2xl bg-slate-50 px-4 py-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div>
+                                            <p className="font-semibold text-foreground">{`${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown"}</p>
+                                            <p className="text-sm text-muted-foreground">
+                                              {[user.city || t("campaigns.scope.allCities"), t(campaignOpportunityReasonKey(user, templateKey))]
+                                                .filter(Boolean)
+                                                .join(" · ")}
+                                            </p>
+                                          </div>
+                                          <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                                            {templateLabel(templateKey)}
+                                          </Badge>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </DetailBlock>
+
+                            <DetailBlock title={t("campaigns.empty.gapsTitle")}>
+                              <div className="space-y-3">
+                                <GapLine label={t("campaigns.empty.gap.noPhone")} value={operationalGaps.missingPhone} />
+                                <GapLine label={t("campaigns.empty.gap.checkins")} value={operationalGaps.checkinsOff} />
+                                <GapLine label={t("campaigns.empty.gap.medication")} value={operationalGaps.medicationSignals} />
+                                <GapLine label={t("campaigns.empty.gap.unassigned")} value={operationalGaps.unassignedCoverage} />
+                                <GapLine label={t("campaigns.empty.gap.urgent")} value={operationalGaps.urgentSignals} />
+                              </div>
+                            </DetailBlock>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-10 text-center text-sm text-muted-foreground">
-                    {t("campaigns.detail.noCampaignSelected")}
+                  <div className="rounded-2xl border border-dashed border-border bg-slate-50 px-6 py-8">
+                    <div className="space-y-5">
+                      <div className="space-y-2">
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.empty.campaignStatusTitle")}</h3>
+                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.detail.noCampaignSelected")}</p>
+                      </div>
+
+                      <div className="space-y-3">
+                        {campaigns.slice(0, 6).map((campaign) => {
+                          const state = operationalState(campaign);
+                          return (
+                            <button
+                              key={campaign.id}
+                              type="button"
+                              className="flex w-full items-center justify-between gap-3 rounded-2xl border border-border bg-white px-4 py-3 text-left transition hover:border-primary/30 hover:shadow-sm"
+                              onClick={() => setSelectedCampaignId(campaign.id)}
+                            >
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-foreground">{campaign.name}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {[campaign.city || t("campaigns.scope.allCities"), formatDateTime(campaign.latestRun?.scheduledAt ?? campaign.scheduledAt)]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                              </div>
+                              <Badge className={cn("shrink-0 rounded-full border-0 px-3 py-1 font-semibold", stateClasses(state))}>
+                                {t(`campaigns.state.${state}`)}
+                              </Badge>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 )
               ) : (
@@ -1389,7 +1562,84 @@ export default function Campaigns() {
         </div>
       </section>
 
-      <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
+      <Dialog open={guideDialogOpen} onOpenChange={setGuideDialogOpen}>
+        <DialogContent className="max-w-2xl rounded-2xl border-border bg-white">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-2xl font-bold text-foreground">{t("campaigns.empty.panelTitle")}</DialogTitle>
+            <DialogDescription className="text-sm leading-6 text-muted-foreground">
+              {t("campaigns.empty.panelDescription")}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-3">
+              <StepLine number="1" title={t("campaigns.empty.stepOneTitle")} description={t("campaigns.empty.stepOneDescription")} />
+              <StepLine number="2" title={t("campaigns.empty.stepTwoTitle")} description={t("campaigns.empty.stepTwoDescription")} />
+              <StepLine number="3" title={t("campaigns.empty.stepThreeTitle")} description={t("campaigns.empty.stepThreeDescription")} />
+            </div>
+
+            {guideExpanded && (
+              <div className="grid gap-4 border-t border-border pt-4">
+                <DetailBlock title={t("campaigns.empty.snapshotTitle")}>
+                  <div className="space-y-3">
+                    <SnapshotLine
+                      label={t("campaigns.metric.queuedRuns")}
+                      value={String(templateOpportunities.find((item) => item.templateKey === "general_announcement")?.matching.length ?? 0)}
+                      detail={t("campaigns.empty.snapshotGeneral")}
+                    />
+                    <SnapshotLine
+                      label={t("campaigns.template.medication_reminder.title")}
+                      value={String(templateOpportunities.find((item) => item.templateKey === "medication_reminder")?.matching.length ?? 0)}
+                      detail={t("campaigns.empty.snapshotMedication")}
+                    />
+                    <SnapshotLine
+                      label={t("campaigns.template.wellbeing_check.title")}
+                      value={String(templateOpportunities.find((item) => item.templateKey === "wellbeing_check")?.matching.length ?? 0)}
+                      detail={t("campaigns.empty.snapshotWellbeing")}
+                    />
+                  </div>
+                </DetailBlock>
+                <DetailBlock title={t("campaigns.empty.gapsTitle")}>
+                  <div className="space-y-3">
+                    <GapLine label={t("campaigns.empty.gap.noPhone")} value={operationalGaps.missingPhone} />
+                    <GapLine label={t("campaigns.empty.gap.checkins")} value={operationalGaps.checkinsOff} />
+                    <GapLine label={t("campaigns.empty.gap.medication")} value={operationalGaps.medicationSignals} />
+                    <GapLine label={t("campaigns.empty.gap.unassigned")} value={operationalGaps.unassignedCoverage} />
+                    <GapLine label={t("campaigns.empty.gap.urgent")} value={operationalGaps.urgentSignals} />
+                  </div>
+                </DetailBlock>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              className="rounded-full"
+              onClick={() => setGuideExpanded((current) => !current)}
+            >
+              {guideExpanded ? (
+                <ChevronUp className="mr-2 h-4 w-4" />
+              ) : (
+                <ChevronDown className="mr-2 h-4 w-4" />
+              )}
+              {guideExpanded ? t("campaigns.empty.hideGuide") : t("campaigns.empty.showGuide")}
+            </Button>
+            <Button type="button" className="rounded-full bg-primary hover:bg-primary/90" onClick={() => setGuideDialogOpen(false)}>
+              {t("campaigns.empty.popupPrimary")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={editorOpen}
+        onOpenChange={(open) => {
+          setEditorOpen(open);
+          if (!open) clearCreateIntent();
+        }}
+      >
         <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto rounded-2xl border-border bg-[#f7f9ff] p-0">
           <DialogHeader className="border-b border-border bg-white px-6 py-5 text-left">
             <DialogTitle className="text-2xl font-bold text-foreground">
@@ -1400,247 +1650,326 @@ export default function Campaigns() {
 
           {form && (
             <div className="space-y-6 p-6">
-              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="rounded-2xl border border-border bg-white p-5">
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
-                    <Input
-                      id="campaign-name"
-                      value={form.name}
-                      onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
-                      placeholder={t("campaigns.form.namePlaceholder")}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/5 to-white p-5">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-primary/10 p-2 text-primary">
-                        <Sparkles className="h-4 w-4" />
-                      </span>
-                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
-                    </div>
-                    <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-ai-prompt">{t("campaigns.ai.promptLabel")}</Label>
-                    <Textarea
-                      id="campaign-ai-prompt"
-                      value={form.aiPrompt}
-                      onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
-                      placeholder={t("campaigns.ai.promptPlaceholder")}
-                      className="min-h-[110px]"
-                    />
-                    <p className="text-xs text-muted-foreground">{t("campaigns.ai.helper")}</p>
-                  </div>
-
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full rounded-full"
-                    onClick={() => {
-                      const suggestion = buildAiSuggestion(form);
-                      setAiSuggestion(suggestion);
-                    }}
-                  >
-                    <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                    {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
-                  </Button>
-
-                  {aiSuggestion && (
-                    <div className="space-y-4 rounded-2xl border border-border bg-white p-4">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
-                          {templateLabel(aiSuggestion.templateKey)}
-                        </Badge>
-                        <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
-                          {t("campaigns.ai.operatorFocus")}
-                        </Badge>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
-                        <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
-                      </div>
-                      <div className="space-y-2">
-                        {aiSuggestion.focus.map((item) => (
-                          <div key={item} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-foreground">
-                            {item}
-                          </div>
-                        ))}
-                      </div>
-                      <Button
-                        type="button"
-                        className="w-full rounded-full bg-primary hover:bg-primary/90"
-                        onClick={() => {
-                          setForm((current) => current ? {
-                            ...current,
-                            templateKey: aiSuggestion.templateKey,
-                            name: aiSuggestion.name,
-                            audience: aiSuggestion.audience,
-                            objective: aiSuggestion.objective,
-                            callScript: aiSuggestion.callScript,
-                          } : current);
-                          toast({
-                            title: t("campaigns.ai.appliedTitle"),
-                            description: t("campaigns.ai.appliedDescription"),
-                          });
-                        }}
-                      >
-                        {t("campaigns.ai.apply")}
-                      </Button>
-                    </div>
-                  )}
-                </div>
+              <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <StepLine
+                  number="1"
+                  title={t("campaigns.form.template")}
+                  description={templateLabel(form.templateKey)}
+                />
+                <StepLine
+                  number="2"
+                  title={t("campaigns.form.name")}
+                  description={form.name.trim() || t("campaigns.form.namePlaceholder")}
+                />
+                <StepLine
+                  number="3"
+                  title={t("campaigns.call.panelTitle")}
+                  description={[form.city.trim() || t("campaigns.scope.allCities"), formatDateTime(toIsoOrNull(form.scheduledAt))]
+                    .filter((value) => value && value !== "—")
+                    .join(" • ") || t("campaigns.form.cityPlaceholder")}
+                />
+                <StepLine
+                  number="4"
+                  title={t("campaigns.call.script")}
+                  description={form.callScript.trim()
+                    ? `${form.callScript.trim().slice(0, 90)}${form.callScript.trim().length > 90 ? "..." : ""}`
+                    : t("campaigns.call.scriptPlaceholder")}
+                />
               </section>
 
-              <section className="rounded-2xl border border-border bg-white p-5">
-                <div className="mb-4">
-                  <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
-                  <p className="text-sm text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
-                </div>
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  {templateKeys.map((templateKey) => {
-                    const Icon = templateIcon(templateKey);
-                    const active = form.templateKey === templateKey;
-                    return (
-                      <button
-                        key={templateKey}
-                        type="button"
-                        onClick={() => setForm((current) => current ? {
-                          ...current,
-                          templateKey,
-                          name: templateLabel(templateKey),
-                          audience: templateAudience(templateKey, current.city),
-                          objective: templateObjective(templateKey, current.city),
-                          callScript: templateScript(templateKey),
-                        } : current)}
-                        className={cn(
-                          "rounded-2xl border p-4 text-left transition",
-                          active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
-                        )}
-                      >
-                        <div className="flex items-start gap-3">
-                          <span className="rounded-full bg-white p-2 text-primary shadow-sm">
-                            <Icon className="h-4 w-4" />
-                          </span>
-                          <div className="space-y-1">
-                            <p className="font-semibold text-foreground">{templateLabel(templateKey)}</p>
-                            <p className="text-sm text-muted-foreground">{templateDescription(templateKey)}</p>
-                          </div>
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="flex flex-col gap-6">
+                  <section className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3">
+                          <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">1</span>
+                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
                         </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-
-              <section className="rounded-2xl border border-border bg-white p-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-city">{t("campaigns.form.city")}</Label>
-                    <Input
-                      id="campaign-city"
-                      value={form.city}
-                      onChange={(event) => setForm((current) => current ? { ...current, city: event.target.value } : current)}
-                      placeholder={t("campaigns.form.cityPlaceholder")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-scheduled-at">{t("campaigns.form.scheduledAt")}</Label>
-                    <Input
-                      id="campaign-scheduled-at"
-                      type="datetime-local"
-                      value={form.scheduledAt}
-                      onChange={(event) => setForm((current) => current ? { ...current, scheduledAt: event.target.value } : current)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-window-start">{t("campaigns.call.windowStart")}</Label>
-                    <Input
-                      id="campaign-window-start"
-                      type="time"
-                      value={form.callWindowStart}
-                      onChange={(event) => setForm((current) => current ? { ...current, callWindowStart: event.target.value } : current)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-window-end">{t("campaigns.call.windowEnd")}</Label>
-                    <Input
-                      id="campaign-window-end"
-                      type="time"
-                      value={form.callWindowEnd}
-                      onChange={(event) => setForm((current) => current ? { ...current, callWindowEnd: event.target.value } : current)}
-                    />
-                  </div>
-                  <div className="space-y-2 md:max-w-[220px]">
-                    <Label htmlFor="campaign-retry-limit">{t("campaigns.call.retryLimit")}</Label>
-                    <Select
-                      value={form.retryLimit}
-                      onValueChange={(value) => setForm((current) => current ? { ...current, retryLimit: value } : current)}
-                    >
-                      <SelectTrigger id="campaign-retry-limit">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {["0", "1", "2", "3", "4", "5"].map((value) => (
-                          <SelectItem key={value} value={value}>{value}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
-                    <Textarea
-                      id="campaign-audience"
-                      value={form.audience}
-                      onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
-                      className="min-h-[96px]"
-                    />
-                  </div>
-                  <div className="space-y-2 md:col-span-2">
-                    <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
-                    <Textarea
-                      id="campaign-objective"
-                      value={form.objective}
-                      onChange={(event) => setForm((current) => current ? { ...current, objective: event.target.value } : current)}
-                      className="min-h-[96px]"
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="rounded-2xl border border-border bg-white p-5">
-                  <div className="space-y-2">
-                    <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
-                    <Textarea
-                      id="campaign-script"
-                      value={form.callScript}
-                      onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
-                      placeholder={t("campaigns.call.scriptPlaceholder")}
-                      className="min-h-[220px]"
-                    />
-                    <p className="text-xs text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
-                  </div>
-                </div>
-                <div className="space-y-4 rounded-2xl border border-border bg-white p-5">
-                  <DetailBlock title={t("campaigns.detail.audience")}>
-                    <p className="text-sm leading-6 text-foreground">{form.audience || templateAudience(form.templateKey, form.city)}</p>
-                  </DetailBlock>
-                  <DetailBlock title={t("campaigns.detail.objective")}>
-                    <p className="text-sm leading-6 text-foreground">{form.objective || templateObjective(form.templateKey, form.city)}</p>
-                  </DetailBlock>
-                  <DetailBlock title={t("campaigns.call.panelDescription")}>
-                    <div className="space-y-2 text-sm text-muted-foreground">
-                      <p>{t("campaigns.call.consentOnly")}</p>
-                      <p>{t("campaigns.call.windowGuard")}</p>
-                      <p>{t("campaigns.call.noRealCalls")}</p>
+                        <p className="text-sm text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
+                      </div>
+                      <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                        {templateLabel(form.templateKey)}
+                      </Badge>
                     </div>
-                  </DetailBlock>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {createTemplateKeys.map((templateKey) => {
+                        const Icon = templateIcon(templateKey);
+                        const active = form.templateKey === templateKey;
+                        return (
+                          <button
+                            key={templateKey}
+                            type="button"
+                            onClick={() => setForm((current) => current ? {
+                              ...current,
+                              templateKey,
+                              name: isCustomTemplate(templateKey) ? current.name : templateLabel(templateKey),
+                              audience: isCustomTemplate(templateKey) ? current.audience : templateAudience(templateKey, current.city),
+                              objective: isCustomTemplate(templateKey) ? current.objective : templateObjective(templateKey, current.city),
+                              callScript: templateScript(templateKey),
+                            } : current)}
+                            className={cn(
+                              "rounded-2xl border p-4 text-left transition",
+                              active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
+                            )}
+                          >
+                            <div className="flex items-start gap-3">
+                              <span className="rounded-full bg-white p-2 text-primary shadow-sm">
+                                <Icon className="h-4 w-4" />
+                              </span>
+                              <div className="space-y-1">
+                                <p className="font-semibold text-foreground">{templateLabel(templateKey)}</p>
+                                <p className="text-sm text-muted-foreground">{templateDescription(templateKey)}</p>
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
+                        <Input
+                          id="campaign-name"
+                          value={form.name}
+                          onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
+                          placeholder={t("campaigns.form.namePlaceholder")}
+                        />
+                      </div>
+                      <div className="rounded-2xl border border-border bg-slate-50 px-4 py-4">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.form.template")}</p>
+                        <p className="mt-2 font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-5 space-y-2">
+                      <div className="flex items-center gap-3">
+                        <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">2</span>
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.call.panelTitle")}</h3>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{t("campaigns.call.panelDescription")}</p>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-city">{t("campaigns.form.city")}</Label>
+                        <Input
+                          id="campaign-city"
+                          value={form.city}
+                          onChange={(event) => setForm((current) => current ? { ...current, city: event.target.value } : current)}
+                          placeholder={t("campaigns.form.cityPlaceholder")}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-scheduled-at">{t("campaigns.form.scheduledAt")}</Label>
+                        <Input
+                          id="campaign-scheduled-at"
+                          type="datetime-local"
+                          value={form.scheduledAt}
+                          onChange={(event) => setForm((current) => current ? { ...current, scheduledAt: event.target.value } : current)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-window-start">{t("campaigns.call.windowStart")}</Label>
+                        <Input
+                          id="campaign-window-start"
+                          type="time"
+                          value={form.callWindowStart}
+                          onChange={(event) => setForm((current) => current ? { ...current, callWindowStart: event.target.value } : current)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-window-end">{t("campaigns.call.windowEnd")}</Label>
+                        <Input
+                          id="campaign-window-end"
+                          type="time"
+                          value={form.callWindowEnd}
+                          onChange={(event) => setForm((current) => current ? { ...current, callWindowEnd: event.target.value } : current)}
+                        />
+                      </div>
+                      <div className="space-y-2 md:max-w-[220px]">
+                        <Label htmlFor="campaign-retry-limit">{t("campaigns.call.retryLimit")}</Label>
+                        <Select
+                          value={form.retryLimit}
+                          onValueChange={(value) => setForm((current) => current ? { ...current, retryLimit: value } : current)}
+                        >
+                          <SelectTrigger id="campaign-retry-limit">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {["0", "1", "2", "3", "4", "5"].map((value) => (
+                              <SelectItem key={value} value={value}>{value}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
+                        <Textarea
+                          id="campaign-audience"
+                          value={form.audience}
+                          onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
+                          className="min-h-[96px]"
+                        />
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
+                        <Textarea
+                          id="campaign-objective"
+                          value={form.objective}
+                          onChange={(event) => setForm((current) => current ? { ...current, objective: event.target.value } : current)}
+                          className="min-h-[96px]"
+                        />
+                      </div>
+                    </div>
+                  </section>
+
+                  <section className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-5 space-y-2">
+                      <div className="flex items-center gap-3">
+                        <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">3</span>
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.call.script")}</h3>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
+                      <Textarea
+                        id="campaign-script"
+                        value={form.callScript}
+                        onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                        placeholder={t("campaigns.call.scriptPlaceholder")}
+                        className="min-h-[260px]"
+                      />
+                    </div>
+                  </section>
                 </div>
-              </section>
+
+                <aside className="flex flex-col gap-6 xl:sticky xl:top-6 self-start">
+                  <section className="space-y-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/5 to-white p-5">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-primary/10 p-2 text-primary">
+                          <Sparkles className="h-4 w-4" />
+                        </span>
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
+                      </div>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
+                    </div>
+
+                    <div className="rounded-2xl border border-primary/10 bg-white/80 px-4 py-3 text-sm text-muted-foreground">
+                      <p className="font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
+                      <p className="mt-1 leading-6">{templateDescription(form.templateKey)}</p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-ai-prompt">{t("campaigns.ai.promptLabel")}</Label>
+                      <Textarea
+                        id="campaign-ai-prompt"
+                        value={form.aiPrompt}
+                        onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
+                        placeholder={t("campaigns.ai.promptPlaceholder")}
+                        className="min-h-[140px]"
+                      />
+                      <p className="text-xs text-muted-foreground">{t("campaigns.ai.helper")}</p>
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full rounded-full"
+                      onClick={() => {
+                        const suggestion = buildAiSuggestion(form);
+                        setAiSuggestion(suggestion);
+                      }}
+                    >
+                      <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                      {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                    </Button>
+
+                    {aiSuggestion && (
+                      <div className="space-y-4 rounded-2xl border border-border bg-white p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
+                            {templateLabel(aiSuggestion.templateKey)}
+                          </Badge>
+                          <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
+                            {t("campaigns.ai.operatorFocus")}
+                          </Badge>
+                        </div>
+                        <div className="space-y-2">
+                          <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
+                          <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
+                        </div>
+                        <div className="space-y-2">
+                          {aiSuggestion.focus.map((item) => (
+                            <div key={item} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-foreground">
+                              {item}
+                            </div>
+                          ))}
+                        </div>
+                        <Button
+                          type="button"
+                          className="w-full rounded-full bg-primary hover:bg-primary/90"
+                          onClick={() => {
+                            setForm((current) => current ? {
+                              ...current,
+                              templateKey: aiSuggestion.templateKey,
+                              name: aiSuggestion.name,
+                              audience: aiSuggestion.audience,
+                              objective: aiSuggestion.objective,
+                              callScript: aiSuggestion.callScript,
+                            } : current);
+                            toast({
+                              title: t("campaigns.ai.appliedTitle"),
+                              description: t("campaigns.ai.appliedDescription"),
+                            });
+                          }}
+                        >
+                          {t("campaigns.ai.apply")}
+                        </Button>
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{form.id ? t("campaigns.form.editTitle") : t("campaigns.form.title")}</p>
+                      <p className="text-lg font-bold text-foreground">{form.name.trim() || templateLabel(form.templateKey)}</p>
+                      <p className="text-sm text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                      <InfoPair title={t("campaigns.form.city")} value={form.city.trim() || t("campaigns.scope.allCities")} />
+                      <InfoPair title={t("campaigns.form.scheduledAt")} value={formatDateTime(toIsoOrNull(form.scheduledAt))} />
+                      <InfoPair title={t("campaigns.call.schedule")} value={formatTimeRange(form.callWindowStart, form.callWindowEnd)} />
+                      <InfoPair title={t("campaigns.call.retryLimit")} value={form.retryLimit} />
+                    </div>
+
+                    <DetailBlock title={t("campaigns.detail.audience")}>
+                      <p className="text-sm leading-6 text-foreground">{form.audience || templateAudience(form.templateKey, form.city)}</p>
+                    </DetailBlock>
+                    <DetailBlock title={t("campaigns.detail.objective")}>
+                      <p className="text-sm leading-6 text-foreground">{form.objective || templateObjective(form.templateKey, form.city)}</p>
+                    </DetailBlock>
+                  </section>
+
+                  <section className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <DetailBlock title={t("campaigns.call.panelDescription")}>
+                      <div className="space-y-2 text-sm text-muted-foreground">
+                        <p>{t("campaigns.call.consentOnly")}</p>
+                        <p>{t("campaigns.call.windowGuard")}</p>
+                        <p>{t("campaigns.call.noRealCalls")}</p>
+                      </div>
+                    </DetailBlock>
+                  </section>
+                </aside>
+              </div>
             </div>
           )}
 
