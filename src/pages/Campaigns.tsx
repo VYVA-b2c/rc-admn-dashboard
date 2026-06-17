@@ -9,13 +9,17 @@ import {
   Clock3,
   Flame,
   Loader2,
+  Mail,
   MapPin,
   Megaphone,
+  MessageCircle,
+  MessageSquare,
   PhoneCall,
   Plus,
   Search,
   Sparkles,
   ShieldAlert,
+  Upload,
 } from "lucide-react";
 
 import { StatCard } from "@/components/StatCard";
@@ -58,6 +62,10 @@ type CampaignState = "draft" | "scheduled" | "queued" | "completed" | "cancelled
 type FilterKey = "all" | CampaignState;
 type PreviewAction = "preview" | "schedule" | "queue";
 type WizardStep = 1 | 2 | 3 | 4;
+type ScriptMode = "template" | "ai";
+type AudienceMode = "existing" | "criteria" | "upload";
+type CampaignChannel = "voice" | "whatsapp" | "email" | "sms";
+type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly";
 
 type Campaign = {
   id: string;
@@ -67,6 +75,7 @@ type Campaign = {
   city?: string | null;
   targetRules?: CampaignTargetRules | null;
   status: string;
+  channel?: string | null;
   type?: string | null;
   templateKey?: TemplateKey;
   scheduledAt?: string | null;
@@ -124,6 +133,15 @@ type CampaignTargetRules = {
   };
   requireConsent: boolean;
   requirePhone: boolean;
+  audienceSource?: {
+    mode: AudienceMode;
+    uploadedList?: UploadedAudienceMetadata;
+  };
+  channels?: CampaignChannel[];
+  schedule?: {
+    frequency: ScheduleFrequency;
+    scheduledAt?: string | null;
+  };
 };
 
 type CallPreview = {
@@ -183,10 +201,16 @@ type JobsResponse = {
 type CampaignFormState = {
   id?: string;
   name: string;
+  scriptMode: ScriptMode;
   templateKey: TemplateKey;
+  audienceMode: AudienceMode;
   audience: string;
   city: string;
   targetRules: CampaignTargetRules;
+  channels: CampaignChannel[];
+  frequency: ScheduleFrequency;
+  uploadedAudience: UploadedAudienceMetadata;
+  uploadedAudienceText: string;
   objective: string;
   scheduledAt: string;
   callWindowStart: string;
@@ -194,6 +218,14 @@ type CampaignFormState = {
   retryLimit: string;
   callScript: string;
   aiPrompt: string;
+};
+
+type UploadedAudienceMetadata = {
+  fileName: string;
+  rawRowCount: number;
+  matchedPhones: string[];
+  emails: string[];
+  unmatchedRows: number;
 };
 
 type CampaignAiSuggestion = {
@@ -208,6 +240,14 @@ type CampaignAiSuggestion = {
 type OpportunityUser = GISUser;
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const defaultCampaignChannels: CampaignChannel[] = ["voice"];
+const defaultUploadedAudience = (): UploadedAudienceMetadata => ({
+  fileName: "",
+  rawRowCount: 0,
+  matchedPhones: [],
+  emails: [],
+  unmatchedRows: 0,
+});
 
 const templateKeys: TemplateKey[] = [
   "general_announcement",
@@ -225,6 +265,129 @@ const createTemplateKeys: TemplateKey[] = [
   "service_update",
   "custom_campaign",
 ];
+
+const campaignChannelOptions = [
+  { value: "voice" as const, labelKey: "campaigns.channel.voiceCalls", descriptionKey: "campaigns.channel.voiceDescription", Icon: PhoneCall },
+  { value: "whatsapp" as const, labelKey: "campaigns.channel.whatsapp", descriptionKey: "campaigns.channel.whatsappDescription", Icon: MessageCircle },
+  { value: "email" as const, labelKey: "campaigns.channel.email", descriptionKey: "campaigns.channel.emailDescription", Icon: Mail },
+  { value: "sms" as const, labelKey: "campaigns.channel.sms", descriptionKey: "campaigns.channel.smsDescription", Icon: MessageSquare },
+];
+
+const scheduleFrequencyOptions: ScheduleFrequency[] = ["once", "daily", "weekly", "monthly"];
+
+function isCampaignChannel(value: string): value is CampaignChannel {
+  return value === "voice" || value === "whatsapp" || value === "email" || value === "sms";
+}
+
+function normalizeCampaignChannels(value: unknown): CampaignChannel[] {
+  if (!Array.isArray(value)) return [...defaultCampaignChannels];
+  const channels = value.map((item) => String(item)).filter(isCampaignChannel);
+  return channels.length ? Array.from(new Set(channels)) : [...defaultCampaignChannels];
+}
+
+function normalizeScheduleFrequency(value: unknown): ScheduleFrequency {
+  const text = String(value || "");
+  return scheduleFrequencyOptions.includes(text as ScheduleFrequency) ? text as ScheduleFrequency : "once";
+}
+
+function normalizeAudienceMode(value: unknown): AudienceMode {
+  const text = String(value || "");
+  return text === "criteria" || text === "upload" ? text : "existing";
+}
+
+function normalizeUploadedAudience(value: unknown): UploadedAudienceMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return defaultUploadedAudience();
+  const source = value as Partial<UploadedAudienceMetadata>;
+  return {
+    fileName: String(source.fileName || ""),
+    rawRowCount: Number.isFinite(Number(source.rawRowCount)) ? Number(source.rawRowCount) : 0,
+    matchedPhones: Array.isArray(source.matchedPhones) ? source.matchedPhones.map((item) => String(item)).filter(Boolean) : [],
+    emails: Array.isArray(source.emails) ? source.emails.map((item) => String(item).trim()).filter(Boolean) : [],
+    unmatchedRows: Number.isFinite(Number(source.unmatchedRows)) ? Number(source.unmatchedRows) : 0,
+  };
+}
+
+function normalizePhoneIdentifier(value?: string | null) {
+  return String(value || "").replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
+}
+
+function phoneIdentifiersMatch(uploadedPhone: string, userPhone?: string | null) {
+  const uploaded = normalizePhoneIdentifier(uploadedPhone).replace(/^\+/, "");
+  const user = normalizePhoneIdentifier(userPhone).replace(/^\+/, "");
+  if (!uploaded || !user) return false;
+  return uploaded === user || uploaded.endsWith(user) || user.endsWith(uploaded);
+}
+
+function parseUploadedAudience(text: string, fileName: string, users: OpportunityUser[]): UploadedAudienceMetadata {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const emails = new Set<string>();
+  const matchedPhones = new Set<string>();
+  let unmatchedRows = 0;
+
+  for (const line of lines) {
+    const cells = line.split(/[,\t;]/).map((cell) => cell.trim()).filter(Boolean);
+    const phoneCandidates = cells.filter((cell) => normalizePhoneIdentifier(cell).replace(/^\+/, "").length >= 7);
+    const emailCandidates = cells.filter((cell) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cell));
+    emailCandidates.forEach((email) => emails.add(email.toLowerCase()));
+
+    let matched = false;
+    for (const candidate of phoneCandidates) {
+      const match = users.find((user) => phoneIdentifiersMatch(candidate, user.phone));
+      if (match?.phone) {
+        matchedPhones.add(normalizePhoneIdentifier(match.phone));
+        matched = true;
+      }
+    }
+    if (!matched) unmatchedRows += 1;
+  }
+
+  return {
+    fileName,
+    rawRowCount: lines.length,
+    matchedPhones: Array.from(matchedPhones),
+    emails: Array.from(emails),
+    unmatchedRows,
+  };
+}
+
+function legacyChannelForChannels(channels: CampaignChannel[]) {
+  if (channels.length === 1 && channels[0] === "voice") return "phone";
+  if (channels.length === 1 && channels[0] === "whatsapp") return "whatsapp";
+  return "mixed";
+}
+
+function channelsFromLegacyChannel(value?: string | null): CampaignChannel[] {
+  if (value === "whatsapp") return ["whatsapp"];
+  if (value === "mixed") return ["voice", "whatsapp"];
+  return [...defaultCampaignChannels];
+}
+
+function campaignChannelsFromTargetRules(value: unknown, legacyChannel?: string | null): CampaignChannel[] {
+  if (value && typeof value === "object" && !Array.isArray(value) && Array.isArray((value as Partial<CampaignTargetRules>).channels)) {
+    return normalizeCampaignChannels((value as Partial<CampaignTargetRules>).channels);
+  }
+  return channelsFromLegacyChannel(legacyChannel);
+}
+
+function executionTypeForChannels(channels: CampaignChannel[]) {
+  return channels.includes("voice") ? "vyva_call" : "manual";
+}
+
+function scheduleDatePart(value: string) {
+  return value.includes("T") ? value.split("T")[0] : "";
+}
+
+function scheduleTimePart(value: string) {
+  return value.includes("T") ? value.split("T")[1]?.slice(0, 5) ?? "" : "";
+}
+
+function combineScheduleDateTime(date: string, time: string) {
+  if (!date || !time) return "";
+  return `${date}T${time}`;
+}
 
 function isTemplateKey(value: string | null): value is TemplateKey {
   return value === "general_announcement"
@@ -262,6 +425,15 @@ function defaultTargetRules(city = ""): CampaignTargetRules {
     },
     requireConsent: true,
     requirePhone: true,
+    audienceSource: {
+      mode: "existing",
+      uploadedList: defaultUploadedAudience(),
+    },
+    channels: [...defaultCampaignChannels],
+    schedule: {
+      frequency: "once",
+      scheduledAt: null,
+    },
   };
 }
 
@@ -271,6 +443,8 @@ function normalizeTargetRules(value: unknown, city = ""): CampaignTargetRules {
   const source = value as Partial<CampaignTargetRules>;
   const geo = source.geo && typeof source.geo === "object" ? source.geo : fallback.geo;
   const careProvider = source.careProvider && typeof source.careProvider === "object" ? source.careProvider : fallback.careProvider;
+  const audienceSource = source.audienceSource && typeof source.audienceSource === "object" ? source.audienceSource : fallback.audienceSource;
+  const schedule = source.schedule && typeof source.schedule === "object" ? source.schedule : fallback.schedule;
   return {
     geo: {
       scope: ["organization", "country", "city", "area"].includes(String(geo.scope)) ? geo.scope : fallback.geo.scope,
@@ -288,16 +462,31 @@ function normalizeTargetRules(value: unknown, city = ""): CampaignTargetRules {
     } as CampaignTargetRules["careProvider"],
     requireConsent: source.requireConsent !== false,
     requirePhone: source.requirePhone !== false,
+    audienceSource: {
+      mode: normalizeAudienceMode(audienceSource?.mode),
+      uploadedList: normalizeUploadedAudience(audienceSource?.uploadedList),
+    },
+    channels: normalizeCampaignChannels(source.channels),
+    schedule: {
+      frequency: normalizeScheduleFrequency(schedule?.frequency),
+      scheduledAt: typeof schedule?.scheduledAt === "string" ? schedule.scheduledAt : null,
+    },
   };
 }
 
 function defaultForm(templateKey: TemplateKey, getTemplateScript: (key: TemplateKey) => string): CampaignFormState {
   return {
     name: "",
+    scriptMode: "template",
     templateKey,
+    audienceMode: "existing",
     audience: "",
     city: "",
     targetRules: defaultTargetRules(),
+    channels: [...defaultCampaignChannels],
+    frequency: "once",
+    uploadedAudience: defaultUploadedAudience(),
+    uploadedAudienceText: "",
     objective: "",
     scheduledAt: "",
     callWindowStart: "09:00",
@@ -749,12 +938,13 @@ export default function Campaigns() {
 
   const localTargetSummary = useMemo(() => {
     if (!form) {
-      return { eligible: [], skipped: [], skippedReasons: { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0 } };
+      return { eligible: [], skipped: [], skippedReasons: { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0, uploadMismatch: 0 } };
     }
     const rules = normalizeTargetRules(form.targetRules, form.city);
-    const skippedReasons = { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0 };
+    const skippedReasons = { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0, uploadMismatch: 0 };
     const eligible: OpportunityUser[] = [];
     const skipped: Array<{ user: OpportunityUser; reason: keyof typeof skippedReasons }> = [];
+    const uploadedPhones = new Set(form.audienceMode === "upload" ? form.uploadedAudience.matchedPhones : []);
 
     for (const user of opportunityUsers) {
       const userCity = String(user.city || "").toLowerCase();
@@ -762,6 +952,12 @@ export default function Campaigns() {
       const geoValue = String(rules.geo.value || "").toLowerCase();
       let reason: keyof typeof skippedReasons | null = null;
       if (!campaignOpportunityMatchesTemplate(user, form.templateKey)) reason = "templateMismatch";
+      else if (
+        form.audienceMode === "upload" &&
+        (!user.phone || !Array.from(uploadedPhones).some((phone) => phoneIdentifiersMatch(phone, user.phone)))
+      ) {
+        reason = "uploadMismatch";
+      }
       else if (rules.requirePhone && !user.phone) reason = "noPhone";
       else if (rules.geo.scope === "city" && geoValue && userCity !== geoValue) reason = "outsideGeo";
       else if (rules.geo.scope === "country" && geoValue && userCountry !== geoValue) reason = "outsideGeo";
@@ -827,6 +1023,7 @@ export default function Campaigns() {
     setAiSuggestion(suggestion);
     setForm((current) => current ? {
       ...current,
+      scriptMode: "ai",
       templateKey: suggestion.templateKey,
       name: suggestion.name,
       audience: suggestion.audience,
@@ -836,13 +1033,127 @@ export default function Campaigns() {
     toast({ title: t("campaigns.ai.appliedTitle"), description: t("campaigns.ai.appliedDescription") });
   };
 
+  const selectTemplateForForm = (templateKey: TemplateKey) => {
+    setForm((current) => current ? {
+      ...current,
+      scriptMode: "template",
+      templateKey,
+      name: isCustomTemplate(templateKey) ? current.name : templateLabel(templateKey),
+      audience: isCustomTemplate(templateKey) ? current.audience : templateAudience(templateKey, current.city),
+      objective: isCustomTemplate(templateKey) ? current.objective : templateObjective(templateKey, current.city),
+      callScript: templateScript(templateKey),
+    } : current);
+    setAiSuggestion(null);
+  };
+
+  const setAudienceMode = (mode: AudienceMode) => {
+    setForm((current) => {
+      if (!current) return current;
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        audienceMode: mode,
+        targetRules: {
+          ...rules,
+          audienceSource: {
+            mode,
+            uploadedList: current.uploadedAudience,
+          },
+        },
+      };
+    });
+  };
+
+  const updateUploadedAudience = (text: string, fileName = "") => {
+    const uploadedAudience = parseUploadedAudience(text, fileName, opportunityUsers);
+    setForm((current) => {
+      if (!current) return current;
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        audienceMode: "upload",
+        uploadedAudienceText: text,
+        uploadedAudience,
+        targetRules: {
+          ...rules,
+          audienceSource: {
+            mode: "upload",
+            uploadedList: uploadedAudience,
+          },
+        },
+      };
+    });
+  };
+
+  const toggleCampaignChannel = (channel: CampaignChannel) => {
+    setForm((current) => {
+      if (!current) return current;
+      const channels = current.channels.includes(channel)
+        ? current.channels.filter((item) => item !== channel)
+        : [...current.channels, channel];
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        channels,
+        targetRules: {
+          ...rules,
+          channels,
+        },
+      };
+    });
+  };
+
+  const setScheduleFrequency = (frequency: ScheduleFrequency) => {
+    setForm((current) => {
+      if (!current) return current;
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        frequency,
+        targetRules: {
+          ...rules,
+          schedule: {
+            frequency,
+            scheduledAt: toIsoOrNull(current.scheduledAt),
+          },
+        },
+      };
+    });
+  };
+
+  const setScheduledAtParts = (datePart: string, timePart: string) => {
+    setForm((current) => {
+      if (!current) return current;
+      const scheduledAt = combineScheduleDateTime(datePart, timePart);
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        scheduledAt,
+        targetRules: {
+          ...rules,
+          schedule: {
+            frequency: current.frequency,
+            scheduledAt: toIsoOrNull(scheduledAt),
+          },
+        },
+      };
+    });
+  };
+
+  const readUploadedAudienceFile = async (file?: File | null) => {
+    if (!file) return;
+    const text = await file.text();
+    updateUploadedAudience(text, file.name);
+  };
+
   const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
+    const baseRules = defaultTargetRules();
     setForm({
       ...defaultForm(templateKey, templateScript),
       name: isCustomTemplate(templateKey) ? "" : templateLabel(templateKey),
       objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, ""),
       audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, ""),
-      targetRules: defaultTargetRules(),
+      targetRules: baseRules,
     });
     setAiSuggestion(null);
     setWizardStep(1);
@@ -868,13 +1179,24 @@ export default function Campaigns() {
 
   const openEditDialog = (campaign: Campaign) => {
     clearCreateIntent();
+    const targetRules = normalizeTargetRules(campaign.targetRules, campaign.city ?? "");
+    const channels = campaignChannelsFromTargetRules(campaign.targetRules, campaign.channel);
+    const audienceMode = normalizeAudienceMode(targetRules.audienceSource?.mode);
+    const uploadedAudience = normalizeUploadedAudience(targetRules.audienceSource?.uploadedList);
+    const frequency = normalizeScheduleFrequency(targetRules.schedule?.frequency);
     setForm({
       id: campaign.id,
       name: campaign.name,
+      scriptMode: "template",
       templateKey: campaign.templateKey ?? "general_announcement",
+      audienceMode,
       audience: campaign.audience ?? templateAudience(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       city: campaign.city ?? "",
-      targetRules: normalizeTargetRules(campaign.targetRules, campaign.city ?? ""),
+      targetRules: { ...targetRules, channels },
+      channels,
+      frequency,
+      uploadedAudience,
+      uploadedAudienceText: "",
       objective: campaign.objective ?? templateObjective(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       scheduledAt: toDateTimeLocal(campaign.scheduledAt),
       callWindowStart: campaign.callWindowStart ?? "09:00",
@@ -921,8 +1243,8 @@ export default function Campaigns() {
 
   const canMoveNext = (step: WizardStep) => {
     if (!form) return false;
-    if (step === 1) return Boolean(form.templateKey);
-    if (step === 3) return Boolean(form.callScript.trim());
+    if (step === 1) return Boolean(form.callScript.trim());
+    if (step === 3) return form.channels.length > 0;
     return true;
   };
 
@@ -932,15 +1254,28 @@ export default function Campaigns() {
   const buildPayload = (draft: CampaignFormState, options?: { status?: string; queueNow?: boolean }) => {
     const status = options?.status ?? "draft";
     const scheduledAt = options?.queueNow ? null : toIsoOrNull(draft.scheduledAt);
+    const channels = normalizeCampaignChannels(draft.channels);
+    const targetRules = {
+      ...normalizeTargetRules(draft.targetRules, draft.city.trim()),
+      audienceSource: {
+        mode: draft.audienceMode,
+        uploadedList: draft.uploadedAudience,
+      },
+      channels,
+      schedule: {
+        frequency: draft.frequency,
+        scheduledAt,
+      },
+    };
     return {
       templateKey: draft.templateKey,
       name: draft.name.trim() || `${templateLabel(draft.templateKey)}${draft.city.trim() ? ` - ${draft.city.trim()}` : ""}`,
       objective: draft.objective.trim() || templateObjective(draft.templateKey, draft.city.trim()),
       audience: draft.audience.trim() || templateAudience(draft.templateKey, draft.city.trim()),
       city: draft.city.trim(),
-      targetRules: normalizeTargetRules(draft.targetRules, draft.city.trim()),
-      channel: "phone",
-      executionType: "vyva_call",
+      targetRules,
+      channel: legacyChannelForChannels(channels),
+      executionType: executionTypeForChannels(channels),
       status,
       dueKey: status === "scheduled" ? "campaigns.due.scheduled" : "campaigns.due.draft",
       scheduledAt,
@@ -988,6 +1323,7 @@ export default function Campaigns() {
 
   const previewMutation = useMutation({
     mutationFn: async ({ campaign, action }: { campaign: Campaign; action: PreviewAction }) => {
+      const channels = campaignChannelsFromTargetRules(campaign.targetRules, campaign.channel);
       const payload = {
         templateKey: campaign.templateKey ?? "general_announcement",
         city: campaign.city ?? "",
@@ -997,6 +1333,8 @@ export default function Campaigns() {
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
         retryLimit: campaign.retryLimit ?? 1,
         callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+        channel: legacyChannelForChannels(channels),
+        executionType: executionTypeForChannels(channels),
       };
       const response = await apiFetch<PreviewResponse>(`/api/v1/campaigns-dashboard/campaigns/${campaign.id}/call-runs/preview`, {
         method: "POST",
@@ -1021,6 +1359,7 @@ export default function Campaigns() {
 
   const queueMutation = useMutation({
     mutationFn: async ({ campaign, action }: { campaign: Campaign; action: Exclude<PreviewAction, "preview"> }) => {
+      const channels = campaignChannelsFromTargetRules(campaign.targetRules, campaign.channel);
       const payload = {
         templateKey: campaign.templateKey ?? "general_announcement",
         city: campaign.city ?? "",
@@ -1030,6 +1369,8 @@ export default function Campaigns() {
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
         retryLimit: campaign.retryLimit ?? 1,
         callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+        channel: legacyChannelForChannels(channels),
+        executionType: executionTypeForChannels(channels),
       };
 
       await apiFetch<{ campaign?: Campaign | null }>(`/api/v1/campaigns-dashboard/campaigns/${campaign.id}`, {
@@ -1040,8 +1381,8 @@ export default function Campaigns() {
           objective: campaign.objective ?? "",
           audience: campaign.audience ?? "",
           status: action === "schedule" ? "scheduled" : "active",
-          channel: "phone",
-          executionType: "vyva_call",
+          channel: legacyChannelForChannels(channels),
+          executionType: executionTypeForChannels(channels),
           dueKey: action === "schedule" ? "campaigns.due.scheduled" : "campaigns.due.today",
         }),
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -1100,6 +1441,14 @@ export default function Campaigns() {
   });
 
   const runPreviewForCampaign = (campaign: Campaign, action: PreviewAction) => {
+    const channels = campaignChannelsFromTargetRules(campaign.targetRules, campaign.channel);
+    if (!channels.includes("voice")) {
+      toast({
+        title: t("campaigns.channel.voiceOnlyTitle"),
+        description: t("campaigns.channel.voiceOnlyDescription"),
+      });
+      return;
+    }
     if (action === "schedule" && !campaign.scheduledAt) {
       toast({
         title: t("campaigns.form.scheduleRequired"),
@@ -1125,7 +1474,7 @@ export default function Campaigns() {
     openCreateDialog(templateKey);
 
     if (searchParams.get("mode") === "ai") {
-      setForm((current) => current ? { ...current, aiPrompt: "" } : current);
+      setForm((current) => current ? { ...current, scriptMode: "ai", aiPrompt: "" } : current);
     }
   }, [canDraftCampaigns, editorOpen, searchParams]);
 
@@ -1552,7 +1901,7 @@ export default function Campaigns() {
                               variant="outline"
                               className="rounded-full"
                               onClick={() => runPreviewForCampaign(selectedCampaign, "preview")}
-                              disabled={previewMutation.isPending}
+                              disabled={previewMutation.isPending || !campaignChannelsFromTargetRules(selectedCampaign.targetRules, selectedCampaign.channel).includes("voice")}
                             >
                               {t("campaigns.action.previewRecipients")}
                             </Button>
@@ -1561,7 +1910,7 @@ export default function Campaigns() {
                               variant="outline"
                               className="rounded-full border-amber-300 text-amber-700 hover:bg-amber-50"
                               onClick={() => runPreviewForCampaign(selectedCampaign, "schedule")}
-                              disabled={previewMutation.isPending}
+                              disabled={previewMutation.isPending || !campaignChannelsFromTargetRules(selectedCampaign.targetRules, selectedCampaign.channel).includes("voice")}
                             >
                               {t("campaigns.action.scheduleCalls")}
                             </Button>
@@ -1569,7 +1918,7 @@ export default function Campaigns() {
                               type="button"
                               className="rounded-full bg-primary hover:bg-primary/90"
                               onClick={() => runPreviewForCampaign(selectedCampaign, "queue")}
-                              disabled={previewMutation.isPending}
+                              disabled={previewMutation.isPending || !campaignChannelsFromTargetRules(selectedCampaign.targetRules, selectedCampaign.channel).includes("voice")}
                             >
                               {t("campaigns.call.immediateQueue")}
                             </Button>
@@ -1845,12 +2194,12 @@ export default function Campaigns() {
           {form && (
             <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
               <div className="mb-5 rounded-2xl border border-border bg-white px-4 py-3">
-                <div className="grid gap-2 sm:grid-cols-4">
+                <div className="grid gap-2 sm:grid-cols-4" aria-label={t("campaigns.wizard.stepsLabel")}>
                 {[
-                  { step: 1 as WizardStep, title: t("campaigns.wizard.stepTemplate"), description: templateLabel(form.templateKey) },
-                  { step: 2 as WizardStep, title: t("campaigns.wizard.stepTarget"), description: `${localTargetSummary.eligible.length} ${t("campaigns.wizard.eligibleShort")}` },
-                  { step: 3 as WizardStep, title: t("campaigns.wizard.stepScript"), description: form.callScript.trim() ? t("campaigns.wizard.scriptReady") : t("campaigns.wizard.scriptMissing") },
-                  { step: 4 as WizardStep, title: t("campaigns.wizard.stepReview"), description: t("campaigns.wizard.reviewDescription") },
+                  { step: 1 as WizardStep, title: t("campaigns.wizard.stepScript"), description: form.callScript.trim() ? t("campaigns.wizard.scriptReady") : t("campaigns.wizard.scriptMissing") },
+                  { step: 2 as WizardStep, title: t("campaigns.wizard.stepAudience"), description: `${localTargetSummary.eligible.length} ${t("campaigns.wizard.eligibleShort")}` },
+                  { step: 3 as WizardStep, title: t("campaigns.wizard.stepChannel"), description: form.channels.map((channel) => t(`campaigns.channel.${channel}`)).join(", ") || t("campaigns.wizard.channelMissing") },
+                  { step: 4 as WizardStep, title: t("campaigns.wizard.stepSchedule"), description: t(`campaigns.schedule.frequency.${form.frequency}`) },
                 ].map((item) => (
                   <button
                     key={item.step}
@@ -1879,46 +2228,97 @@ export default function Campaigns() {
               </div>
 
               {wizardStep === 1 && (
-                <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
-                  <div className="rounded-2xl border border-border bg-white p-5">
-                    <div className="mb-4 space-y-1">
-                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.form.template")}</h3>
-                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
-                    </div>
-                    <div className="space-y-3">
-                      {createTemplateKeys.map((templateKey) => {
-                        const Icon = templateIcon(templateKey);
-                        const active = form.templateKey === templateKey;
-                        return (
+                <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <div className="mb-4 space-y-1">
+                        <h3 className="text-xl font-bold text-foreground">{t("campaigns.script.title")}</h3>
+                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.script.description")}</p>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {[
+                          { mode: "template" as ScriptMode, title: t("campaigns.script.useTemplate"), description: t("campaigns.script.useTemplateDescription"), Icon: Megaphone },
+                          { mode: "ai" as ScriptMode, title: t("campaigns.script.createWithAi"), description: t("campaigns.script.createWithAiDescription"), Icon: Sparkles },
+                        ].map((item) => (
                           <button
-                            key={templateKey}
+                            key={item.mode}
                             type="button"
-                            onClick={() => setForm((current) => current ? {
-                              ...current,
-                              templateKey,
-                              name: isCustomTemplate(templateKey) ? current.name : templateLabel(templateKey),
-                              audience: isCustomTemplate(templateKey) ? current.audience : templateAudience(templateKey, current.city),
-                              objective: isCustomTemplate(templateKey) ? current.objective : templateObjective(templateKey, current.city),
-                              callScript: templateScript(templateKey),
-                            } : current)}
+                            onClick={() => setForm((current) => current ? { ...current, scriptMode: item.mode } : current)}
                             className={cn(
-                              "flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition",
-                              active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
+                              "flex items-start gap-3 rounded-2xl border p-4 text-left transition",
+                              form.scriptMode === item.mode ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
                             )}
                           >
-                            <span className={cn("rounded-full p-2 shadow-sm", active ? "bg-primary text-white" : "bg-white text-primary")}>
-                              <Icon className="h-4 w-4" />
+                            <span className={cn("rounded-full p-2", form.scriptMode === item.mode ? "bg-primary text-white" : "bg-white text-primary")}>
+                              <item.Icon className="h-4 w-4" />
                             </span>
-                            <span className="min-w-0 flex-1">
-                              <span className="block font-semibold text-foreground">{templateLabel(templateKey)}</span>
-                              <span className="mt-1 block text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</span>
+                            <span>
+                              <span className="block font-semibold text-foreground">{item.title}</span>
+                              <span className="mt-1 block text-sm leading-6 text-muted-foreground">{item.description}</span>
                             </span>
-                            {active && <Badge className="rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
                           </button>
-                        );
-                      })}
+                        ))}
+                      </div>
                     </div>
+
+                    {form.scriptMode === "template" ? (
+                      <div className="rounded-2xl border border-border bg-white p-5">
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
+                        <div className="mt-4 space-y-3">
+                          {createTemplateKeys.map((templateKey) => {
+                            const Icon = templateIcon(templateKey);
+                            const active = form.templateKey === templateKey;
+                            return (
+                              <button
+                                key={templateKey}
+                                type="button"
+                                onClick={() => selectTemplateForForm(templateKey)}
+                                className={cn(
+                                  "flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition",
+                                  active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
+                                )}
+                              >
+                                <span className={cn("rounded-full p-2 shadow-sm", active ? "bg-primary text-white" : "bg-white text-primary")}>
+                                  <Icon className="h-4 w-4" />
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                  <span className="block font-semibold text-foreground">{templateLabel(templateKey)}</span>
+                                  <span className="mt-1 block text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</span>
+                                </span>
+                                {active && <Badge className="rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-primary/15 bg-primary/5 p-5">
+                        <div className="mb-4 flex items-center gap-2">
+                          <span className="rounded-full bg-primary/10 p-2 text-primary">
+                            <Sparkles className="h-4 w-4" />
+                          </span>
+                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
+                        </div>
+                        <div className="space-y-3">
+                          <Label htmlFor="campaign-ai-prompt-start">{t("campaigns.ai.promptLabel")}</Label>
+                          <Textarea
+                            id="campaign-ai-prompt-start"
+                            value={form.aiPrompt}
+                            onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
+                            placeholder={t("campaigns.ai.promptPlaceholder")}
+                            className="min-h-[120px] bg-white text-sm leading-6"
+                          />
+                          <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.ai.helper")}</p>
+                          <Button type="button" variant="outline" className="rounded-full bg-white" onClick={() => applyAiDraft(form)}>
+                            <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                            {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
+
                   <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
                     <div className="space-y-2">
                       <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
@@ -1929,51 +2329,20 @@ export default function Campaigns() {
                         placeholder={t("campaigns.form.namePlaceholder")}
                       />
                     </div>
-                    <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="rounded-full bg-primary/10 p-2 text-primary">
-                          <Sparkles className="h-4 w-4" />
-                        </span>
-                        <p className="text-sm font-bold text-foreground">{t("campaigns.ai.title")}</p>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="campaign-ai-prompt-start">{t("campaigns.ai.promptLabel")}</Label>
-                        <Textarea
-                          id="campaign-ai-prompt-start"
-                          value={form.aiPrompt}
-                          onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
-                          placeholder={t("campaigns.ai.promptPlaceholder")}
-                          className="min-h-[110px] bg-white text-sm leading-6"
-                        />
-                        <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.ai.helper")}</p>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="w-full rounded-full bg-white"
-                          onClick={() => applyAiDraft(form)}
-                        >
-                          <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                          {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-slate-50 p-4">
-                      <div className="mb-3 flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.call.script")}</p>
-                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
-                        </div>
-                        <Badge className="shrink-0 rounded-full border-0 bg-primary/10 text-primary">
-                          {templateLabel(form.templateKey)}
-                        </Badge>
-                      </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
                       <Textarea
-                        id="campaign-template-message"
+                        id="campaign-script"
                         value={form.callScript}
                         onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
                         placeholder={t("campaigns.call.scriptPlaceholder")}
-                        className="min-h-[220px] resize-y bg-white text-sm leading-6"
+                        className="min-h-[280px] resize-y bg-white text-sm leading-6"
                       />
+                      <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-slate-50 p-4">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.wizard.templateChoice")}</p>
+                      <p className="mt-2 font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
                     </div>
                   </aside>
                 </section>
@@ -1983,141 +2352,227 @@ export default function Campaigns() {
                 <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
                   <div className="space-y-5">
                     <div className="rounded-2xl border border-border bg-white p-5">
-                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.where")}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whereHelp")}</p>
-                      <div className="mt-4 grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
-                        <Select
-                          value={form.targetRules.geo.scope}
-                          onValueChange={(value) => updateTargetRules((rules) => ({
-                            ...rules,
-                            geo: { ...rules.geo, scope: value as CampaignTargetRules["geo"]["scope"] },
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="organization">{t("campaigns.target.geo.organization")}</SelectItem>
-                            <SelectItem value="country">{t("campaigns.target.geo.country")}</SelectItem>
-                            <SelectItem value="city">{t("campaigns.target.geo.city")}</SelectItem>
-                            <SelectItem value="area">{t("campaigns.target.geo.area")}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          value={form.targetRules.geo.scope === "city" ? form.city : form.targetRules.geo.value}
-                          list="campaign-city-options"
-                          disabled={form.targetRules.geo.scope === "organization"}
-                          onChange={(event) => {
-                            const value = event.target.value;
-                            if (form.targetRules.geo.scope === "city") setCampaignCity(value);
-                            else updateTargetRules((rules) => ({ ...rules, geo: { ...rules.geo, value } }));
-                          }}
-                          placeholder={form.targetRules.geo.scope === "organization" ? t("campaigns.target.geo.allOrg") : t("campaigns.form.cityPlaceholder")}
-                        />
-                        <datalist id="campaign-city-options">
-                          {availableCities.map((city) => <option key={city} value={city} />)}
-                        </datalist>
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-border bg-white p-5">
-                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.who")}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whoHelp")}</p>
-                      <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label>{t("campaigns.target.riskLevel")}</Label>
-                          <Select
-                            value={form.targetRules.riskLevel}
-                            onValueChange={(value) => updateTargetRules((rules) => ({ ...rules, riskLevel: value as CampaignTargetRules["riskLevel"] }))}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">{t("campaigns.target.risk.all")}</SelectItem>
-                              <SelectItem value="urgent">{t("campaigns.target.risk.urgent")}</SelectItem>
-                              <SelectItem value="high">{t("campaigns.target.risk.high")}</SelectItem>
-                              <SelectItem value="review">{t("campaigns.target.risk.review")}</SelectItem>
-                              <SelectItem value="stable">{t("campaigns.target.risk.stable")}</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>{t("campaigns.target.healthConditions")}</Label>
-                          <div className="flex gap-2">
-                            <Input
-                              value={healthConditionDraft}
-                              onChange={(event) => setHealthConditionDraft(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  event.preventDefault();
-                                  addHealthConditionRule();
-                                }
-                              }}
-                              placeholder={t("campaigns.target.healthPlaceholder")}
-                            />
-                            <Button type="button" variant="outline" onClick={addHealthConditionRule}>{t("campaigns.target.add")}</Button>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {form.targetRules.healthConditions.map((condition) => (
-                              <button
-                                key={condition}
-                                type="button"
-                                className="rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary"
-                                onClick={() => updateTargetRules((rules) => ({
-                                  ...rules,
-                                  healthConditions: rules.healthConditions.filter((item) => item !== condition),
-                                }))}
-                              >
-                                {condition}
-                              </button>
-                            ))}
-                            {form.targetRules.healthConditions.length === 0 && (
-                              <p className="text-sm text-muted-foreground">{t("campaigns.target.healthNone")}</p>
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.audience.title")}</h3>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("campaigns.audience.description")}</p>
+                      <div className="mt-4 grid gap-3 md:grid-cols-3">
+                        {[
+                          { mode: "existing" as AudienceMode, title: t("campaigns.audience.existing"), description: t("campaigns.audience.existingDescription") },
+                          { mode: "criteria" as AudienceMode, title: t("campaigns.audience.criteria"), description: t("campaigns.audience.criteriaDescription") },
+                          { mode: "upload" as AudienceMode, title: t("campaigns.audience.upload"), description: t("campaigns.audience.uploadDescription") },
+                        ].map((item) => (
+                          <button
+                            key={item.mode}
+                            type="button"
+                            onClick={() => setAudienceMode(item.mode)}
+                            className={cn(
+                              "rounded-2xl border p-4 text-left transition",
+                              form.audienceMode === item.mode ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
                             )}
-                          </div>
-                        </div>
+                          >
+                            <span className="block font-semibold text-foreground">{item.title}</span>
+                            <span className="mt-1 block text-sm leading-6 text-muted-foreground">{item.description}</span>
+                          </button>
+                        ))}
                       </div>
                     </div>
 
+                    {form.audienceMode === "existing" && (
+                      <div className="rounded-2xl border border-border bg-white p-5">
+                        <h3 className="text-lg font-bold text-foreground">{templateLabel(form.templateKey)}</h3>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{templateAudience(form.templateKey, form.city)}</p>
+                        <div className="mt-4 space-y-2">
+                          {templateOpportunities.find((item) => item.templateKey === form.templateKey)?.matching.slice(0, 5).map((target) => (
+                            <div key={target.id} className="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                              <p className="font-semibold text-foreground">{`${target.first_name ?? ""} ${target.last_name ?? ""}`.trim() || "Unknown"}</p>
+                              <p className="text-muted-foreground">{target.city || t("campaigns.scope.allCities")}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {form.audienceMode === "criteria" && (
+                      <>
+                        <div className="rounded-2xl border border-border bg-white p-5">
+                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.where")}</h3>
+                          <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whereHelp")}</p>
+                          <div className="mt-4 grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                            <Select
+                              value={form.targetRules.geo.scope}
+                              onValueChange={(value) => updateTargetRules((rules) => ({
+                                ...rules,
+                                geo: { ...rules.geo, scope: value as CampaignTargetRules["geo"]["scope"] },
+                              }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="organization">{t("campaigns.target.geo.organization")}</SelectItem>
+                                <SelectItem value="country">{t("campaigns.target.geo.country")}</SelectItem>
+                                <SelectItem value="city">{t("campaigns.target.geo.city")}</SelectItem>
+                                <SelectItem value="area">{t("campaigns.target.geo.area")}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              value={form.targetRules.geo.scope === "city" ? form.city : form.targetRules.geo.value}
+                              list="campaign-city-options"
+                              disabled={form.targetRules.geo.scope === "organization"}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                if (form.targetRules.geo.scope === "city") setCampaignCity(value);
+                                else updateTargetRules((rules) => ({ ...rules, geo: { ...rules.geo, value } }));
+                              }}
+                              placeholder={form.targetRules.geo.scope === "organization" ? t("campaigns.target.geo.allOrg") : t("campaigns.form.cityPlaceholder")}
+                            />
+                            <datalist id="campaign-city-options">
+                              {availableCities.map((city) => <option key={city} value={city} />)}
+                            </datalist>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-border bg-white p-5">
+                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.who")}</h3>
+                          <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whoHelp")}</p>
+                          <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label>{t("campaigns.target.riskLevel")}</Label>
+                              <Select
+                                value={form.targetRules.riskLevel}
+                                onValueChange={(value) => updateTargetRules((rules) => ({ ...rules, riskLevel: value as CampaignTargetRules["riskLevel"] }))}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="all">{t("campaigns.target.risk.all")}</SelectItem>
+                                  <SelectItem value="urgent">{t("campaigns.target.risk.urgent")}</SelectItem>
+                                  <SelectItem value="high">{t("campaigns.target.risk.high")}</SelectItem>
+                                  <SelectItem value="review">{t("campaigns.target.risk.review")}</SelectItem>
+                                  <SelectItem value="stable">{t("campaigns.target.risk.stable")}</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>{t("campaigns.target.healthConditions")}</Label>
+                              <div className="flex gap-2">
+                                <Input
+                                  value={healthConditionDraft}
+                                  onChange={(event) => setHealthConditionDraft(event.target.value)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter") {
+                                      event.preventDefault();
+                                      addHealthConditionRule();
+                                    }
+                                  }}
+                                  placeholder={t("campaigns.target.healthPlaceholder")}
+                                />
+                                <Button type="button" variant="outline" onClick={addHealthConditionRule}>{t("campaigns.target.add")}</Button>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {form.targetRules.healthConditions.map((condition) => (
+                                  <button
+                                    key={condition}
+                                    type="button"
+                                    className="rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary"
+                                    onClick={() => updateTargetRules((rules) => ({
+                                      ...rules,
+                                      healthConditions: rules.healthConditions.filter((item) => item !== condition),
+                                    }))}
+                                  >
+                                    {condition}
+                                  </button>
+                                ))}
+                                {form.targetRules.healthConditions.length === 0 && (
+                                  <p className="text-sm text-muted-foreground">{t("campaigns.target.healthNone")}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-border bg-white p-5">
+                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.supportCoverage")}</h3>
+                          <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.supportHelp")}</p>
+                          <div className="mt-4 grid gap-4 md:grid-cols-2">
+                            <Select
+                              value={form.targetRules.careProvider.mode}
+                              onValueChange={(value) => updateTargetRules((rules) => ({
+                                ...rules,
+                                careProvider: { ...rules.careProvider, mode: value as CampaignTargetRules["careProvider"]["mode"] },
+                              }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="all">{t("campaigns.target.provider.all")}</SelectItem>
+                                <SelectItem value="unassigned">{t("campaigns.target.provider.unassigned")}</SelectItem>
+                                <SelectItem value="assigned">{t("campaigns.target.provider.assigned")}</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={form.targetRules.careProvider.providerName || "any"}
+                              disabled={form.targetRules.careProvider.mode !== "assigned"}
+                              onValueChange={(value) => updateTargetRules((rules) => ({
+                                ...rules,
+                                careProvider: { ...rules.careProvider, providerName: value === "any" ? "" : value, providerId: "" },
+                              }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="any">{t("campaigns.target.provider.choose")}</SelectItem>
+                                {careProviderOptions.map((name) => (
+                                  <SelectItem key={name} value={name}>{name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    {form.audienceMode === "upload" && (
+                      <div className="rounded-2xl border border-border bg-white p-5">
+                        <div className="mb-4 flex items-center gap-2">
+                          <span className="rounded-full bg-primary/10 p-2 text-primary">
+                            <Upload className="h-4 w-4" />
+                          </span>
+                          <div>
+                            <h3 className="text-lg font-bold text-foreground">{t("campaigns.audience.uploadTitle")}</h3>
+                            <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.audience.uploadHelp")}</p>
+                          </div>
+                        </div>
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-upload-file">{t("campaigns.audience.uploadFile")}</Label>
+                            <Input id="campaign-upload-file" type="file" accept=".csv,.txt" onChange={(event) => void readUploadedAudienceFile(event.target.files?.[0])} />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-upload-list">{t("campaigns.audience.pasteList")}</Label>
+                            <Textarea
+                              id="campaign-upload-list"
+                              value={form.uploadedAudienceText}
+                              onChange={(event) => updateUploadedAudience(event.target.value, form.uploadedAudience.fileName)}
+                              placeholder={t("campaigns.audience.uploadPlaceholder")}
+                              className="min-h-[140px]"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="rounded-2xl border border-border bg-white p-5">
-                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.supportCoverage")}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.supportHelp")}</p>
-                      <div className="mt-4 grid gap-4 md:grid-cols-2">
-                        <Select
-                          value={form.targetRules.careProvider.mode}
-                          onValueChange={(value) => updateTargetRules((rules) => ({
-                            ...rules,
-                            careProvider: { ...rules.careProvider, mode: value as CampaignTargetRules["careProvider"]["mode"] },
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="all">{t("campaigns.target.provider.all")}</SelectItem>
-                            <SelectItem value="unassigned">{t("campaigns.target.provider.unassigned")}</SelectItem>
-                            <SelectItem value="assigned">{t("campaigns.target.provider.assigned")}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <Select
-                          value={form.targetRules.careProvider.providerName || "any"}
-                          disabled={form.targetRules.careProvider.mode !== "assigned"}
-                          onValueChange={(value) => updateTargetRules((rules) => ({
-                            ...rules,
-                            careProvider: { ...rules.careProvider, providerName: value === "any" ? "" : value, providerId: "" },
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="any">{t("campaigns.target.provider.choose")}</SelectItem>
-                            {careProviderOptions.map((name) => (
-                              <SelectItem key={name} value={name}>{name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
+                        <Textarea
+                          id="campaign-audience"
+                          value={form.audience}
+                          onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
+                          className="min-h-[96px]"
+                        />
                       </div>
                     </div>
                   </div>
@@ -2128,6 +2583,15 @@ export default function Campaigns() {
                       <MiniStat title={t("campaigns.preview.eligibleCount")} value={String(localTargetSummary.eligible.length)} />
                       <MiniStat title={t("campaigns.preview.skippedCount")} value={String(localTargetSummary.skipped.length)} />
                     </div>
+                    {form.audienceMode === "upload" && (
+                      <DetailBlock title={t("campaigns.audience.uploadSummary")}>
+                        <div className="space-y-2">
+                          <GapLine label={t("campaigns.audience.rawRows")} value={form.uploadedAudience.rawRowCount} />
+                          <GapLine label={t("campaigns.audience.matchedPhones")} value={form.uploadedAudience.matchedPhones.length} />
+                          <GapLine label={t("campaigns.audience.unmatchedRows")} value={form.uploadedAudience.unmatchedRows} />
+                        </div>
+                      </DetailBlock>
+                    )}
                     <DetailBlock title={t("campaigns.call.skipReasons")}>
                       <div className="space-y-2">
                         <GapLine label={t("campaigns.call.noPhone")} value={localTargetSummary.skippedReasons.noPhone} />
@@ -2136,12 +2600,7 @@ export default function Campaigns() {
                         <GapLine label={t("campaigns.call.healthMismatch")} value={localTargetSummary.skippedReasons.healthMismatch} />
                         <GapLine label={t("campaigns.call.providerMismatch")} value={localTargetSummary.skippedReasons.providerMismatch} />
                         <GapLine label={t("campaigns.call.templateMismatch")} value={localTargetSummary.skippedReasons.templateMismatch} />
-                      </div>
-                    </DetailBlock>
-                    <DetailBlock title={t("campaigns.target.requiredSafeguards")}>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge className="rounded-full border-0 bg-emerald-100 px-3 py-1 text-emerald-700">{t("campaigns.call.consentOnly")}</Badge>
-                        <Badge className="rounded-full border-0 bg-emerald-100 px-3 py-1 text-emerald-700">{t("campaigns.target.phoneRequired")}</Badge>
+                        {form.audienceMode === "upload" && <GapLine label={t("campaigns.audience.uploadMismatch")} value={localTargetSummary.skippedReasons.uploadMismatch} />}
                       </div>
                     </DetailBlock>
                     <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
@@ -2167,60 +2626,56 @@ export default function Campaigns() {
               )}
 
               {wizardStep === 3 && (
-                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
                   <div className="space-y-5 rounded-2xl border border-border bg-white p-5">
                     <div className="space-y-2">
-                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.call.script")}</h3>
-                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.channel.title")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.channel.description")}</p>
                     </div>
-                    <Textarea
-                      id="campaign-script"
-                      value={form.callScript}
-                      onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
-                      placeholder={t("campaigns.call.scriptPlaceholder")}
-                      className="min-h-[320px]"
-                    />
-                  </div>
-                  <aside className="space-y-4 rounded-2xl border border-primary/15 bg-primary/5 p-5">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-full bg-primary/10 p-2 text-primary">
-                        <Sparkles className="h-4 w-4" />
-                      </span>
-                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {campaignChannelOptions.map(({ value, labelKey, descriptionKey, Icon }) => {
+                        const active = form.channels.includes(value);
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => toggleCampaignChannel(value)}
+                            className={cn(
+                              "flex items-start gap-3 rounded-2xl border p-4 text-left transition",
+                              active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
+                            )}
+                          >
+                            <span className={cn("rounded-full p-2", active ? "bg-primary text-white" : "bg-white text-primary")}>
+                              <Icon className="h-4 w-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-semibold text-foreground">{t(labelKey)}</span>
+                              <span className="mt-1 block text-sm leading-6 text-muted-foreground">{t(descriptionKey)}</span>
+                            </span>
+                            {active && <CheckCircle2 className="h-5 w-5 shrink-0 text-primary" />}
+                          </button>
+                        );
+                      })}
                     </div>
-                    <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
-                    <Textarea
-                      id="campaign-ai-prompt"
-                      value={form.aiPrompt}
-                      onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
-                      placeholder={t("campaigns.ai.promptPlaceholder")}
-                      className="min-h-[120px]"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full rounded-full"
-                      onClick={() => {
-                        const suggestion = buildAiSuggestion(form);
-                        setAiSuggestion(suggestion);
-                      }}
-                    >
-                      <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                      {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
-                    </Button>
-                    {aiSuggestion && (
-                      <div className="space-y-3 rounded-2xl bg-slate-50 p-4">
-                        <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
-                        <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
-                        <Button
-                          type="button"
-                          className="w-full rounded-full bg-primary hover:bg-primary/90"
-                          onClick={() => applyAiDraft({ ...form, aiPrompt: form.aiPrompt })}
-                        >
-                          {t("campaigns.ai.apply")}
-                        </Button>
-                      </div>
+                    {form.channels.length === 0 && (
+                      <p className="text-sm font-semibold text-red-600">{t("campaigns.channel.required")}</p>
                     )}
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800">
+                      {t("campaigns.channel.voiceOnlyNote")}
+                    </div>
+                  </div>
+
+                  <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <h3 className="text-lg font-bold text-foreground">{t("campaigns.channel.selectedTitle")}</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {form.channels.map((channel) => (
+                        <Badge key={channel} className="rounded-full border-0 bg-primary/10 px-3 py-1 text-primary">
+                          {t(`campaigns.channel.${channel}`)}
+                        </Badge>
+                      ))}
+                    </div>
+                    <InfoPair title={t("campaigns.form.channel")} value={legacyChannelForChannels(form.channels)} />
+                    <InfoPair title={t("campaigns.form.type")} value={executionTypeForChannels(form.channels)} />
                   </aside>
                 </section>
               )}
@@ -2228,46 +2683,84 @@ export default function Campaigns() {
               {wizardStep === 4 && (
                 <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
                   <div className="space-y-5 rounded-2xl border border-border bg-white p-5">
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.schedule.title")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.schedule.description")}</p>
+                    </div>
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="space-y-2">
-                        <Label htmlFor="campaign-scheduled-at">{t("campaigns.form.scheduledAt")}</Label>
+                        <Label htmlFor="campaign-schedule-date">{t("campaigns.schedule.day")}</Label>
                         <Input
-                          id="campaign-scheduled-at"
-                          type="datetime-local"
-                          value={form.scheduledAt}
-                          onChange={(event) => setForm((current) => current ? { ...current, scheduledAt: event.target.value } : current)}
+                          id="campaign-schedule-date"
+                          type="date"
+                          value={scheduleDatePart(form.scheduledAt)}
+                          onChange={(event) => setScheduledAtParts(event.target.value, scheduleTimePart(form.scheduledAt))}
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="campaign-retry">{t("campaigns.call.retryLimit")}</Label>
+                        <Label htmlFor="campaign-schedule-time">{t("campaigns.schedule.time")}</Label>
                         <Input
-                          id="campaign-retry"
-                          type="number"
-                          min="0"
-                          max="5"
-                          value={form.retryLimit}
-                          onChange={(event) => setForm((current) => current ? { ...current, retryLimit: event.target.value } : current)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="campaign-window-start">{t("campaigns.call.windowStart")}</Label>
-                        <Input
-                          id="campaign-window-start"
+                          id="campaign-schedule-time"
                           type="time"
-                          value={form.callWindowStart}
-                          onChange={(event) => setForm((current) => current ? { ...current, callWindowStart: event.target.value } : current)}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="campaign-window-end">{t("campaigns.call.windowEnd")}</Label>
-                        <Input
-                          id="campaign-window-end"
-                          type="time"
-                          value={form.callWindowEnd}
-                          onChange={(event) => setForm((current) => current ? { ...current, callWindowEnd: event.target.value } : current)}
+                          value={scheduleTimePart(form.scheduledAt)}
+                          onChange={(event) => setScheduledAtParts(scheduleDatePart(form.scheduledAt), event.target.value)}
                         />
                       </div>
                     </div>
+                    <div className="space-y-2">
+                      <Label>{t("campaigns.schedule.frequency")}</Label>
+                      <div className="grid gap-2 sm:grid-cols-4">
+                        {scheduleFrequencyOptions.map((frequency) => (
+                          <button
+                            key={frequency}
+                            type="button"
+                            onClick={() => setScheduleFrequency(frequency)}
+                            className={cn(
+                              "rounded-xl border px-3 py-2 text-sm font-semibold transition",
+                              form.frequency === frequency ? "border-primary bg-primary text-white" : "border-border bg-white text-muted-foreground hover:border-primary/30",
+                            )}
+                          >
+                            {t(`campaigns.schedule.frequency.${frequency}`)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {form.channels.includes("voice") && (
+                      <div className="rounded-2xl border border-border bg-slate-50 p-4">
+                        <h3 className="text-sm font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.schedule.voiceAdvanced")}</h3>
+                        <div className="mt-4 grid gap-4 md:grid-cols-3">
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-window-start">{t("campaigns.call.windowStart")}</Label>
+                            <Input
+                              id="campaign-window-start"
+                              type="time"
+                              value={form.callWindowStart}
+                              onChange={(event) => setForm((current) => current ? { ...current, callWindowStart: event.target.value } : current)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-window-end">{t("campaigns.call.windowEnd")}</Label>
+                            <Input
+                              id="campaign-window-end"
+                              type="time"
+                              value={form.callWindowEnd}
+                              onChange={(event) => setForm((current) => current ? { ...current, callWindowEnd: event.target.value } : current)}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="campaign-retry">{t("campaigns.call.retryLimit")}</Label>
+                            <Input
+                              id="campaign-retry"
+                              type="number"
+                              min="0"
+                              max="5"
+                              value={form.retryLimit}
+                              onChange={(event) => setForm((current) => current ? { ...current, retryLimit: event.target.value } : current)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="space-y-2">
                       <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
                       <Textarea
@@ -2277,27 +2770,18 @@ export default function Campaigns() {
                         className="min-h-[96px]"
                       />
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
-                      <Textarea
-                        id="campaign-audience"
-                        value={form.audience}
-                        onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
-                        className="min-h-[96px]"
-                      />
-                    </div>
                     <DetailBlock title={t("campaigns.call.scriptPreview")}>
                       <p className="whitespace-pre-line text-sm leading-6 text-foreground">{form.callScript || t("campaigns.call.scriptPlaceholder")}</p>
                     </DetailBlock>
                   </div>
                   <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
                     <h3 className="text-lg font-bold text-foreground">{t("campaigns.wizard.reviewReady")}</h3>
-                    <InfoPair title={t("campaigns.form.template")} value={templateLabel(form.templateKey)} />
                     <InfoPair title={t("campaigns.form.name")} value={form.name.trim() || templateLabel(form.templateKey)} />
-                    <InfoPair title={t("campaigns.detail.scope")} value={form.targetRules.geo.scope === "organization" ? t("campaigns.target.geo.allOrg") : form.targetRules.geo.value || form.city || t("campaigns.scope.allCities")} />
+                    <InfoPair title={t("campaigns.form.template")} value={templateLabel(form.templateKey)} />
+                    <InfoPair title={t("campaigns.form.channel")} value={form.channels.map((channel) => t(`campaigns.channel.${channel}`)).join(", ")} />
                     <InfoPair title={t("campaigns.form.scheduledAt")} value={formatDateTime(toIsoOrNull(form.scheduledAt))} />
+                    <InfoPair title={t("campaigns.schedule.frequency")} value={t(`campaigns.schedule.frequency.${form.frequency}`)} />
                     <InfoPair title={t("campaigns.call.schedule")} value={formatTimeRange(form.callWindowStart, form.callWindowEnd)} />
-                    <InfoPair title={t("campaigns.call.retryLimit")} value={form.retryLimit} />
                     <div className="grid grid-cols-2 gap-3">
                       <MiniStat title={t("campaigns.preview.eligibleCount")} value={String(localTargetSummary.eligible.length)} />
                       <MiniStat title={t("campaigns.preview.skippedCount")} value={String(localTargetSummary.skipped.length)} />
@@ -2326,7 +2810,7 @@ export default function Campaigns() {
                 <Button
                   type="button"
                   onClick={() => form && saveMutation.mutate({ draft: form, status: "draft" })}
-                  disabled={!form || saveMutation.isPending || !canDraftCampaigns}
+                  disabled={!form || saveMutation.isPending || !canDraftCampaigns || !form.callScript.trim() || form.channels.length === 0}
                 >
                   {t("campaigns.action.saveDraft")}
                 </Button>

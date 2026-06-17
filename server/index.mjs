@@ -2311,7 +2311,69 @@ function defaultCampaignTargetRules(city = "") {
     },
     requireConsent: true,
     requirePhone: true,
+    audienceSource: {
+      mode: "existing",
+      uploadedList: {
+        fileName: "",
+        rawRowCount: 0,
+        matchedPhones: [],
+        emails: [],
+        unmatchedRows: 0,
+      },
+    },
+    channels: ["voice"],
+    schedule: {
+      frequency: "once",
+      scheduledAt: null,
+    },
   };
+}
+
+function normalizeCampaignChannelList(value) {
+  if (!Array.isArray(value)) return ["voice"];
+  const allowed = new Set(["voice", "whatsapp", "email", "sms"]);
+  const channels = Array.from(new Set(value.map((item) => String(item)).filter((item) => allowed.has(item))));
+  return channels.length ? channels : ["voice"];
+}
+
+function normalizeCampaignScheduleFrequency(value) {
+  const text = String(value || "");
+  return ["once", "daily", "weekly", "monthly"].includes(text) ? text : "once";
+}
+
+function normalizeCampaignAudienceMode(value) {
+  const text = String(value || "");
+  return ["existing", "criteria", "upload"].includes(text) ? text : "existing";
+}
+
+function normalizeCampaignUploadedAudience(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      fileName: "",
+      rawRowCount: 0,
+      matchedPhones: [],
+      emails: [],
+      unmatchedRows: 0,
+    };
+  }
+  return {
+    fileName: nullIfBlank(value.fileName) || "",
+    rawRowCount: Number.isFinite(Number(value.rawRowCount)) ? Number(value.rawRowCount) : 0,
+    matchedPhones: Array.isArray(value.matchedPhones) ? value.matchedPhones.map((item) => String(item)).filter(Boolean) : [],
+    emails: Array.isArray(value.emails) ? value.emails.map((item) => String(item).trim()).filter(Boolean) : [],
+    unmatchedRows: Number.isFinite(Number(value.unmatchedRows)) ? Number(value.unmatchedRows) : 0,
+  };
+}
+
+function normalizeCampaignPhoneIdentifier(value) {
+  return String(value || "").replace(/[^\d+]/g, "").replace(/(?!^)\+/g, "");
+}
+
+function campaignPhoneIdentifiersMatch(uploadedPhone, userPhone) {
+  const uploaded = normalizeCampaignPhoneIdentifier(uploadedPhone).replace(/^\+/, "");
+  const user = normalizeCampaignPhoneIdentifier(userPhone).replace(/^\+/, "");
+  if (!uploaded || !user) return false;
+  return uploaded === user || uploaded.endsWith(user) || user.endsWith(uploaded);
 }
 
 function normalizeCampaignTargetRules(value, city = "") {
@@ -2327,6 +2389,8 @@ function normalizeCampaignTargetRules(value, city = "") {
   if (!source || typeof source !== "object" || Array.isArray(source)) return fallback;
   const geo = source.geo && typeof source.geo === "object" ? source.geo : {};
   const careProvider = source.careProvider && typeof source.careProvider === "object" ? source.careProvider : {};
+  const audienceSource = source.audienceSource && typeof source.audienceSource === "object" ? source.audienceSource : {};
+  const schedule = source.schedule && typeof source.schedule === "object" ? source.schedule : {};
   const geoScope = ["organization", "country", "city", "area"].includes(String(geo.scope)) ? String(geo.scope) : fallback.geo.scope;
   const providerMode = ["all", "unassigned", "assigned"].includes(String(careProvider.mode)) ? String(careProvider.mode) : "all";
   const providerType = ["caregiver", "field_staff"].includes(String(careProvider.providerType)) ? String(careProvider.providerType) : "";
@@ -2347,6 +2411,15 @@ function normalizeCampaignTargetRules(value, city = "") {
     },
     requireConsent: source.requireConsent !== false,
     requirePhone: source.requirePhone !== false,
+    audienceSource: {
+      mode: normalizeCampaignAudienceMode(audienceSource.mode),
+      uploadedList: normalizeCampaignUploadedAudience(audienceSource.uploadedList),
+    },
+    channels: normalizeCampaignChannelList(source.channels),
+    schedule: {
+      frequency: normalizeCampaignScheduleFrequency(schedule.frequency),
+      scheduledAt: nullIfBlank(schedule.scheduledAt),
+    },
   };
 }
 
@@ -2357,6 +2430,10 @@ function campaignTargetRuleSkipReason(rules, user) {
   if (rules.geo?.scope === "city" && geoValue && city !== geoValue) return "outside_geo";
   if (rules.geo?.scope === "country" && geoValue && country !== geoValue) return "outside_geo";
   if (rules.geo?.scope === "area" && geoValue && !city.includes(geoValue)) return "outside_geo";
+  if (rules.audienceSource?.mode === "upload") {
+    const matchedPhones = Array.isArray(rules.audienceSource.uploadedList?.matchedPhones) ? rules.audienceSource.uploadedList.matchedPhones : [];
+    if (!matchedPhones.length || !matchedPhones.some((phone) => campaignPhoneIdentifiersMatch(phone, user.phone))) return "outside_geo";
+  }
 
   const riskStatus = targetRiskStatus(user);
   if (rules.riskLevel === "urgent" && riskStatus !== "urgent") return "risk_mismatch";
