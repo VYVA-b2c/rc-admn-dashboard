@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatDistanceToNow } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -55,6 +56,8 @@ type QueueRow = {
   reasonKey: string;
   channel: OperationalChannel;
   lastContactKey: string;
+  lastContactAt?: string | null;
+  lastContactStatus?: string | null;
   assignedTo?: string | null;
   careProviderCount: number;
   primaryCaregiverName?: string | null;
@@ -128,7 +131,9 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     score,
     reasonKey: deriveReasonKey(user, status),
     channel: meta?.preferredChannel ?? "phone",
-    lastContactKey: meta?.lastContactKey ?? "usersList.lastContactUnknown",
+    lastContactKey: meta?.lastContactKey ?? "usersList.lastContactAwaiting",
+    lastContactAt: user.checkinLastReportedAt ?? null,
+    lastContactStatus: user.checkinLastStatus ?? null,
     assignedTo,
     careProviderCount,
     primaryCaregiverName: user.primaryCaregiverName ?? null,
@@ -167,6 +172,20 @@ function channelKey(channel: OperationalChannel) {
   if (channel === "whatsapp") return "profile.channel.whatsApp";
   if (channel === "app") return "profile.channel.app";
   return "profile.channel.phone";
+}
+
+function lastContactLabel(row: QueueRow, t: (key: string) => string) {
+  const status = row.lastContactStatus ? t(`checkin.outcome.${row.lastContactStatus}`) : "";
+  const hasStatus = status && status !== `checkin.outcome.${row.lastContactStatus}`;
+  if (row.lastContactAt) {
+    const date = new Date(row.lastContactAt);
+    if (!Number.isNaN(date.getTime())) {
+      const relative = formatDistanceToNow(date, { addSuffix: true });
+      return hasStatus ? `${status} ${relative}` : relative;
+    }
+  }
+  if (hasStatus) return status;
+  return t(row.lastContactKey);
 }
 
 export default function UsersList() {
@@ -464,7 +483,7 @@ export default function UsersList() {
                           {t(channelKey(user.channel))}
                         </div>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{t(user.lastContactKey)}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{lastContactLabel(user, t)}</TableCell>
                       <TableCell>
                         {user.assignedTo ? (
                           <div>
