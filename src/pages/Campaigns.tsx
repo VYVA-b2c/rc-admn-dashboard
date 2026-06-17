@@ -1563,15 +1563,15 @@ export default function Campaigns() {
       </section>
 
       <Dialog open={guideDialogOpen} onOpenChange={setGuideDialogOpen}>
-        <DialogContent className="max-w-2xl rounded-2xl border-border bg-white">
-          <DialogHeader className="text-left">
+        <DialogContent className="flex max-h-[calc(100vh-2rem)] max-w-2xl flex-col overflow-hidden rounded-2xl border-border bg-white p-0">
+          <DialogHeader className="border-b border-border px-6 py-5 text-left">
             <DialogTitle className="text-2xl font-bold text-foreground">{t("campaigns.empty.panelTitle")}</DialogTitle>
             <DialogDescription className="text-sm leading-6 text-muted-foreground">
               {t("campaigns.empty.panelDescription")}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5">
             <div className="space-y-3">
               <StepLine number="1" title={t("campaigns.empty.stepOneTitle")} description={t("campaigns.empty.stepOneDescription")} />
               <StepLine number="2" title={t("campaigns.empty.stepTwoTitle")} description={t("campaigns.empty.stepTwoDescription")} />
@@ -1612,7 +1612,7 @@ export default function Campaigns() {
             )}
           </div>
 
-          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+          <DialogFooter className="flex flex-col gap-2 border-t border-border px-6 py-4 sm:flex-row sm:justify-between">
             <Button
               type="button"
               variant="outline"
