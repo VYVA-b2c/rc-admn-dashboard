@@ -181,7 +181,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 sm:items-end">
             <div className="space-y-1.5">
               <Label htmlFor="care-provider-role">{t("careProviders.staffRole")}</Label>
               <Select value={staffRole} onValueChange={setStaffRole}>
