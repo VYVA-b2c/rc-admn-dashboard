@@ -11,6 +11,18 @@ import { Progress } from "@/components/ui/progress";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
+import {
+  buildUserIntakePayload,
+  isValidIntakePhone,
+  isValidIntakeTime,
+  normalizeIntakeLanguage,
+  parseIntakeBoolean,
+  splitIntakeList,
+  userIntakeHeaderAliases,
+  userIntakeTemplateHeaders,
+  type CaregiverIntake,
+  type MedicationIntake,
+} from "@/lib/userIntake";
 
 type Translate = (key: string) => string;
 
@@ -31,72 +43,6 @@ interface UserCsvImportDialogProps {
 }
 
 const CSV_ROW_LIMIT = 250;
-
-const templateHeaders = [
-  "first_name",
-  "last_name",
-  "phone",
-  "date_of_birth",
-  "gender",
-  "language",
-  "street",
-  "house_number",
-  "post_code",
-  "city",
-  "care_safety_notes",
-  "health_conditions",
-  "mobility_needs",
-  "medication_name",
-  "medication_dosage",
-  "medication_purpose",
-  "medication_times",
-  "caregiver_name",
-  "caregiver_phone",
-  "consent_given",
-  "caretaker_consent",
-  "checkin_enabled",
-  "checkin_frequency",
-  "checkin_preferred_time",
-  "brain_coach_enabled",
-  "brain_coach_frequency",
-  "brain_coach_preferred_time",
-];
-
-const headerAliases: Record<string, string> = {
-  address: "street",
-  birthdate: "date_of_birth",
-  caregiver: "caregiver_name",
-  caregiver_number: "caregiver_phone",
-  caregiver_tel: "caregiver_phone",
-  contact_name: "caregiver_name",
-  contact_phone: "caregiver_phone",
-  conditions: "health_conditions",
-  dob: "date_of_birth",
-  emergency_notes: "care_safety_notes",
-  family_contact: "caregiver_name",
-  family_phone: "caregiver_phone",
-  first: "first_name",
-  firstname: "first_name",
-  health: "health_conditions",
-  last: "last_name",
-  lastname: "last_name",
-  medication: "medication_name",
-  medication_dose: "medication_dosage",
-  medication_schedule: "medication_times",
-  medication_time: "medication_times",
-  mobile: "phone",
-  mobility: "mobility_needs",
-  name: "first_name",
-  notes: "care_safety_notes",
-  phone_number: "phone",
-  postcode: "post_code",
-  preferred_language: "language",
-  schedule_times: "medication_times",
-  surname: "last_name",
-};
-
-const trueValues = new Set(["1", "active", "enabled", "ja", "si", "true", "y", "yes"]);
-const falseValues = new Set(["0", "disabled", "false", "inactive", "n", "nein", "no"]);
 
 function parseCsv(text: string) {
   const rows: string[][] = [];
@@ -149,33 +95,7 @@ function normalizeHeader(value: string) {
     .toLowerCase()
     .replace(/[\s-]+/g, "_")
     .replace(/[^a-z0-9_]/g, "");
-  return headerAliases[key] ?? key;
-}
-
-function isValidPhoneInput(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return true;
-  const digits = trimmed.replace(/\D/g, "");
-  return /^\+[1-9][0-9\s().-]{6,24}$/.test(trimmed) && digits.length >= 8 && digits.length <= 15;
-}
-
-function isValidTime(value: string) {
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-}
-
-function splitList(value: string) {
-  return value
-    .split(/[;,|]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function parseBooleanValue(value: string) {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) return undefined;
-  if (trueValues.has(normalized)) return true;
-  if (falseValues.has(normalized)) return false;
-  return null;
+  return userIntakeHeaderAliases[key] ?? key;
 }
 
 function rowError(t: Translate, rowNumber: number, messageKey: string, field?: string) {
@@ -215,43 +135,43 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
     const lastName = get("last_name");
     const phone = get("phone");
     const caregiverPhone = get("caregiver_phone");
-    const language = (get("language") || "de").trim().toLowerCase().slice(0, 2);
+    const language = normalizeIntakeLanguage(get("language") || "de");
     const dateOfBirth = get("date_of_birth");
     const medicationName = get("medication_name");
     const medicationDosage = get("medication_dosage");
     const medicationPurpose = get("medication_purpose");
-    const medicationTimes = splitList(get("medication_times"));
+    const medicationTimes = splitIntakeList(get("medication_times"));
     const checkinTime = get("checkin_preferred_time");
     const brainCoachTime = get("brain_coach_preferred_time");
-    const checkinEnabled = parseBooleanValue(get("checkin_enabled"));
-    const brainCoachEnabled = parseBooleanValue(get("brain_coach_enabled"));
-    const consentGiven = parseBooleanValue(get("consent_given"));
-    const caretakerConsent = parseBooleanValue(get("caretaker_consent"));
+    const checkinEnabled = parseIntakeBoolean(get("checkin_enabled"));
+    const brainCoachEnabled = parseIntakeBoolean(get("brain_coach_enabled"));
+    const consentGiven = parseIntakeBoolean(get("consent_given"));
+    const caretakerConsent = parseIntakeBoolean(get("caretaker_consent"));
     const rowErrors: string[] = [];
 
     if (!firstName || !lastName) rowErrors.push(rowError(t, rowNumber, "userImport.validation.firstLast"));
     if (dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.date", "date_of_birth"));
     }
-    if (!["en", "de", "es"].includes(language)) {
+    if (get("language") && !["en", "de", "es"].includes(get("language").trim().toLowerCase().slice(0, 2))) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.language", "language"));
     }
-    if (phone && !isValidPhoneInput(phone)) {
+    if (phone && !isValidIntakePhone(phone)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.phone", "phone"));
     }
-    if (caregiverPhone && !isValidPhoneInput(caregiverPhone)) {
+    if (caregiverPhone && !isValidIntakePhone(caregiverPhone)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.caregiverPhone", "caregiver_phone"));
     }
     if ((medicationDosage || medicationPurpose || medicationTimes.length) && !medicationName) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.medicationName", "medication_name"));
     }
-    if (medicationTimes.some((time) => !isValidTime(time))) {
+    if (medicationTimes.some((time) => !isValidIntakeTime(time))) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.time", "medication_times"));
     }
-    if (checkinTime && !isValidTime(checkinTime)) {
+    if (checkinTime && !isValidIntakeTime(checkinTime)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.time", "checkin_preferred_time"));
     }
-    if (brainCoachTime && !isValidTime(brainCoachTime)) {
+    if (brainCoachTime && !isValidIntakeTime(brainCoachTime)) {
       rowErrors.push(rowError(t, rowNumber, "userImport.validation.time", "brain_coach_preferred_time"));
     }
 
@@ -269,72 +189,48 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
       return;
     }
 
-    const healthConditions = splitList(get("health_conditions"));
-    const mobilityNeeds = splitList(get("mobility_needs"));
-    const payload: Record<string, unknown> = {
-      city: get("city") || null,
-      date_of_birth: dateOfBirth || null,
-      emergency_notes: get("care_safety_notes") || null,
-      first_name: firstName,
-      gender: get("gender") || null,
-      house_number: get("house_number") || null,
-      language,
-      last_name: lastName,
-      phone: phone || null,
-      post_code: get("post_code") || null,
-      street: get("street") || null,
-    };
-
-    if (healthConditions.length || mobilityNeeds.length) {
-      payload.health = {
-        health_conditions: healthConditions,
-        mobility_needs: mobilityNeeds,
-      };
-    }
-
-    if (medicationName) {
-      payload.medications = [
-        {
-          dosage: medicationDosage || null,
+    const medications: MedicationIntake[] = medicationName
+      ? [{
+          dosage: medicationDosage,
           medication_name: medicationName,
-          purpose: medicationPurpose || null,
-          schedule_times: medicationTimes,
-        },
-      ];
-    }
-
-    if (get("caregiver_name") || caregiverPhone) {
-      payload.caregivers = [
-        {
-          caretaker_name: get("caregiver_name") || null,
-          caretaker_phone: caregiverPhone || null,
-          source: "csv",
-        },
-      ];
-    }
-
-    if (get("consent_given") || get("caretaker_consent")) {
-      payload.consent = {
-        caretaker_consent: caretakerConsent ?? false,
-        consent_given: consentGiven ?? false,
-      };
-    }
-
-    if (get("checkin_enabled") || get("checkin_frequency") || checkinTime) {
-      payload.checkins = {
-        enabled: checkinEnabled ?? false,
-        frequency: get("checkin_frequency") || null,
-        preferred_time: checkinTime || null,
-      };
-    }
-
-    if (get("brain_coach_enabled") || get("brain_coach_frequency") || brainCoachTime) {
-      payload.brainCoach = {
-        enabled: brainCoachEnabled ?? false,
-        frequency: get("brain_coach_frequency") || null,
-        preferred_time: brainCoachTime || null,
-      };
-    }
+          purpose: medicationPurpose,
+          schedule_times: medicationTimes.join(", "),
+        }]
+      : [];
+    const caregivers: CaregiverIntake[] = get("caregiver_name") || caregiverPhone
+      ? [{ caretaker_name: get("caregiver_name"), caretaker_phone: caregiverPhone }]
+      : [];
+    const payload = buildUserIntakePayload({
+      identity: {
+        city: get("city"),
+        date_of_birth: dateOfBirth,
+        emergency_notes: get("care_safety_notes"),
+        first_name: firstName,
+        gender: get("gender"),
+        house_number: get("house_number"),
+        language,
+        last_name: lastName,
+        phone,
+        post_code: get("post_code"),
+        street: get("street"),
+      },
+      brainCoach: get("brain_coach_enabled") || get("brain_coach_frequency") || brainCoachTime
+        ? { enabled: brainCoachEnabled ?? false, frequency: get("brain_coach_frequency"), preferred_time: brainCoachTime }
+        : null,
+      brainCoachPresent: Boolean(get("brain_coach_enabled") || get("brain_coach_frequency") || brainCoachTime),
+      caregiverConsent: caretakerConsent ?? false,
+      caregiverSource: "csv",
+      caregivers,
+      checkins: get("checkin_enabled") || get("checkin_frequency") || checkinTime
+        ? { enabled: checkinEnabled ?? false, frequency: get("checkin_frequency"), preferred_time: checkinTime }
+        : null,
+      checkinsPresent: Boolean(get("checkin_enabled") || get("checkin_frequency") || checkinTime),
+      consentPresent: Boolean(get("consent_given") || get("caretaker_consent")),
+      healthConditions: splitIntakeList(get("health_conditions")),
+      medications,
+      mobilityNeeds: splitIntakeList(get("mobility_needs")),
+      userConsent: consentGiven ?? false,
+    });
 
     readyRows.push({ payload, rowNumber });
   });
@@ -347,7 +243,7 @@ function prepareCsvImport(text: string, t: Translate): CsvReview {
 }
 
 function downloadCsvTemplate() {
-  const blob = new Blob([`${templateHeaders.join(",")}\n`], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([`${userIntakeTemplateHeaders.join(",")}\n`], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

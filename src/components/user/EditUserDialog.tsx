@@ -1,13 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { HeartPulse, PhoneCall, Pill, Plus, ShieldCheck, UserRound, X, type LucideIcon } from "lucide-react";
+import { HeartPulse, MapPin, PhoneCall, Pill, Plus, ShieldCheck, UserRound, X, type LucideIcon } from "lucide-react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -15,28 +16,24 @@ import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import type { OperationalProfileResponse, OperationalProfileUser } from "@/lib/operationalDemoData";
+import {
+  buildUserIntakePayload,
+  defaultServiceIntake,
+  emptyCaregiverIntake,
+  emptyMedicationIntake,
+  hasMedicationDetail,
+  intakeCadenceOptions,
+  isValidIntakePhone,
+  isValidIntakeTime,
+  splitIntakeList,
+  type CaregiverIntake,
+  type MedicationIntake,
+  type ServiceIntake,
+} from "@/lib/userIntake";
 import { cn } from "@/lib/utils";
 
 type SavedUserResponse = {
   user: OperationalProfileUser;
-};
-
-type MedicationForm = {
-  dosage: string;
-  medication_name: string;
-  purpose: string;
-  schedule_times: string;
-};
-
-type CaregiverForm = {
-  caretaker_name: string;
-  caretaker_phone: string;
-};
-
-type ServiceForm = {
-  enabled: boolean;
-  frequency: string;
-  preferred_time: string;
 };
 
 interface EditUserDialogProps {
@@ -47,66 +44,9 @@ interface EditUserDialogProps {
   user?: Partial<OperationalProfileUser> | null;
 }
 
-const cadenceOptions = ["daily", "weekly", "biweekly", "monthly"] as const;
-
 function dateInputValue(value?: string | null) {
   if (!value) return "";
   return String(value).slice(0, 10);
-}
-
-function emptyMedication(): MedicationForm {
-  return {
-    dosage: "",
-    medication_name: "",
-    purpose: "",
-    schedule_times: "",
-  };
-}
-
-function emptyCaregiver(): CaregiverForm {
-  return {
-    caretaker_name: "",
-    caretaker_phone: "",
-  };
-}
-
-function defaultService(service?: ServiceForm | null, fallbackFrequency = "weekly"): ServiceForm {
-  return {
-    enabled: Boolean(service?.enabled),
-    frequency: service?.frequency || fallbackFrequency,
-    preferred_time: service?.preferred_time || "",
-  };
-}
-
-function isValidPhoneInput(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return true;
-  const digits = trimmed.replace(/\D/g, "");
-  return /^\+[1-9][0-9\s().-]{6,24}$/.test(trimmed) && digits.length >= 8 && digits.length <= 15;
-}
-
-function isValidTime(value: string) {
-  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
-}
-
-function splitScheduleTimes(value: string) {
-  return value
-    .split(",")
-    .map((time) => time.trim())
-    .filter(Boolean);
-}
-
-function hasMedicationDetail(medication: MedicationForm) {
-  return Boolean(
-    medication.medication_name.trim() ||
-      medication.dosage.trim() ||
-      medication.purpose.trim() ||
-      medication.schedule_times.trim(),
-  );
-}
-
-function hasCaregiverDetail(caregiver: CaregiverForm) {
-  return Boolean(caregiver.caretaker_name.trim() || caregiver.caretaker_phone.trim());
 }
 
 function userFormState(user?: Partial<OperationalProfileUser> | null, defaultLanguage = "de") {
@@ -127,7 +67,7 @@ function userFormState(user?: Partial<OperationalProfileUser> | null, defaultLan
 
 function medicationFormState(profileData?: OperationalProfileResponse | null) {
   const medications = profileData?.medications ?? [];
-  if (!medications.length) return [emptyMedication()];
+  if (!medications.length) return [emptyMedicationIntake()];
 
   return medications.map((medication) => ({
     dosage: medication.dosage || "",
@@ -139,7 +79,7 @@ function medicationFormState(profileData?: OperationalProfileResponse | null) {
 
 function caregiverFormState(profileData?: OperationalProfileResponse | null) {
   const caregivers = profileData?.caregivers ?? [];
-  if (!caregivers.length) return [emptyCaregiver()];
+  if (!caregivers.length) return [emptyCaregiverIntake()];
 
   return caregivers.map((caregiver) => ({
     caretaker_name: caregiver.caretaker_name || "",
@@ -152,7 +92,8 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
   const { t } = useLanguage();
   const { data: currentContext } = useCurrentUserContext();
   const isEditing = Boolean(user?.id);
-  const defaultLanguage = currentContext?.user.organization?.defaultLanguage || "de";
+  const defaultLanguage = currentContext?.user?.organization?.defaultLanguage || "de";
+  const requiredLabel = t("userForm.required");
 
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(() => userFormState(user, defaultLanguage));
@@ -160,12 +101,12 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
   const [mobilityNeeds, setMobilityNeeds] = useState<string[]>([]);
   const [newCondition, setNewCondition] = useState("");
   const [newMobilityNeed, setNewMobilityNeed] = useState("");
-  const [medications, setMedications] = useState<MedicationForm[]>([emptyMedication()]);
-  const [caregivers, setCaregivers] = useState<CaregiverForm[]>([emptyCaregiver()]);
+  const [medications, setMedications] = useState<MedicationIntake[]>([emptyMedicationIntake()]);
+  const [caregivers, setCaregivers] = useState<CaregiverIntake[]>([emptyCaregiverIntake()]);
   const [userConsent, setUserConsent] = useState(false);
   const [caregiverConsent, setCaregiverConsent] = useState(false);
-  const [checkins, setCheckins] = useState<ServiceForm>(defaultService(null));
-  const [brainCoach, setBrainCoach] = useState<ServiceForm>(defaultService(null, "weekly"));
+  const [checkins, setCheckins] = useState<ServiceIntake>(defaultServiceIntake(null));
+  const [brainCoach, setBrainCoach] = useState<ServiceIntake>(defaultServiceIntake(null, "weekly"));
 
   useEffect(() => {
     if (!open) return;
@@ -179,16 +120,16 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
     setCaregivers(caregiverFormState(profileData));
     setUserConsent(Boolean(profileData?.consent?.consent_given));
     setCaregiverConsent(Boolean(profileData?.consent?.caretaker_consent));
-    setCheckins(defaultService(profileData?.checkins ?? null, "weekly"));
-    setBrainCoach(defaultService(profileData?.brainCoach ?? null, "weekly"));
+    setCheckins(defaultServiceIntake(profileData?.checkins ?? null, "weekly"));
+    setBrainCoach(defaultServiceIntake(profileData?.brainCoach ?? null, "weekly"));
   }, [defaultLanguage, open, profileData, user]);
 
   const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
-  const updateMedication = (index: number, key: keyof MedicationForm, value: string) =>
+  const updateMedication = (index: number, key: keyof MedicationIntake, value: string) =>
     setMedications((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
-  const updateCaregiver = (index: number, key: keyof CaregiverForm, value: string) =>
+  const updateCaregiver = (index: number, key: keyof CaregiverIntake, value: string) =>
     setCaregivers((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
-  const updateService = (service: "checkins" | "brainCoach", key: keyof ServiceForm, value: string | boolean) => {
+  const updateService = (service: "checkins" | "brainCoach", key: keyof ServiceIntake, value: string | boolean) => {
     const setter = service === "checkins" ? setCheckins : setBrainCoach;
     setter((current) => ({ ...current, [key]: value }));
   };
@@ -215,12 +156,12 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
       return;
     }
 
-    if (!isValidPhoneInput(form.phone)) {
+    if (!isValidIntakePhone(form.phone)) {
       toast({ title: t("userForm.validation.phone"), variant: "destructive" });
       return;
     }
 
-    if (caregivers.some((caregiver) => caregiver.caretaker_phone.trim() && !isValidPhoneInput(caregiver.caretaker_phone))) {
+    if (caregivers.some((caregiver) => caregiver.caretaker_phone.trim() && !isValidIntakePhone(caregiver.caretaker_phone))) {
       toast({ title: t("userForm.validation.caregiverPhone"), variant: "destructive" });
       return;
     }
@@ -230,67 +171,32 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
       return;
     }
 
-    if (medications.some((medication) => splitScheduleTimes(medication.schedule_times).some((time) => !isValidTime(time)))) {
+    if (medications.some((medication) => splitIntakeList(medication.schedule_times).some((time) => !isValidIntakeTime(time)))) {
       toast({ title: t("userForm.validation.medicationTimes"), variant: "destructive" });
       return;
     }
 
-    if ([checkins, brainCoach].some((service) => service.preferred_time && !isValidTime(service.preferred_time))) {
+    if ([checkins, brainCoach].some((service) => service.preferred_time && !isValidIntakeTime(service.preferred_time))) {
       toast({ title: t("userForm.validation.preferredTime"), variant: "destructive" });
       return;
     }
 
-    const careProfilePayload = {
-      brainCoach: {
-        enabled: brainCoach.enabled,
-        frequency: brainCoach.frequency || null,
-        preferred_time: brainCoach.preferred_time || null,
-      },
-      caregivers: caregivers
-        .map((caregiver) => ({
-          caretaker_name: caregiver.caretaker_name.trim() || null,
-          caretaker_phone: caregiver.caretaker_phone.trim() || null,
-        }))
-        .filter((caregiver) => caregiver.caretaker_name || caregiver.caretaker_phone),
-      checkins: {
-        enabled: checkins.enabled,
-        frequency: checkins.frequency || null,
-        preferred_time: checkins.preferred_time || null,
-      },
-      consent: {
-        caretaker_consent: caregiverConsent,
-        consent_given: userConsent,
-      },
-      health: {
-        health_conditions: healthConditions,
-        mobility_needs: mobilityNeeds,
-      },
-      medications: medications
-        .map((medication) => ({
-          dosage: medication.dosage.trim() || null,
-          medication_name: medication.medication_name.trim(),
-          purpose: medication.purpose.trim() || null,
-          schedule_times: splitScheduleTimes(medication.schedule_times),
-        }))
-        .filter((medication) => medication.medication_name),
-    };
-
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
-        ...careProfilePayload,
-        city: form.city.trim() || null,
-        date_of_birth: form.date_of_birth || null,
-        emergency_notes: form.emergency_notes.trim() || null,
-        first_name: form.first_name.trim(),
-        gender: form.gender || null,
-        house_number: form.house_number.trim() || null,
-        language: form.language || defaultLanguage,
-        last_name: form.last_name.trim(),
-        phone: form.phone.trim() || null,
-        post_code: form.post_code.trim() || null,
-        street: form.street.trim() || null,
-      };
+      const payload = buildUserIntakePayload({
+        identity: form,
+        brainCoach,
+        caregiverConsent,
+        caregiverSource: "manual",
+        caregivers,
+        checkins,
+        defaultLanguage,
+        healthConditions,
+        includeEmptyRelated: true,
+        medications,
+        mobilityNeeds,
+        userConsent,
+      });
 
       const response = await apiFetch<SavedUserResponse>(
         isEditing ? `/api/v1/user-dashboard/users/${user!.id}` : "/api/v1/user-dashboard/users",
@@ -334,22 +240,30 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
         </DialogHeader>
 
         <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto px-7 py-5">
+          <Alert className="border-primary/20 bg-white text-foreground">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            <AlertTitle>{t("userForm.requiredFieldsTitle")}</AlertTitle>
+            <AlertDescription>{t("userForm.requiredFieldsDescription")}</AlertDescription>
+          </Alert>
+
           <SectionPanel
             description={t("userForm.personSectionDescription")}
             icon={UserRound}
             title={t("userForm.personSectionTitle")}
           >
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label={t("userForm.firstName")} htmlFor="user-first-name">
+              <Field label={t("userForm.firstName")} htmlFor="user-first-name" required requiredLabel={requiredLabel}>
                 <Input
                   id="user-first-name"
+                  required
                   value={form.first_name}
                   onChange={(event) => update("first_name", event.target.value)}
                 />
               </Field>
-              <Field label={t("userForm.lastName")} htmlFor="user-last-name">
+              <Field label={t("userForm.lastName")} htmlFor="user-last-name" required requiredLabel={requiredLabel}>
                 <Input
                   id="user-last-name"
+                  required
                   value={form.last_name}
                   onChange={(event) => update("last_name", event.target.value)}
                 />
@@ -388,10 +302,12 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
-                    <CareSelectItem value="unspecified">{t("userForm.unspecified")}</CareSelectItem>
-                    <CareSelectItem value="female">{t("userForm.genderFemale")}</CareSelectItem>
-                    <CareSelectItem value="male">{t("userForm.genderMale")}</CareSelectItem>
-                    <CareSelectItem value="other">{t("userForm.genderOther")}</CareSelectItem>
+                    <SelectGroup>
+                      <CareSelectItem value="unspecified">{t("userForm.unspecified")}</CareSelectItem>
+                      <CareSelectItem value="female">{t("userForm.genderFemale")}</CareSelectItem>
+                      <CareSelectItem value="male">{t("userForm.genderMale")}</CareSelectItem>
+                      <CareSelectItem value="other">{t("userForm.genderOther")}</CareSelectItem>
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </Field>
@@ -401,14 +317,22 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
-                    <CareSelectItem value="en">{t("settings.language.en")}</CareSelectItem>
-                    <CareSelectItem value="de">{t("settings.language.de")}</CareSelectItem>
-                    <CareSelectItem value="es">{t("settings.language.es")}</CareSelectItem>
+                    <SelectGroup>
+                      <CareSelectItem value="en">{t("settings.language.en")}</CareSelectItem>
+                      <CareSelectItem value="de">{t("settings.language.de")}</CareSelectItem>
+                      <CareSelectItem value="es">{t("settings.language.es")}</CareSelectItem>
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </Field>
             </div>
+          </SectionPanel>
 
+          <SectionPanel
+            description={t("userForm.addressSectionDescription")}
+            icon={MapPin}
+            title={t("userForm.addressSectionTitle")}
+          >
             <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
               <Field label={t("userForm.street")} htmlFor="user-street">
                 <Input id="user-street" value={form.street} onChange={(event) => update("street", event.target.value)} />
@@ -438,9 +362,10 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
             title={t("userForm.medicalSectionTitle")}
             tone="pink"
           >
-            <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium leading-relaxed text-red-800">
-              {t("userForm.minimumNecessaryNotice")}
-            </div>
+            <Alert>
+              <ShieldCheck />
+              <AlertDescription>{t("userForm.minimumNecessaryNotice")}</AlertDescription>
+            </Alert>
             <div className="grid gap-4 lg:grid-cols-2">
               <ChipEditor
                 addLabel={t("userForm.addCondition")}
@@ -482,68 +407,82 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
             tone="orange"
           >
             <div className="space-y-3">
-              {medications.map((medication, index) => (
-                <div key={`medication-${index}`} className="rounded-2xl border border-border bg-white p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-sm font-bold text-foreground">
-                      {t("userForm.medicationItem")} {index + 1}
-                    </p>
-                    {medications.length > 1 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 rounded-full px-2 text-muted-foreground hover:text-destructive"
-                        onClick={() => setMedications((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+              {medications.map((medication, index) => {
+                const medicationHasDetail = hasMedicationDetail(medication);
+
+                return (
+                  <div key={`medication-${index}`} className="rounded-2xl border border-border bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-foreground">
+                        {t("userForm.medicationItem")} {index + 1}
+                      </p>
+                      {medications.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 rounded-full px-2 text-muted-foreground hover:text-destructive"
+                          onClick={() => setMedications((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        >
+                          <X className="h-4 w-4" />
+                          <span className="sr-only">{t("userForm.removeMedication")}</span>
+                        </Button>
+                      )}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field
+                        label={t("userForm.medicationName")}
+                        htmlFor={`user-medication-name-${index}`}
+                        required={medicationHasDetail}
+                        requiredLabel={t("userForm.requiredWhenFilled")}
                       >
-                        <X className="h-4 w-4" />
-                        <span className="sr-only">{t("userForm.removeMedication")}</span>
-                      </Button>
-                    )}
+                        <Input
+                          id={`user-medication-name-${index}`}
+                          required={medicationHasDetail}
+                          value={medication.medication_name}
+                          onChange={(event) => updateMedication(index, "medication_name", event.target.value)}
+                        />
+                      </Field>
+                      <Field label={t("userForm.medicationDosage")} htmlFor={`user-medication-dosage-${index}`}>
+                        <Input
+                          id={`user-medication-dosage-${index}`}
+                          placeholder={t("userForm.medicationDosagePlaceholder")}
+                          value={medication.dosage}
+                          onChange={(event) => updateMedication(index, "dosage", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <Field label={t("userForm.medicationPurpose")} htmlFor={`user-medication-purpose-${index}`}>
+                        <Input
+                          id={`user-medication-purpose-${index}`}
+                          placeholder={t("userForm.medicationPurposePlaceholder")}
+                          value={medication.purpose}
+                          onChange={(event) => updateMedication(index, "purpose", event.target.value)}
+                        />
+                      </Field>
+                      <Field
+                        helper={t("userForm.medicationTimesHelp")}
+                        label={t("userForm.medicationTimes")}
+                        htmlFor={`user-medication-times-${index}`}
+                      >
+                        <Input
+                          id={`user-medication-times-${index}`}
+                          placeholder={t("userForm.medicationTimesPlaceholder")}
+                          value={medication.schedule_times}
+                          onChange={(event) => updateMedication(index, "schedule_times", event.target.value)}
+                        />
+                      </Field>
+                    </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Field label={t("userForm.medicationName")} htmlFor={`user-medication-name-${index}`}>
-                      <Input
-                        id={`user-medication-name-${index}`}
-                        value={medication.medication_name}
-                        onChange={(event) => updateMedication(index, "medication_name", event.target.value)}
-                      />
-                    </Field>
-                    <Field label={t("userForm.medicationDosage")} htmlFor={`user-medication-dosage-${index}`}>
-                      <Input
-                        id={`user-medication-dosage-${index}`}
-                        placeholder={t("userForm.medicationDosagePlaceholder")}
-                        value={medication.dosage}
-                        onChange={(event) => updateMedication(index, "dosage", event.target.value)}
-                      />
-                    </Field>
-                  </div>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <Field label={t("userForm.medicationPurpose")} htmlFor={`user-medication-purpose-${index}`}>
-                      <Input
-                        id={`user-medication-purpose-${index}`}
-                        placeholder={t("userForm.medicationPurposePlaceholder")}
-                        value={medication.purpose}
-                        onChange={(event) => updateMedication(index, "purpose", event.target.value)}
-                      />
-                    </Field>
-                    <Field helper={t("userForm.medicationTimesHelp")} label={t("userForm.medicationTimes")} htmlFor={`user-medication-times-${index}`}>
-                      <Input
-                        id={`user-medication-times-${index}`}
-                        placeholder={t("userForm.medicationTimesPlaceholder")}
-                        value={medication.schedule_times}
-                        onChange={(event) => updateMedication(index, "schedule_times", event.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <Button
               type="button"
               variant="outline"
               className="h-10 w-fit rounded-full border-primary/20 bg-primary/5 px-4 text-sm font-semibold text-primary hover:bg-primary/10 hover:text-primary"
-              onClick={() => setMedications((current) => [...current, emptyMedication()])}
+              onClick={() => setMedications((current) => [...current, emptyMedicationIntake()])}
             >
               <Plus className="mr-2 h-4 w-4" />
               {t("userForm.addMedicationRow")}
@@ -617,7 +556,7 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
               type="button"
               variant="outline"
               className="h-10 w-fit rounded-full border-primary/20 bg-primary/5 px-4 text-sm font-semibold text-primary hover:bg-primary/10 hover:text-primary"
-              onClick={() => setCaregivers((current) => [...current, emptyCaregiver()])}
+              onClick={() => setCaregivers((current) => [...current, emptyCaregiverIntake()])}
             >
               <Plus className="mr-2 h-4 w-4" />
               {t("userForm.addCaregiverRow")}
@@ -672,15 +611,29 @@ function Field({
   helper,
   htmlFor,
   label,
+  required = false,
+  requiredLabel,
 }: {
   children: ReactNode;
   helper?: string;
   htmlFor?: string;
   label: string;
+  required?: boolean;
+  requiredLabel?: string;
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={htmlFor}>{label}</Label>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {required && requiredLabel ? (
+          <span
+            aria-hidden="true"
+            className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-primary"
+          >
+            {requiredLabel}
+          </span>
+        ) : null}
+      </div>
       {children}
       {helper && <p className="text-xs leading-relaxed text-muted-foreground">{helper}</p>}
     </div>
@@ -800,7 +753,7 @@ function SwitchRow({
         <p className="text-sm font-bold text-foreground">{label}</p>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
       </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} />
+      <Switch aria-label={label} checked={checked} onCheckedChange={onCheckedChange} />
     </div>
   );
 }
@@ -831,7 +784,7 @@ function ServiceEditor({
           <p className="text-sm font-bold text-foreground">{label}</p>
           <p className="mt-1 text-xs text-muted-foreground">{t("userForm.followUpCardDescription")}</p>
         </div>
-        <Switch checked={enabled} onCheckedChange={onEnabledChange} />
+        <Switch aria-label={label} checked={enabled} onCheckedChange={onEnabledChange} />
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label={t("userForm.frequency")}>
@@ -840,11 +793,13 @@ function ServiceEditor({
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
-              {cadenceOptions.map((option) => (
-                <CareSelectItem key={option} value={option}>
-                  {t(`userForm.frequency.${option}`)}
-                </CareSelectItem>
-              ))}
+              <SelectGroup>
+                {intakeCadenceOptions.map((option) => (
+                  <CareSelectItem key={option} value={option}>
+                    {t(`userForm.frequency.${option}`)}
+                  </CareSelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </Field>
