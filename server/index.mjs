@@ -4115,6 +4115,62 @@ async function loadCareProviders(filters = {}, context) {
         WHERE a.provider_type = 'field_staff'
           AND u.organization_id = $3
         GROUP BY a.field_staff_id
+      ),
+      legacy_caregiver_directory AS (
+        SELECT
+          CONCAT(
+            'legacy-caregiver:',
+            u.organization_id::text,
+            ':',
+            COALESCE(
+              NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), ''),
+              LOWER(COALESCE(NULLIF(c.caretaker_name, ''), 'care contact'))
+            )
+          ) AS id,
+          CONCAT(
+            'legacy-caregiver:',
+            u.organization_id::text,
+            ':',
+            COALESCE(
+              NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), ''),
+              LOWER(COALESCE(NULLIF(c.caretaker_name, ''), 'care contact'))
+            )
+          ) AS provider_id,
+          COALESCE(
+            NULLIF((array_agg(c.caretaker_name ORDER BY c.created_at DESC, c.id DESC))[1], ''),
+            'Care contact'
+          ) AS display_name,
+          (array_agg(c.caretaker_phone ORDER BY c.created_at DESC, c.id DESC))[1] AS phone,
+          NULL::text AS role,
+          NULL::text AS team,
+          'active'::text AS status,
+          'onboarding'::text AS source,
+          true AS active,
+          COUNT(DISTINCT c.vyva_user_id)::int AS assignment_count,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'id', u.id::text,
+              'name', u.first_name || ' ' || u.last_name,
+              'city', u.city
+            )
+            ORDER BY u.last_name ASC, u.first_name ASC
+          ) AS linked_users,
+          'Caregiver'::text AS relationship_label,
+          MAX(c.created_at) AS created_at,
+          MAX(c.updated_at) AS updated_at,
+          NULLIF(regexp_replace(COALESCE((array_agg(c.caretaker_phone ORDER BY c.created_at DESC, c.id DESC))[1], ''), '[^0-9]', '', 'g'), '') AS phone_digits,
+          u.organization_id::text AS legacy_organization_id
+        FROM public.vyva_user_caregivers c
+        JOIN public.vyva_users u ON u.id = c.vyva_user_id
+        WHERE
+          u.organization_id = $3
+          AND (NULLIF(c.caretaker_name, '') IS NOT NULL OR NULLIF(c.caretaker_phone, '') IS NOT NULL)
+        GROUP BY
+          u.organization_id,
+          COALESCE(
+            NULLIF(regexp_replace(COALESCE(c.caretaker_phone, ''), '[^0-9]', '', 'g'), ''),
+            LOWER(COALESCE(NULLIF(c.caretaker_name, ''), 'care contact'))
+          )
       )
       SELECT
         c.id::text AS id,
@@ -4129,6 +4185,7 @@ async function loadCareProviders(filters = {}, context) {
         c.active,
         COALESCE(cc.assignment_count, 0) AS assignment_count,
         COALESCE(cc.linked_users, '[]'::json) AS linked_users,
+        NULL::text AS relationship_label,
         c.created_at,
         c.updated_at
       FROM public.care_provider_contacts c
@@ -4152,6 +4209,7 @@ async function loadCareProviders(filters = {}, context) {
         fs.active,
         COALESCE(fc.assignment_count, 0) AS assignment_count,
         COALESCE(fc.linked_users, '[]'::json) AS linked_users,
+        NULL::text AS relationship_label,
         fs.created_at,
         fs.updated_at
       FROM public.field_staff fs
@@ -4161,6 +4219,38 @@ async function loadCareProviders(filters = {}, context) {
         AND fs.organization_id = $3
         AND ($1::text IS NULL OR LOWER(fs.full_name) LIKE '%' || $1 || '%' OR LOWER(COALESCE(fs.team, '')) LIKE '%' || $1 || '%' OR COALESCE(fs.phone, '') LIKE '%' || $1 || '%')
         AND ($2::text IS NULL OR $2 = 'field_staff')
+      UNION ALL
+      SELECT
+        lc.id,
+        'caregiver' AS provider_type,
+        lc.provider_id,
+        lc.display_name,
+        lc.phone,
+        lc.role,
+        lc.team,
+        lc.status,
+        lc.source,
+        lc.active,
+        lc.assignment_count,
+        lc.linked_users,
+        lc.relationship_label,
+        lc.created_at,
+        lc.updated_at
+      FROM legacy_caregiver_directory lc
+      LEFT JOIN public.care_provider_contacts existing_contact
+        ON existing_contact.organization_id::text = lc.legacy_organization_id
+        AND (
+          (lc.phone_digits IS NOT NULL AND existing_contact.phone_digits = lc.phone_digits)
+          OR (
+            lc.phone_digits IS NULL
+            AND existing_contact.phone_digits IS NULL
+            AND LOWER(COALESCE(existing_contact.full_name, '')) = LOWER(lc.display_name)
+          )
+        )
+      WHERE
+        existing_contact.id IS NULL
+        AND ($1::text IS NULL OR LOWER(lc.display_name) LIKE '%' || $1 || '%' OR COALESCE(lc.phone, '') LIKE '%' || $1 || '%')
+        AND ($2::text IS NULL OR $2 = 'caregiver')
       ORDER BY display_name ASC
       LIMIT 100
     `,
