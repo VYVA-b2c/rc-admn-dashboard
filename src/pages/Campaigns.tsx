@@ -1857,6 +1857,18 @@ export default function Campaigns() {
                           </div>
 
                           <div className="space-y-2">
+                            <Label htmlFor="campaign-inline-script">{t("campaigns.call.script")}</Label>
+                            <Textarea
+                              id="campaign-inline-script"
+                              value={form.callScript}
+                              onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                              placeholder={t("campaigns.call.scriptPlaceholder")}
+                              className="min-h-[180px] resize-y bg-white text-sm leading-6"
+                            />
+                            <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                          </div>
+
+                          <div className="space-y-2">
                             <Label htmlFor="campaign-inline-city">{t("campaigns.form.city")}</Label>
                             <Input
                               id="campaign-inline-city"
@@ -1869,18 +1881,6 @@ export default function Campaigns() {
                             <datalist id="campaign-inline-city-options">
                               {availableCities.map((city) => <option key={city} value={city} />)}
                             </datalist>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="campaign-inline-script">{t("campaigns.call.script")}</Label>
-                            <Textarea
-                              id="campaign-inline-script"
-                              value={form.callScript}
-                              onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
-                              placeholder={t("campaigns.call.scriptPlaceholder")}
-                              className="min-h-[180px] resize-y bg-white text-sm leading-6"
-                            />
-                            <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
                           </div>
                         </div>
 

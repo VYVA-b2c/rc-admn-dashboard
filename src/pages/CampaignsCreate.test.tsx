@@ -185,8 +185,11 @@ describe("Campaigns create flow", () => {
     expect(screen.getByText("Selected format")).toBeInTheDocument();
     expect(screen.queryByText("Likely first recipients")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Campaign name")).toHaveValue("Heatwave alert");
-    expect(screen.getByLabelText("City")).toHaveValue("Tarifa");
-    expect((screen.getByLabelText("Call script") as HTMLTextAreaElement).value).toContain("heatwave alert");
+    const scriptField = screen.getByLabelText("Call script") as HTMLTextAreaElement;
+    const cityField = screen.getByLabelText("City");
+    expect(scriptField.compareDocumentPosition(cityField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(cityField).toHaveValue("Tarifa");
+    expect(scriptField.value).toContain("heatwave alert");
     expect(screen.getByRole("button", { name: "Save draft" })).toBeInTheDocument();
   });
 
