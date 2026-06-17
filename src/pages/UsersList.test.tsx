@@ -90,7 +90,7 @@ function renderUsersList() {
 
 function openAddUserDialog() {
   renderUsersList();
-  const createButton = screen.getByRole("button", { name: "Create client" });
+  const createButton = screen.getByRole("button", { name: "Add client" });
   fireEvent.click(createButton);
   return screen.getByRole("dialog");
 }
