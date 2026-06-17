@@ -22,7 +22,6 @@ export default function Login() {
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const rateLimitUntil = useRef(0);
   const magicLinkInFlight = useRef(false);
   const nextPath = safeNextPath(searchParams.get("next"));
 
@@ -36,10 +35,6 @@ export default function Login() {
     }
 
     if (magicLinkInFlight.current) return;
-    if (Date.now() < rateLimitUntil.current) {
-      toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
-      return;
-    }
 
     magicLinkInFlight.current = true;
     setLoading(true);
@@ -48,16 +43,13 @@ export default function Login() {
       if (error) {
         const msg = error.message?.toLowerCase() ?? "";
         if (msg.includes("rate") || msg.includes("429") || msg.includes("too many") || msg.includes("wait")) {
-          rateLimitUntil.current = Date.now() + 60_000;
           toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
         } else {
           toast.error(t("login.magicLinkFailed"), { description: error.message });
         }
       } else if (delayed) {
-        rateLimitUntil.current = Date.now() + 60_000;
         toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
       } else {
-        rateLimitUntil.current = Date.now() + 60_000;
         toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkSentDesc") });
       }
     } finally {
