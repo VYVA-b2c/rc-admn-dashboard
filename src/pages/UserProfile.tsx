@@ -406,6 +406,34 @@ export default function UserProfile() {
     return date;
   };
 
+  const scheduledStatusFor = (date: Date) =>
+    date.getTime() <= Date.now() ? t("checkin.outcomeMissedToday") : t("checkin.outcomeScheduledToday");
+
+  const medicationScheduleTimes = (medication: OperationalMedication) =>
+    Array.isArray(medication.schedule_times)
+      ? medication.schedule_times.filter((time) => typeof time === "string" && /^\d{2}:\d{2}$/.test(time))
+      : [];
+
+  const latestMedicationReminderCandidate = () => {
+    const candidates = medications
+      .filter((medication) => medication.reminders_enabled !== false)
+      .flatMap((medication) =>
+        medicationScheduleTimes(medication).map((time) => ({
+          medication,
+          time,
+          date: scheduledTodayAt(time),
+        })),
+      )
+      .filter((candidate): candidate is { medication: OperationalMedication; time: string; date: Date } => Boolean(candidate.date));
+
+    const due = candidates
+      .filter((candidate) => candidate.date.getTime() <= Date.now())
+      .sort((a, b) => b.date.getTime() - a.date.getTime())[0];
+    if (due) return due;
+
+    return candidates.sort((a, b) => a.date.getTime() - b.date.getTime())[0] || null;
+  };
+
   const scheduledContactFallback = () => {
     const preferredTime = recordString(checkins, ["preferred_time", "preferredTime"]);
     const scheduledAt = scheduledTodayAt(preferredTime);
@@ -449,6 +477,18 @@ export default function UserProfile() {
           tone: outcomeTone(outcome),
           icon: CheckCircle2,
         });
+      } else if (Boolean(checkins.enabled) && checkins.preferred_time) {
+        const scheduledAt = scheduledTodayAt(checkins.preferred_time);
+        if (scheduledAt) {
+          const isMissed = scheduledAt.getTime() <= Date.now();
+          events.push({
+            date: scheduledAt.toISOString(),
+            label: t("profile.timeline.lastCheckin"),
+            detail: `${scheduledStatusFor(scheduledAt)} - ${checkins.preferred_time}`,
+            tone: isMissed ? "red" : "orange",
+            icon: PhoneCall,
+          });
+        }
       }
     }
     if (brainCoach) {
@@ -462,6 +502,18 @@ export default function UserProfile() {
           tone: outcomeTone(outcome),
           icon: Brain,
         });
+      } else if (Boolean(brainCoach.enabled) && brainCoach.preferred_time) {
+        const scheduledAt = scheduledTodayAt(brainCoach.preferred_time);
+        if (scheduledAt) {
+          const isMissed = scheduledAt.getTime() <= Date.now();
+          events.push({
+            date: scheduledAt.toISOString(),
+            label: t("profile.timeline.brainCoachSession"),
+            detail: `${scheduledStatusFor(scheduledAt)} - ${brainCoach.preferred_time}`,
+            tone: isMissed ? "red" : "orange",
+            icon: Brain,
+          });
+        }
       }
     }
     if (medicationActivity) {
@@ -474,6 +526,18 @@ export default function UserProfile() {
           label: t("profile.service.medications"),
           detail: [medicationName, formatOutcomeLabel(status)].filter(Boolean).join(" - "),
           tone: outcomeTone(status),
+          icon: Pill,
+        });
+      }
+    } else {
+      const reminder = latestMedicationReminderCandidate();
+      if (reminder) {
+        const isDue = reminder.date.getTime() <= Date.now();
+        events.push({
+          date: reminder.date.toISOString(),
+          label: t("profile.timeline.medicationReminder"),
+          detail: [reminder.medication.medication_name, isDue ? t("checkin.outcome.unconfirmed") : t("checkin.outcome.pending"), reminder.time].filter(Boolean).join(" - "),
+          tone: isDue ? "orange" : "primary",
           icon: Pill,
         });
       }
@@ -584,9 +648,9 @@ export default function UserProfile() {
 
           <div className="mt-6 border-t border-border pt-5">
             <div className="flex flex-wrap gap-2">
-              <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callNow")} onClick={() => navigate(`/risk-queue/${user.id}/prepare-call`)} />
-              <ActionButton icon={MessageCircle} label={t("profile.sendWhatsApp")} onClick={() => handleOperationalAction("profile.action.whatsapp")} />
-              <ActionButton icon={Users} label={t("profile.contactCaregiver")} onClick={() => handleOperationalAction("profile.action.caregiver")} />
+              <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callGatewayRequired")} onClick={() => handleOperationalAction("profile.action.callGatewayRequired")} />
+              <ActionButton icon={MessageCircle} label={t("profile.whatsAppGatewayRequired")} onClick={() => handleOperationalAction("profile.action.whatsAppGatewayRequired")} />
+              <ActionButton icon={Users} label={t("profile.careProviderGatewayRequired")} onClick={() => handleOperationalAction("profile.action.careProviderGatewayRequired")} />
               <ActionButton icon={Pencil} label={t("profile.addNote")} onClick={openAddNoteDialog} />
             </div>
           </div>
