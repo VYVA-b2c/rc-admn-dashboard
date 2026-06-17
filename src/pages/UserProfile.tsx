@@ -400,66 +400,24 @@ export default function UserProfile() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-[320px_1fr]">
-        <Card className="rounded-2xl border-border bg-white shadow-sm">
-          <CardHeader className="flex flex-row items-center gap-2 pb-2">
-            <Users className="h-5 w-5 text-primary" />
-            <CardTitle className="text-base font-bold">{t("profile.keyData")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <InfoRow label={t("profile.age")} value={age ? copy("profile.ageYears", { age }) : null} />
-            <InfoRow label={t("profile.livesAlone")} value={context.livingContextKey ? t(context.livingContextKey) : null} />
-            <InfoRow label={t("profile.language")} value={user.language ? String(user.language).toUpperCase() : null} />
-            <InfoRow label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
-            <InfoRow label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
-            <InfoRow label={t("profile.address")} value={address || null} />
-            <InfoRow label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
-            <InfoRow label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-2xl border-border bg-white shadow-sm">
-          <CardContent className="p-6">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-xs font-bold text-white">V</div>
-              <h2 className="text-lg font-bold text-foreground">{t("profile.summaryBeforeCall")}</h2>
-            </div>
-            <p className="mt-4 text-base leading-7 text-muted-foreground">
-              {copy(context.summaryKey, { name: firstName })}
-            </p>
-
-            <div className="mt-6 grid gap-6 lg:grid-cols-2">
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.recentSignals")}</h3>
-                <ul className="mt-3 space-y-2">
-                  {context.recentSignalKeys.map((signalKey) => (
-                    <li key={signalKey} className="flex gap-2 text-sm font-medium text-foreground">
-                      <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-red-500" />
-                      <span>{t(signalKey)}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.askFirst")}</h3>
-                <ol className="mt-3 space-y-2">
-                  {context.recommendedQuestionKeys.map((questionKey, index) => (
-                    <li key={questionKey} className="flex gap-3 text-sm font-medium text-muted-foreground">
-                      <span className="font-bold text-primary">{index + 1}.</span>
-                      <span>{t(questionKey)}</span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            </div>
-
-            <div className="mt-6 rounded-2xl border-l-4 border-primary bg-primary/10 px-5 py-4">
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-primary">{t("profile.suggestedOpening")}</p>
-              <p className="mt-2 text-base leading-7 text-foreground">{copy(context.suggestedOpeningKey, { name: firstName })}</p>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardHeader className="flex flex-row items-center gap-2 pb-2">
+          <Users className="h-5 w-5 text-primary" />
+          <CardTitle className="text-base font-bold">{t("profile.keyData")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <InfoTile label={t("profile.age")} value={age ? copy("profile.ageYears", { age }) : null} />
+            <InfoTile label={t("profile.livesAlone")} value={context.livingContextKey ? t(context.livingContextKey) : null} />
+            <InfoTile label={t("profile.language")} value={user.language ? String(user.language).toUpperCase() : null} />
+            <InfoTile label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
+            <InfoTile label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
+            <InfoTile label={t("profile.address")} value={address || null} />
+            <InfoTile label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
+            <InfoTile label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-5 xl:grid-cols-2">
         <Card className="rounded-2xl border-border bg-white shadow-sm">
@@ -804,6 +762,15 @@ function InfoRow({ label, value }: { label: string; value?: string | null }) {
     <div className="flex items-start justify-between gap-4 border-b border-border/70 py-3 last:border-0">
       <span className="text-sm font-medium text-muted-foreground">{label}</span>
       <span className="max-w-[180px] text-right text-sm font-bold text-foreground">{value || "—"}</span>
+    </div>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-muted/25 px-4 py-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-sm font-bold leading-5 text-foreground">{value || "â€”"}</p>
     </div>
   );
 }
