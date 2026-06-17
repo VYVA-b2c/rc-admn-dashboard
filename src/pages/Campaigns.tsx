@@ -822,6 +822,20 @@ export default function Campaigns() {
     };
   };
 
+  const applyAiDraft = (draft: CampaignFormState) => {
+    const suggestion = buildAiSuggestion(draft);
+    setAiSuggestion(suggestion);
+    setForm((current) => current ? {
+      ...current,
+      templateKey: suggestion.templateKey,
+      name: suggestion.name,
+      audience: suggestion.audience,
+      objective: suggestion.objective,
+      callScript: suggestion.callScript,
+    } : current);
+    toast({ title: t("campaigns.ai.appliedTitle"), description: t("campaigns.ai.appliedDescription") });
+  };
+
   const openCreateDialog = (templateKey: TemplateKey = "general_announcement") => {
     setForm({
       ...defaultForm(templateKey, templateScript),
@@ -1928,6 +1942,34 @@ export default function Campaigns() {
                         placeholder={t("campaigns.form.namePlaceholder")}
                       />
                     </div>
+                    <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <span className="rounded-full bg-primary/10 p-2 text-primary">
+                          <Sparkles className="h-4 w-4" />
+                        </span>
+                        <p className="text-sm font-bold text-foreground">{t("campaigns.ai.title")}</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-ai-prompt-start">{t("campaigns.ai.promptLabel")}</Label>
+                        <Textarea
+                          id="campaign-ai-prompt-start"
+                          value={form.aiPrompt}
+                          onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
+                          placeholder={t("campaigns.ai.promptPlaceholder")}
+                          className="min-h-[110px] bg-white text-sm leading-6"
+                        />
+                        <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.ai.helper")}</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full rounded-full bg-white"
+                          onClick={() => applyAiDraft(form)}
+                        >
+                          <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                          {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                        </Button>
+                      </div>
+                    </div>
                     <div className="rounded-2xl border border-border bg-slate-50 p-4">
                       <div className="mb-3 flex items-start justify-between gap-3">
                         <div>
@@ -2171,7 +2213,10 @@ export default function Campaigns() {
                       type="button"
                       variant="outline"
                       className="w-full rounded-full"
-                      onClick={() => setAiSuggestion(buildAiSuggestion(form))}
+                      onClick={() => {
+                        const suggestion = buildAiSuggestion(form);
+                        setAiSuggestion(suggestion);
+                      }}
                     >
                       <Sparkles className="mr-2 h-4 w-4 text-primary" />
                       {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
@@ -2183,17 +2228,7 @@ export default function Campaigns() {
                         <Button
                           type="button"
                           className="w-full rounded-full bg-primary hover:bg-primary/90"
-                          onClick={() => {
-                            setForm((current) => current ? {
-                              ...current,
-                              templateKey: aiSuggestion.templateKey,
-                              name: aiSuggestion.name,
-                              audience: aiSuggestion.audience,
-                              objective: aiSuggestion.objective,
-                              callScript: aiSuggestion.callScript,
-                            } : current);
-                            toast({ title: t("campaigns.ai.appliedTitle"), description: t("campaigns.ai.appliedDescription") });
-                          }}
+                          onClick={() => applyAiDraft({ ...form, aiPrompt: form.aiPrompt })}
                         >
                           {t("campaigns.ai.apply")}
                         </Button>
