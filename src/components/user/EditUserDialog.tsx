@@ -82,7 +82,7 @@ function caregiverFormState(profileData?: OperationalProfileResponse | null) {
   const caregivers = profileData?.caregivers ?? [];
   if (!caregivers.length) return [emptyCaregiverIntake()];
 
-  return caregivers.map((caregiver) => ({
+  return caregivers.slice(0, 1).map((caregiver) => ({
     caretaker_name: caregiver.caretaker_name || "",
     caretaker_phone: caregiver.caretaker_phone || "",
   }));
@@ -518,58 +518,31 @@ export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user 
                 onCheckedChange={setCaregiverConsent}
               />
             </div>
-            <div className="space-y-3">
-              {caregivers.map((caregiver, index) => (
-                <div key={`caregiver-${index}`} className="rounded-2xl border border-border bg-white p-4">
-                  <div className="mb-3 flex items-center justify-between gap-3">
-                    <p className="text-sm font-bold text-foreground">
-                      {t("userForm.caregiverItem")} {index + 1}
-                    </p>
-                    {caregivers.length > 1 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 rounded-full px-2 text-muted-foreground hover:text-destructive"
-                        onClick={() => setCaregivers((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                      >
-                        <X className="h-4 w-4" />
-                        <span className="sr-only">{t("userForm.removeCaregiver")}</span>
-                      </Button>
-                    )}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Field label={t("userForm.caregiverName")} htmlFor={`user-caregiver-name-${index}`}>
-                      <Input
-                        id={`user-caregiver-name-${index}`}
-                        value={caregiver.caretaker_name}
-                        onChange={(event) => updateCaregiver(index, "caretaker_name", event.target.value)}
-                      />
-                    </Field>
-                    <Field helper={t("userForm.phoneHelp")} label={t("userForm.caregiverPhone")} htmlFor={`user-caregiver-phone-${index}`}>
-                      <Input
-                        id={`user-caregiver-phone-${index}`}
-                        type="tel"
-                        inputMode="tel"
-                        autoComplete="tel"
-                        placeholder={t("userForm.phonePlaceholder")}
-                        value={caregiver.caretaker_phone}
-                        onChange={(event) => updateCaregiver(index, "caretaker_phone", event.target.value)}
-                      />
-                    </Field>
-                  </div>
-                </div>
-              ))}
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="mb-3">
+                <p className="text-sm font-bold text-foreground">{t("userForm.caregiverItem")}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label={t("userForm.caregiverName")} htmlFor="user-caregiver-name-0">
+                  <Input
+                    id="user-caregiver-name-0"
+                    value={caregivers[0]?.caretaker_name || ""}
+                    onChange={(event) => updateCaregiver(0, "caretaker_name", event.target.value)}
+                  />
+                </Field>
+                <Field helper={t("userForm.phoneHelp")} label={t("userForm.caregiverPhone")} htmlFor="user-caregiver-phone-0">
+                  <Input
+                    id="user-caregiver-phone-0"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    placeholder={t("userForm.phonePlaceholder")}
+                    value={caregivers[0]?.caretaker_phone || ""}
+                    onChange={(event) => updateCaregiver(0, "caretaker_phone", event.target.value)}
+                  />
+                </Field>
+              </div>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-10 w-fit rounded-full border-primary/20 bg-primary/5 px-4 text-sm font-semibold text-primary hover:bg-primary/10 hover:text-primary"
-              onClick={() => setCaregivers((current) => [...current, emptyCaregiverIntake()])}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              {t("userForm.addCaregiverRow")}
-            </Button>
           </SectionPanel>
 
           <SectionPanel
