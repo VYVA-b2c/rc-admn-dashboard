@@ -285,6 +285,7 @@ export default function UserProfile() {
   const redCrossStaffProviders = careProviders.filter((provider) => provider.provider_type === "field_staff");
   const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
   const primaryProfessional = careProviders.find((provider) => provider.provider_type === "field_staff" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "field_staff") ?? null;
+  const additionalEmergencyContacts = emergencyContacts.filter((provider) => provider.id !== primaryCaregiver?.id);
   const sensors = safeArray(data.sensors);
   const alerts = safeArray(data.alerts);
   const checkins = data.checkins ?? null;
@@ -687,8 +688,8 @@ export default function UserProfile() {
               <div className="space-y-4">
                 <ProviderGroup
                   title={t("careProviders.informalShort")}
-                  providers={emergencyContacts}
-                  emptyLabel={t("careProviders.noEmergencyContacts")}
+                  providers={additionalEmergencyContacts}
+                  emptyLabel={t("careProviders.noAdditionalEmergencyContacts")}
                   canAssignProviders={canAssignProviders}
                   showAdminControls={showAdminControls}
                   onEditCaregiver={(provider) => {
