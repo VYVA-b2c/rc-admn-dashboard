@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -35,10 +36,17 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
-  const [relationship, setRelationship] = useState("");
+  const [staffRole, setStaffRole] = useState("primary_field_staff");
   const [notes, setNotes] = useState("");
   const [makePrimary, setMakePrimary] = useState(true);
   const [saving, setSaving] = useState(false);
+  const roleOptions = [
+    "primary_field_staff",
+    "field_coordinator",
+    "medication_support",
+    "checkin_operator",
+    "case_supervisor",
+  ];
 
   const { data: providers = [], isLoading } = useQuery({
     queryKey: ["care-providers", "field_staff", search],
@@ -56,7 +64,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
     onOpenChange(false);
     setSelectedProviderId(null);
     setSearch("");
-    setRelationship("");
+    setStaffRole("primary_field_staff");
     setNotes("");
     setMakePrimary(true);
   };
@@ -76,7 +84,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
       provider_type: "field_staff",
       provider_id: selectedProvider.provider_id,
       is_primary: makePrimary,
-      relationship_label: relationship.trim() || null,
+      relationship_label: t(`careProviders.staffRole.${staffRole}`),
       notes: notes.trim() || null,
     };
 
@@ -108,7 +116,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => (nextOpen ? onOpenChange(nextOpen) : close())}>
-      <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto rounded-2xl border-border bg-white p-0">
+      <DialogContent className="flex max-h-[88vh] max-w-2xl flex-col overflow-hidden rounded-2xl border-border bg-white p-0">
         <DialogHeader className="border-b border-border px-6 py-5">
           <DialogTitle className="flex items-center gap-2 text-xl font-bold">
             <UsersRound className="h-5 w-5 text-primary" />
@@ -119,10 +127,9 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-5 px-6 py-5">
-          <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
-            <p className="text-sm font-bold text-foreground">{t("careProviders.professional")}</p>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("careProviders.assignStaffHelp")}</p>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
+          <div className="rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3">
+            <p className="text-sm leading-6 text-muted-foreground">{t("careProviders.assignStaffHelp")}</p>
           </div>
 
           <div className="space-y-2">
@@ -176,13 +183,19 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="care-provider-relationship">{t("careProviders.relationship")}</Label>
-              <Input
-                id="care-provider-relationship"
-                value={relationship}
-                onChange={(event) => setRelationship(event.target.value)}
-                placeholder={t("careProviders.relationshipProfessionalPlaceholder")}
-              />
+              <Label htmlFor="care-provider-role">{t("careProviders.staffRole")}</Label>
+              <Select value={staffRole} onValueChange={setStaffRole}>
+                <SelectTrigger id="care-provider-role" className="h-11 rounded-xl bg-muted/35">
+                  <SelectValue placeholder={t("careProviders.staffRolePlaceholder")} />
+                </SelectTrigger>
+                <SelectContent>
+                  {roleOptions.map((role) => (
+                    <SelectItem key={role} value={role}>
+                      {t(`careProviders.staffRole.${role}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="flex items-center justify-between rounded-xl border border-border bg-muted/25 px-4 py-3">
               <div>
