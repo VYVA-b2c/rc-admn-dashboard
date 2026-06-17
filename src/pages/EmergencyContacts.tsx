@@ -19,7 +19,7 @@ import { demoCareProviders } from "@/lib/operationalDemoData";
 
 async function fetchCareProviders() {
   try {
-    const data = await apiFetch<{ providers?: CareProviderOption[] }>("/api/v1/care-providers");
+    const data = await apiFetch<{ providers?: CareProviderOption[] }>("/api/v1/care-providers?type=caregiver");
     return data.providers ?? [];
   } catch {
     return [];
@@ -42,10 +42,6 @@ export default function EmergencyContacts() {
     () => sourceProviders.filter((provider) => provider.provider_type === "caregiver"),
     [sourceProviders],
   );
-  const redCrossStaff = useMemo(
-    () => sourceProviders.filter((provider) => provider.provider_type === "field_staff"),
-    [sourceProviders],
-  );
 
   const filtered = useMemo(() => {
     const normalized = search.trim().toLowerCase();
@@ -58,20 +54,7 @@ export default function EmergencyContacts() {
     ));
   }, [emergencyContacts, search]);
 
-  const filteredStaff = useMemo(() => {
-    const normalized = search.trim().toLowerCase();
-    if (!normalized) return redCrossStaff;
-    return redCrossStaff.filter((provider) => (
-      (provider.display_name ?? "").toLowerCase().includes(normalized) ||
-      provider.phone?.toLowerCase().includes(normalized) ||
-      provider.role?.toLowerCase().includes(normalized) ||
-      provider.team?.toLowerCase().includes(normalized) ||
-      provider.linked_users?.some((user) => user.name?.toLowerCase().includes(normalized) || user.city?.toLowerCase().includes(normalized))
-    ));
-  }, [redCrossStaff, search]);
-
   const informalCount = emergencyContacts.length;
-  const professionalCount = redCrossStaff.length;
   const assignmentCount = emergencyContacts.reduce((total, provider) => total + Number(provider.assignment_count || 0), 0);
   const onboardingCount = emergencyContacts.filter((provider) => provider.source === "onboarding").length;
 
@@ -223,51 +206,6 @@ export default function EmergencyContacts() {
                 )}
               </TableBody>
             </Table>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="rounded-2xl border-border bg-white shadow-sm">
-        <CardContent className="p-5">
-          <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <BriefcaseMedical className="h-5 w-5" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold text-foreground">{t("careProviders.staffPanelTitle")}</h2>
-                  <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("careProviders.staffPanelDescription")}</p>
-                </div>
-                <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-semibold">
-                  {professionalCount} {t("careProviders.professionalShort")}
-                </Badge>
-              </div>
-
-              <div className="mt-4 rounded-xl border border-dashed border-border bg-muted/20 px-4 py-4">
-                <p className="text-sm text-muted-foreground">{t("careProviders.staffPanelNote")}</p>
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {filteredStaff.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">{t("careProviders.noStaffDirectory")}</p>
-                ) : (
-                  filteredStaff.slice(0, 6).map((provider) => (
-                    <div key={`${provider.provider_type}-${provider.provider_id ?? provider.id}`} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {[provider.role, provider.team].filter(Boolean).join(" / ") || t("careProviders.professional")}
-                        </p>
-                      </div>
-                      <Badge variant="secondary" className="rounded-full px-3 py-1 text-xs font-semibold">
-                        {provider.assignment_count || 0} {t("careProviders.assignments")}
-                      </Badge>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
           </div>
         </CardContent>
       </Card>
