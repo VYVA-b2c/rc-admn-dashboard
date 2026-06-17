@@ -702,14 +702,16 @@ export default function UserProfile() {
                   }}
                   onUnassign={handleUnassignCareProvider}
                 />
-                <ProviderGroup
-                  title={t("careProviders.professionalShort")}
-                  providers={redCrossStaffProviders}
-                  emptyLabel={t("careProviders.noPrimaryProfessional")}
-                  canAssignProviders={canAssignProviders}
-                  showAdminControls={showAdminControls}
-                  onUnassign={handleUnassignCareProvider}
-                />
+                {redCrossStaffProviders.length > 0 && (
+                  <ProviderGroup
+                    title={t("careProviders.professionalShort")}
+                    providers={redCrossStaffProviders}
+                    emptyLabel={t("careProviders.noPrimaryProfessional")}
+                    canAssignProviders={canAssignProviders}
+                    showAdminControls={showAdminControls}
+                    onUnassign={handleUnassignCareProvider}
+                  />
+                )}
               </div>
             )}
           </CardContent>
