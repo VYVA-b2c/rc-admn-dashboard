@@ -381,13 +381,13 @@ async function loadExternalUserCarePlanAccess(externalUserId, context) {
   return (await loadCarePlanAccessMap([localUserId], context)).get(String(localUserId)) || null;
 }
 
-function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null) {
+function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null, scheduledContact = null) {
   const normalized = normalizeExternalProfilePayload(data);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
   const hasAccess = Boolean(carePlanAccess);
-  if (!hasProviders && !hasServices && !hasAccess) return normalized;
-  return {
+  if (!hasProviders && !hasServices && !hasAccess && !scheduledContact) return normalized;
+  return applyScheduledSessionContact({
     ...normalized,
     careProviders: hasProviders ? careProviders : normalized.careProviders,
     caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
@@ -399,7 +399,7 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
     can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
     edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
-  };
+  }, scheduledContact);
 }
 
 async function fetchExternalUserProfileForShadow(externalUserId) {
@@ -3103,6 +3103,149 @@ function extractUpstreamList(payload, keys = []) {
   return [];
 }
 
+const scheduledSessionLastContactDateKeys = [
+  "lastOutcomeAt",
+  "last_outcome_at",
+  "lastStatusAt",
+  "last_status_at",
+  "lastCheckinAt",
+  "last_checkin_at",
+  "lastCallAt",
+  "last_call_at",
+  "lastReportedAt",
+  "last_reported_at",
+  "lastCompletedAt",
+  "last_completed_at",
+  "completedAt",
+  "completed_at",
+  "reportedAt",
+  "reported_at",
+  "endedAt",
+  "ended_at",
+  "callEndedAt",
+  "call_ended_at",
+];
+const scheduledSessionLogDateKeys = [...scheduledSessionLastContactDateKeys, "timestamp", "createdAt", "created_at"];
+const scheduledSessionStatusKeys = [
+  "lastOutcome",
+  "last_outcome",
+  "lastStatus",
+  "last_status",
+  "lastCheckinStatus",
+  "last_checkin_status",
+  "outcome",
+  "status",
+  "result",
+];
+
+function recordFirstString(record, keys) {
+  if (!record || typeof record !== "object") return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function validIsoDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function scheduledSessionUserId(item) {
+  return String(
+    firstValue(
+      item?.user_id,
+      item?.vyva_user_id,
+      item?.userId,
+      item?.vyvaUserId,
+      item?.user?.id,
+      item?.vyva_users?.id,
+    ) ?? "",
+  );
+}
+
+function scheduledSessionMatchesUser(item, userId) {
+  return scheduledSessionUserId(item) === String(userId);
+}
+
+function scheduledSessionLogRecords(item) {
+  const records = [];
+  for (const key of ["last_call_log", "lastCallLog", "latest_call_log", "latestCallLog", "last_log", "lastLog"]) {
+    if (item?.[key] && typeof item[key] === "object") records.push(item[key]);
+  }
+  for (const key of ["call_logs", "callLogs", "logs", "call_history", "callHistory", "session_logs", "sessionLogs"]) {
+    if (Array.isArray(item?.[key])) records.push(...item[key].filter((record) => record && typeof record === "object"));
+  }
+  return records;
+}
+
+function scheduledContactCandidate(record, dateKeys) {
+  const at = validIsoDate(recordFirstString(record, dateKeys));
+  if (!at) return null;
+  return {
+    at,
+    status: recordFirstString(record, scheduledSessionStatusKeys),
+  };
+}
+
+function latestScheduledSessionContactFromPayload(payload, userId) {
+  const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
+  const candidates = [];
+
+  for (const item of list) {
+    if (!scheduledSessionMatchesUser(item, userId)) continue;
+
+    const parentCandidate = scheduledContactCandidate(item, scheduledSessionLastContactDateKeys);
+    if (parentCandidate) candidates.push(parentCandidate);
+
+    for (const log of scheduledSessionLogRecords(item)) {
+      const logCandidate = scheduledContactCandidate(log, scheduledSessionLogDateKeys);
+      if (logCandidate) candidates.push(logCandidate);
+    }
+  }
+
+  return candidates
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] || null;
+}
+
+async function loadLatestScheduledSessionContact(userId) {
+  const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+    query: {
+      user_id: userId,
+      service_type: "all",
+      organization_name: "Red Cross",
+    },
+  });
+  if (!upstream?.ok) return null;
+  return latestScheduledSessionContactFromPayload(upstream.data, userId);
+}
+
+function applyScheduledSessionContact(data, contact) {
+  if (!contact?.at || !data || typeof data !== "object") return data;
+  const checkins = data.checkins || null;
+  return {
+    ...data,
+    ...(checkins
+      ? {
+          checkins: {
+            ...checkins,
+            last_checkin_at: contact.at,
+            lastCheckinAt: contact.at,
+            last_outcome: contact.status || checkins.last_outcome || checkins.lastOutcome || null,
+            lastOutcome: contact.status || checkins.lastOutcome || checkins.last_outcome || null,
+          },
+        }
+      : {}),
+    operationalContext: {
+      ...(data.operationalContext || {}),
+      lastContactAt: contact.at,
+      lastContactStatus: contact.status || null,
+    },
+  };
+}
+
 function normalizeServiceType(value) {
   return String(value || "")
     .trim()
@@ -5553,6 +5696,7 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       let careProviders = [];
       let localServices = { checkins: null, brainCoach: null };
       let carePlanAccess = null;
+      const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
       if (pool) {
         try {
           req.context = await resolveRequestContext(req);
@@ -5563,7 +5707,7 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices, carePlanAccess));
+      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices, carePlanAccess, scheduledContact));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -5580,7 +5724,8 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(404).json({ error: "User not found" });
       return;
     }
-    res.json(data);
+    const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
+    res.json(applyScheduledSessionContact(data, scheduledContact));
   } catch (error) {
     next(error);
   }

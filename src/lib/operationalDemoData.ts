@@ -8,6 +8,8 @@ export interface OperationalListMeta {
   assignedTo?: string | null;
   preferredChannel: OperationalChannel;
   lastContactKey?: string;
+  lastContactAt?: string | null;
+  lastContactStatus?: string | null;
   livingContextKey?: string;
   nextActionKey?: string;
   noResponse?: boolean;

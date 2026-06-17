@@ -349,6 +349,16 @@ export default function UserProfile() {
       .replace(/\b\w/g, (char) => char.toUpperCase());
   };
 
+  const scheduledLastContactAt =
+    context.lastContactAt ??
+    recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
+  const scheduledLastContactStatus =
+    context.lastContactStatus ??
+    recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
+  const lastContactValue = scheduledLastContactAt
+    ? [formatDateTime(scheduledLastContactAt), scheduledLastContactStatus ? formatOutcomeLabel(scheduledLastContactStatus) : null].filter(Boolean).join(" - ")
+    : t(context.lastContactKey ?? "profile.lastContactUnknown");
+
   const outcomeTone = (value?: string | null) => {
     const normalized = String(value || "").trim().toLowerCase();
     if (["missed", "failed", "escalated"].includes(normalized)) return "red";
@@ -499,7 +509,7 @@ export default function UserProfile() {
             <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold text-muted-foreground xl:justify-end">
               <MetaItem icon={ChannelIcon} label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
               <MetaItem icon={Phone} label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
-              <MetaItem icon={Clock} label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
+              <MetaItem icon={Clock} label={t("profile.lastContact")} value={lastContactValue} />
               <MetaItem icon={UserRound} label={t("careProviders.coverage")} value={assignedProviderLabel ?? t("usersList.unassigned")} />
             </div>
           </div>
@@ -530,7 +540,7 @@ export default function UserProfile() {
             <InfoTile label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
             <InfoTile label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
             <InfoTile label={t("profile.address")} value={address || null} />
-            <InfoTile label={t("profile.lastContact")} value={t(context.lastContactKey ?? "profile.lastContactUnknown")} />
+            <InfoTile label={t("profile.lastContact")} value={lastContactValue} />
             <InfoTile label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
           </div>
         </CardContent>
