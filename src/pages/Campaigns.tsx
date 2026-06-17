@@ -1888,25 +1888,6 @@ export default function Campaigns() {
                           <p className="text-sm leading-6 text-foreground">{form.audience}</p>
                         </DetailBlock>
 
-                        <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
-                          <div className="space-y-2">
-                            {localTargetSummary.eligible.slice(0, 3).map((target) => (
-                              <div key={target.id} className="rounded-xl bg-white px-3 py-2 text-sm">
-                                <p className="font-semibold text-foreground">{`${target.first_name ?? ""} ${target.last_name ?? ""}`.trim() || "Unknown"}</p>
-                                <p className="text-muted-foreground">{target.city || t("campaigns.scope.allCities")}</p>
-                              </div>
-                            ))}
-                            {localTargetSummary.eligible.length > 3 && (
-                              <p className="text-sm font-semibold text-primary">
-                                {t("campaigns.target.moreRecipients").replace("{count}", String(localTargetSummary.eligible.length - 3))}
-                              </p>
-                            )}
-                            {localTargetSummary.eligible.length === 0 && (
-                              <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
-                            )}
-                          </div>
-                        </DetailBlock>
-
                         <div className="flex flex-col-reverse gap-2 border-t border-primary/10 pt-4 sm:flex-row sm:justify-between">
                           <Button
                             type="button"

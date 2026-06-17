@@ -183,6 +183,7 @@ describe("Campaigns create flow", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByText("Selected format")).toBeInTheDocument();
+    expect(screen.queryByText("Likely first recipients")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Campaign name")).toHaveValue("Heatwave alert");
     expect(screen.getByLabelText("City")).toHaveValue("Tarifa");
     expect((screen.getByLabelText("Call script") as HTMLTextAreaElement).value).toContain("heatwave alert");
