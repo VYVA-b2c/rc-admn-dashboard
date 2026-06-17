@@ -448,14 +448,20 @@ function normalizedExternalShadowUser(externalUserId, externalData, organization
 }
 
 function externalCaregiversForShadow(externalData) {
-  const caregivers = Array.isArray(externalData?.caregivers) ? externalData.caregivers : [];
+  const caregivers = [
+    ...(Array.isArray(externalData?.caregivers) ? externalData.caregivers : []),
+    ...(Array.isArray(externalData?.emergency_contacts) ? externalData.emergency_contacts : []),
+    ...(Array.isArray(externalData?.emergencyContacts) ? externalData.emergencyContacts : []),
+    ...(Array.isArray(externalData?.careProviders) ? externalData.careProviders.filter((provider) => normalizeCareProviderType(provider?.provider_type || provider?.type) === "caregiver") : []),
+  ];
   return caregivers
     .map((caregiver) => objectValue(caregiver))
     .filter(hasMeaningfulPayloadValue)
     .map((caregiver) => ({
-      caretaker_name: nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.name, caregiver.full_name, caregiver.fullName)),
-      caretaker_phone: nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber)),
-      source: "onboarding",
+      caretaker_name: nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.caregiver_name, caregiver.display_name, caregiver.name, caregiver.full_name, caregiver.fullName, caregiver.provider_name, caregiver.providerName)),
+      caretaker_phone: nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.caregiver_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber)),
+      relationship_label: nullIfBlank(firstValue(caregiver.relationship_label, caregiver.relationship, caregiver.role)),
+      source: normalizeContactSource(caregiver.source, "onboarding"),
     }))
     .filter((caregiver) => caregiver.caretaker_name || caregiver.caretaker_phone);
 }
@@ -4267,7 +4273,13 @@ async function loadCareProviders(filters = {}, context) {
 
   if ((type === null || type === "caregiver") && !rows.some((row) => row.provider_type === "caregiver")) {
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
-    const upstreamUsers = Array.isArray(upstream?.data?.gisUsers) ? upstream.data.gisUsers : [];
+    const upstreamUsers = [
+      upstream?.data?.gisUsers,
+      upstream?.data?.users,
+      upstream?.data?.clients,
+      upstream?.data?.data,
+      upstream?.data,
+    ].find(Array.isArray) || [];
     const externalIds = Array.from(
       new Set(
         upstreamUsers
@@ -4666,7 +4678,7 @@ async function replaceCaregiversWithClient(client, userId, caregivers, organizat
       provider_type: "caregiver",
       provider: caregiver,
       is_primary: index === 0,
-      relationship_label: "Caregiver",
+      relationship_label: caregiver.relationship_label || "Caregiver",
       source: caregiver.source || "manual",
     }, organizationId);
   }
