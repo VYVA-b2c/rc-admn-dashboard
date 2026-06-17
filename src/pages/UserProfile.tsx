@@ -350,6 +350,27 @@ export default function UserProfile() {
       .replace(/\b\w/g, (char) => char.toUpperCase());
   };
 
+  const scheduledTodayAt = (value?: string | null) => {
+    if (!value) return null;
+    const [hour, minute] = value.split(":").map((part) => Number(part));
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    const date = new Date();
+    date.setHours(hour, minute, 0, 0);
+    return date;
+  };
+
+  const scheduledContactFallback = () => {
+    const preferredTime = recordString(checkins, ["preferred_time", "preferredTime"]);
+    const scheduledAt = scheduledTodayAt(preferredTime);
+    const isEnabled = Boolean(checkins?.enabled ?? checkins?.is_active);
+    if (!scheduledAt || !isEnabled) return t(context.lastContactKey ?? "profile.lastContactUnknown");
+    const label = scheduledAt.getTime() <= Date.now()
+      ? t("checkin.outcomeMissedToday")
+      : t("checkin.outcomeScheduledToday");
+    const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+    return `${label} - ${time}`;
+  };
+
   const scheduledLastContactAt =
     context.lastContactAt ??
     recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
@@ -358,7 +379,7 @@ export default function UserProfile() {
     recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
   const lastContactValue = scheduledLastContactAt
     ? [formatDateTime(scheduledLastContactAt), scheduledLastContactStatus ? formatOutcomeLabel(scheduledLastContactStatus) : null].filter(Boolean).join(" - ")
-    : t(context.lastContactKey ?? "profile.lastContactUnknown");
+    : scheduledContactFallback();
 
   const outcomeTone = (value?: string | null) => {
     const normalized = String(value || "").trim().toLowerCase();
