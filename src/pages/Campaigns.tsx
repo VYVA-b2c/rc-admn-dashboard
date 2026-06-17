@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock3,
   Flame,
+  Loader2,
   MapPin,
   Megaphone,
   PhoneCall,
@@ -1212,7 +1213,7 @@ export default function Campaigns() {
         <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
           <div className="space-y-3">
             {campaignsQuery.isLoading ? (
-              Array.from({ length: 3 }).map((_, index) => <Skeleton key={index} className="h-36 rounded-2xl" />)
+              <LoadingCampaignsPanel label={t("login.loading")} />
             ) : noCampaignsCreated ? (
               <div className="rounded-2xl border border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-white p-6">
                 <div className="space-y-5">
@@ -2435,6 +2436,26 @@ function DetailBlock({ title, children }: { title: string; children: ReactNode }
     <div className="rounded-2xl border border-border bg-white p-4">
       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
       <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function LoadingCampaignsPanel({ label }: { label: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-white p-6">
+      <div className="flex items-center gap-3 rounded-2xl border border-border bg-white p-4 shadow-sm">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </span>
+        <div>
+          <p className="text-base font-bold text-foreground">{label}</p>
+        </div>
+      </div>
+      <div className="mt-4 space-y-3" aria-hidden="true">
+        <Skeleton className="h-20 rounded-2xl" />
+        <Skeleton className="h-20 rounded-2xl" />
+        <Skeleton className="h-20 rounded-2xl" />
+      </div>
     </div>
   );
 }
