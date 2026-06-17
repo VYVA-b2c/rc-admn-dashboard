@@ -1104,9 +1104,7 @@ function ProviderHighlight({
       {provider ? (
         <div className="mt-2">
           <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
-          <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
-            {[t(providerTypeKey(provider.provider_type)), providerCoverageLabel(provider)].filter(Boolean).join(" / ")}
-          </p>
+          <p className="mt-0.5 text-xs font-semibold text-muted-foreground">{provider.phone || t("profile.noPhone")}</p>
         </div>
       ) : (
         <p className="mt-2 text-sm font-medium text-muted-foreground">{emptyLabel}</p>
