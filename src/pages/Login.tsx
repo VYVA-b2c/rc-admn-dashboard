@@ -1,6 +1,6 @@
 import { useState, useRef } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
-import { Building2, Chrome, Mail } from "lucide-react";
+import { Mail } from "lucide-react";
 import drkLogo from "@/assets/drk-logo.svg";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
@@ -18,27 +18,27 @@ function safeNextPath(value: string | null) {
 }
 
 export default function Login() {
-  const { session, signInWithMagicLink, signInWithOAuth } = useAuth();
+  const { session, signInWithMagicLink } = useAuth();
   const { language, t } = useLanguage();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
-  const [oauthLoading, setOauthLoading] = useState<"google" | "azure" | null>(null);
   const rateLimitUntil = useRef(0);
   const magicLinkInFlight = useRef(false);
   const nextPath = safeNextPath(searchParams.get("next"));
 
   if (session || authBypassEnabled) return <Navigate to={nextPath} replace />;
 
-  const handleMagicLink = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!email.trim()) {
+      toast.error(t("login.enterYourEmail"));
+      return;
+    }
+
     if (magicLinkInFlight.current) return;
     if (Date.now() < rateLimitUntil.current) {
       toast.error(t("login.rateLimited"), { description: t("login.rateLimitDesc") });
-      return;
-    }
-    if (!email.trim()) {
-      toast.error(t("login.enterYourEmail"));
       return;
     }
 
@@ -63,15 +63,6 @@ export default function Login() {
     }
   };
 
-  const handleOAuth = async (provider: "google" | "azure") => {
-    setOauthLoading(provider);
-    const { error } = await signInWithOAuth(provider, nextPath);
-    if (error) {
-      toast.error(t("login.oauthFailed"), { description: error.message });
-      setOauthLoading(null);
-    }
-  };
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md">
@@ -85,15 +76,15 @@ export default function Login() {
         <Card className="border-border/50 shadow-xl">
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle className="font-display">{t("login.signIn")}</CardTitle>
+              <CardTitle className="font-display">{t("login.adminSignIn")}</CardTitle>
               <LanguageSelector />
             </div>
             <CardDescription>{t("login.enterEmailForMagicLink")}</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleMagicLink} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">{t("login.email")}</Label>
+                <Label htmlFor="email">{t("login.adminEmail")}</Label>
                 <Input
                   id="email"
                   type="email"
@@ -109,35 +100,9 @@ export default function Login() {
               </Button>
             </form>
 
-            <div className="my-5 flex items-center gap-3">
-              <div className="h-px flex-1 bg-border" />
-              <span className="text-xs font-medium text-muted-foreground">{t("login.orContinueWith")}</span>
-              <div className="h-px flex-1 bg-border" />
-            </div>
-
-            <div className="grid gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-center"
-                disabled={Boolean(oauthLoading)}
-                onClick={() => handleOAuth("google")}
-              >
-                <Chrome className="mr-2 h-4 w-4" />
-                {oauthLoading === "google" ? t("login.redirecting") : t("login.continueWithGoogle")}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full justify-center"
-                disabled={Boolean(oauthLoading)}
-                onClick={() => handleOAuth("azure")}
-              >
-                <Building2 className="mr-2 h-4 w-4" />
-                {oauthLoading === "azure" ? t("login.redirecting") : t("login.continueWithMicrosoft")}
-              </Button>
-            </div>
-
+            <p className="mt-4 text-xs text-center text-muted-foreground/70">
+              {t("login.adminAccessHint")}
+            </p>
             <p className="mt-3 text-xs text-center text-muted-foreground/60">
               {t("login.previewHint")}
             </p>

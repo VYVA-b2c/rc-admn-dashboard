@@ -68,6 +68,7 @@ const apiAuthBypass =
   (!isProduction && (!supabaseUrl || !supabaseAnonKey));
 const tokenUserCache = new Map();
 let supabaseInviteAuthClient = null;
+let supabaseHostedAuthClient = null;
 
 function sslConfig(connectionString) {
   if (!connectionString) return undefined;
@@ -887,6 +888,20 @@ function supabaseTeamInviteClient() {
   return supabaseInviteAuthClient;
 }
 
+function supabaseHostedMagicLinkClient() {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  if (!supabaseHostedAuthClient) {
+    supabaseHostedAuthClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        persistSession: false,
+      },
+    });
+  }
+  return supabaseHostedAuthClient;
+}
+
 function inviteEmailProvider() {
   if (resendApiKey) return "resend";
   if (sendgridApiKey) return "sendgrid";
@@ -1589,6 +1604,11 @@ async function loadUserContext(user) {
       .map((row) => row.role === "admin" ? "admin" : "operator")
       .filter(Boolean),
   ));
+  const hasConsoleAccess = isPlatformAdmin || roles.length > 0;
+  if (!hasConsoleAccess) {
+    throw httpError(403, "No console access has been granted for this email");
+  }
+
   const primaryRole = isPlatformAdmin || roles.includes("admin") ? "admin" : roles[0] || "operator";
   const roleOrg = rolesResult.rows.find((row) => row.organization_id)?.organization_id;
   let organization = profile?.org_id
@@ -1760,14 +1780,69 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
       manual_url: manualUrl,
     },
   });
-  if (generatedLink.error) return { sent: false, error: generatedLink.error, provider: null };
+  if (generatedLink.error) {
+    const fallback = await sendHostedConsoleMagicLink({ email, redirectPath, language, origin });
+    if (fallback.sent) {
+      console.warn("Custom console magic-link generation failed; sent hosted Supabase magic link instead.", {
+        email,
+        error: generatedLink.error,
+      });
+      return fallback;
+    }
+    return {
+      sent: false,
+      error: fallback.error ? `${generatedLink.error}; fallback failed: ${fallback.error}` : generatedLink.error,
+      provider: fallback.provider || null,
+    };
+  }
 
   const rendered = renderConsoleMagicLinkEmail({
     actionLink: generatedLink.actionLink,
     language,
     manualUrl,
   });
-  return sendRenderedTeamInviteEmail({ to: email, rendered });
+  const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
+  if (custom.sent) return custom;
+
+  const fallback = await sendHostedConsoleMagicLink({ email, redirectPath, language, origin });
+  if (fallback.sent) {
+    console.warn("Custom console magic-link email failed; sent hosted Supabase magic link instead.", {
+      email,
+      provider: custom.provider,
+      error: custom.error,
+    });
+    return fallback;
+  }
+
+  return {
+    sent: false,
+    error: fallback.error ? `${custom.error || "Custom email could not be sent"}; fallback failed: ${fallback.error}` : custom.error,
+    provider: custom.provider || fallback.provider || null,
+  };
+}
+
+async function sendHostedConsoleMagicLink({ email, redirectPath, language, origin }) {
+  const supabase = supabaseHostedMagicLinkClient();
+  if (!supabase) return { sent: false, error: "Hosted magic-link email is not configured", provider: "supabase" };
+
+  const redirectUrl = absoluteAppUrl(loginRedirectPath(redirectPath), origin);
+  const manualUrl = userManualUrl(origin);
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: redirectUrl || undefined,
+      shouldCreateUser: true,
+      data: {
+        language,
+        email_language: language,
+        login_source: "vyva_console",
+        manual_url: manualUrl,
+      },
+    },
+  });
+
+  if (error) return { sent: false, error: error.message || "Hosted magic-link email could not be sent", provider: "supabase" };
+  return { sent: true, error: null, provider: "supabase" };
 }
 
 function requireAdmin(context) {
