@@ -1148,19 +1148,6 @@ export default function Campaigns() {
           {canDraftCampaigns && (
             <Button
               type="button"
-              variant="outline"
-              className="h-10 rounded-full px-4 text-sm font-bold"
-              onClick={() => {
-                syncCreateIntent("general_announcement", "ai");
-              }}
-            >
-              <Sparkles className="mr-2 h-4 w-4 text-primary" />
-              {t("campaigns.ai.open")}
-            </Button>
-          )}
-          {canDraftCampaigns && (
-            <Button
-              type="button"
               className="h-10 rounded-full bg-primary px-4 text-sm font-bold text-primary-foreground hover:bg-primary/90"
               onClick={() => syncCreateIntent("general_announcement")}
             >
