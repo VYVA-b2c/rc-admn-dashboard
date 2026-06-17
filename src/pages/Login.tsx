@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Mail } from "lucide-react";
 import drkLogo from "@/assets/drk-logo.svg";
+import loginBackground from "@/assets/login-happy-elders.png";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { Button } from "@/components/ui/button";
@@ -84,16 +85,24 @@ export default function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-4">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-cover bg-center"
+        style={{ backgroundImage: `url(${loginBackground})` }}
+      />
+      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-br from-white/95 via-white/70 to-white/15" />
+      <div aria-hidden="true" className="absolute inset-0 bg-slate-950/10" />
+
+      <div className="relative z-10 w-full max-w-md">
         <div className="mb-8 text-center">
           <img src={drkLogo} alt="Red Cross" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
-          <p className="mx-auto mt-1 max-w-xs px-2 text-sm leading-relaxed text-muted-foreground sm:max-w-none sm:text-base">
+          <p className="mx-auto mt-1 max-w-xs px-2 text-sm leading-relaxed text-slate-700 sm:max-w-none sm:text-base">
             {t("login.subtitle")}
           </p>
         </div>
 
-        <Card className="border-border/50 shadow-xl">
+        <Card className="border-white/70 bg-white/90 shadow-2xl backdrop-blur-md">
           <CardHeader>
             <CardTitle className="font-display">{t("login.adminSignIn")}</CardTitle>
             <CardDescription>{t("login.enterEmailForMagicLink")}</CardDescription>
