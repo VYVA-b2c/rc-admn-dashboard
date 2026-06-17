@@ -422,6 +422,7 @@ CREATE TABLE IF NOT EXISTS public.campaigns (
   audience TEXT,
   audience_key TEXT,
   template_key TEXT NOT NULL DEFAULT 'general_announcement',
+  target_rules JSONB NOT NULL DEFAULT '{}'::jsonb,
   due_key TEXT NOT NULL DEFAULT 'campaigns.due.draft',
   city TEXT,
   owner TEXT,
@@ -485,7 +486,7 @@ CREATE TABLE IF NOT EXISTS public.campaign_call_jobs (
   campaign_id UUID NOT NULL REFERENCES public.campaigns(id) ON DELETE CASCADE,
   vyva_user_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'queued', 'calling', 'completed', 'failed', 'skipped', 'cancelled')),
-  skip_reason TEXT CHECK (skip_reason IS NULL OR skip_reason IN ('no_phone', 'no_consent', 'outside_call_window', 'duplicate_target')),
+  skip_reason TEXT CHECK (skip_reason IS NULL OR skip_reason IN ('no_phone', 'no_consent', 'outside_call_window', 'duplicate_target', 'outside_geo', 'risk_mismatch', 'health_condition_mismatch', 'provider_mismatch', 'template_mismatch')),
   scheduled_at TIMESTAMPTZ,
   attempt_count INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -499,6 +500,7 @@ ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS contacted_count INTEGER NO
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS confirmed_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS follow_up_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS template_key TEXT NOT NULL DEFAULT 'general_announcement';
+ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS target_rules JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_script TEXT;
 ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS call_window_start TEXT;
@@ -525,6 +527,9 @@ ALTER TABLE public.campaigns ADD COLUMN IF NOT EXISTS organization_id UUID REFER
 ALTER TABLE public.campaign_targets ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.campaign_call_runs ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
 ALTER TABLE public.campaign_call_jobs ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES public.organizations(id);
+ALTER TABLE public.campaign_call_jobs DROP CONSTRAINT IF EXISTS campaign_call_jobs_skip_reason_check;
+ALTER TABLE public.campaign_call_jobs ADD CONSTRAINT campaign_call_jobs_skip_reason_check
+  CHECK (skip_reason IS NULL OR skip_reason IN ('no_phone', 'no_consent', 'outside_call_window', 'duplicate_target', 'outside_geo', 'risk_mismatch', 'health_condition_mismatch', 'provider_mismatch', 'template_mismatch'));
 
 WITH default_org AS (
   SELECT id FROM public.organizations WHERE slug = 'red-cross-leipzig' LIMIT 1

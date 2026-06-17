@@ -56,6 +56,7 @@ type TemplateKey =
 type CampaignState = "draft" | "scheduled" | "queued" | "completed" | "cancelled" | "failed";
 type FilterKey = "all" | CampaignState;
 type PreviewAction = "preview" | "schedule" | "queue";
+type WizardStep = 1 | 2 | 3 | 4;
 
 type Campaign = {
   id: string;
@@ -63,6 +64,7 @@ type Campaign = {
   objective?: string | null;
   audience?: string | null;
   city?: string | null;
+  targetRules?: CampaignTargetRules | null;
   status: string;
   type?: string | null;
   templateKey?: TemplateKey;
@@ -104,6 +106,23 @@ type PreviewRecipient = {
   reasonKey: string;
   status: "eligible" | "skipped";
   skipReason?: string | null;
+};
+
+type CampaignTargetRules = {
+  geo: {
+    scope: "organization" | "country" | "city" | "area";
+    value: string;
+  };
+  riskLevel: "all" | "stable" | "review" | "urgent" | "high";
+  healthConditions: string[];
+  careProvider: {
+    mode: "all" | "unassigned" | "assigned";
+    providerId: string;
+    providerName: string;
+    providerType: "caregiver" | "field_staff" | "";
+  };
+  requireConsent: boolean;
+  requirePhone: boolean;
 };
 
 type CallPreview = {
@@ -166,6 +185,7 @@ type CampaignFormState = {
   templateKey: TemplateKey;
   audience: string;
   city: string;
+  targetRules: CampaignTargetRules;
   objective: string;
   scheduledAt: string;
   callWindowStart: string;
@@ -225,12 +245,58 @@ function isCustomTemplate(templateKey: TemplateKey) {
   return templateKey === "custom_campaign";
 }
 
+function defaultTargetRules(city = ""): CampaignTargetRules {
+  return {
+    geo: {
+      scope: city.trim() ? "city" : "organization",
+      value: city.trim(),
+    },
+    riskLevel: "all",
+    healthConditions: [],
+    careProvider: {
+      mode: "all",
+      providerId: "",
+      providerName: "",
+      providerType: "",
+    },
+    requireConsent: true,
+    requirePhone: true,
+  };
+}
+
+function normalizeTargetRules(value: unknown, city = ""): CampaignTargetRules {
+  const fallback = defaultTargetRules(city);
+  if (!value || typeof value !== "object") return fallback;
+  const source = value as Partial<CampaignTargetRules>;
+  const geo = source.geo && typeof source.geo === "object" ? source.geo : fallback.geo;
+  const careProvider = source.careProvider && typeof source.careProvider === "object" ? source.careProvider : fallback.careProvider;
+  return {
+    geo: {
+      scope: ["organization", "country", "city", "area"].includes(String(geo.scope)) ? geo.scope : fallback.geo.scope,
+      value: String(geo.value || ""),
+    } as CampaignTargetRules["geo"],
+    riskLevel: ["all", "stable", "review", "urgent", "high"].includes(String(source.riskLevel)) ? source.riskLevel as CampaignTargetRules["riskLevel"] : fallback.riskLevel,
+    healthConditions: Array.isArray(source.healthConditions)
+      ? source.healthConditions.map((item) => String(item).trim()).filter(Boolean)
+      : fallback.healthConditions,
+    careProvider: {
+      mode: ["all", "unassigned", "assigned"].includes(String(careProvider.mode)) ? careProvider.mode : fallback.careProvider.mode,
+      providerId: String(careProvider.providerId || ""),
+      providerName: String((careProvider as CampaignTargetRules["careProvider"]).providerName || ""),
+      providerType: ["caregiver", "field_staff"].includes(String(careProvider.providerType)) ? careProvider.providerType : "",
+    } as CampaignTargetRules["careProvider"],
+    requireConsent: source.requireConsent !== false,
+    requirePhone: source.requirePhone !== false,
+  };
+}
+
 function defaultForm(templateKey: TemplateKey, getTemplateScript: (key: TemplateKey) => string): CampaignFormState {
   return {
     name: "",
     templateKey,
     audience: "",
     city: "",
+    targetRules: defaultTargetRules(),
     objective: "",
     scheduledAt: "",
     callWindowStart: "09:00",
@@ -327,6 +393,16 @@ function skipReasonKey(skipReason?: string | null) {
       return "campaigns.call.outsideWindow";
     case "duplicate_target":
       return "campaigns.call.duplicateTarget";
+    case "outside_geo":
+      return "campaigns.call.outsideGeo";
+    case "risk_mismatch":
+      return "campaigns.call.riskMismatch";
+    case "health_condition_mismatch":
+      return "campaigns.call.healthMismatch";
+    case "provider_mismatch":
+      return "campaigns.call.providerMismatch";
+    case "template_mismatch":
+      return "campaigns.call.templateMismatch";
     default:
       return "campaigns.preview.notEligible";
   }
@@ -386,6 +462,8 @@ export default function Campaigns() {
   const [previewAction, setPreviewAction] = useState<PreviewAction>("preview");
   const [previewData, setPreviewData] = useState<CallPreview | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<CampaignAiSuggestion | null>(null);
+  const [wizardStep, setWizardStep] = useState<WizardStep>(1);
+  const [healthConditionDraft, setHealthConditionDraft] = useState("");
   const queryClient = useQueryClient();
   const { t, language } = useLanguage();
   const { user } = useAuth();
@@ -648,6 +726,72 @@ export default function Campaigns() {
     return { missingPhone, checkinsOff, medicationSignals, unassignedCoverage, urgentSignals };
   }, [opportunityUsers]);
 
+  const careProviderOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const user of opportunityUsers) {
+      for (const name of user.careProviderNames ?? []) {
+        const clean = String(name || "").trim();
+        if (clean) names.add(clean);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [opportunityUsers]);
+
+  const availableCities = useMemo(() => {
+    const cities = new Set<string>();
+    for (const user of opportunityUsers) {
+      const city = String(user.city || "").trim();
+      if (city) cities.add(city);
+    }
+    return Array.from(cities).sort((a, b) => a.localeCompare(b));
+  }, [opportunityUsers]);
+
+  const localTargetSummary = useMemo(() => {
+    if (!form) {
+      return { eligible: [], skipped: [], skippedReasons: { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0 } };
+    }
+    const rules = normalizeTargetRules(form.targetRules, form.city);
+    const skippedReasons = { noPhone: 0, noConsent: 0, outsideGeo: 0, riskMismatch: 0, healthMismatch: 0, providerMismatch: 0, templateMismatch: 0 };
+    const eligible: OpportunityUser[] = [];
+    const skipped: Array<{ user: OpportunityUser; reason: keyof typeof skippedReasons }> = [];
+
+    for (const user of opportunityUsers) {
+      const userCity = String(user.city || "").toLowerCase();
+      const userCountry = String(user.country || "").toLowerCase();
+      const geoValue = String(rules.geo.value || "").toLowerCase();
+      let reason: keyof typeof skippedReasons | null = null;
+      if (!campaignOpportunityMatchesTemplate(user, form.templateKey)) reason = "templateMismatch";
+      else if (rules.requirePhone && !user.phone) reason = "noPhone";
+      else if (rules.geo.scope === "city" && geoValue && userCity !== geoValue) reason = "outsideGeo";
+      else if (rules.geo.scope === "country" && geoValue && userCountry !== geoValue) reason = "outsideGeo";
+      else if (rules.geo.scope === "area" && geoValue && !userCity.includes(geoValue)) reason = "outsideGeo";
+      else {
+        const riskStatus = Number(user.riskScore || 0) >= 80 ? "urgent" : Number(user.riskScore || 0) >= 50 || Number(user.activeAlerts || 0) > 0 ? "review" : "stable";
+        if (rules.riskLevel === "urgent" && riskStatus !== "urgent") reason = "riskMismatch";
+        else if (rules.riskLevel === "review" && riskStatus !== "review") reason = "riskMismatch";
+        else if (rules.riskLevel === "stable" && riskStatus !== "stable") reason = "riskMismatch";
+        else if (rules.riskLevel === "high" && Number(user.riskScore || 0) < 70) reason = "riskMismatch";
+        else if (rules.healthConditions.length > 0 && Number(user.healthConditions || 0) < 1) reason = "healthMismatch";
+        else if (rules.careProvider.mode === "unassigned" && Number(user.careProviderCount || 0) > 0) reason = "providerMismatch";
+        else if (
+          rules.careProvider.mode === "assigned" &&
+          rules.careProvider.providerName &&
+          !(user.careProviderNames ?? []).some((name) => name.toLowerCase() === rules.careProvider.providerName.toLowerCase())
+        ) {
+          reason = "providerMismatch";
+        }
+      }
+
+      if (reason) {
+        skippedReasons[reason] += 1;
+        skipped.push({ user, reason });
+      } else {
+        eligible.push(user);
+      }
+    }
+    return { eligible, skipped, skippedReasons };
+  }, [form, opportunityUsers]);
+
   const inferAiTemplate = (prompt: string, fallback: TemplateKey): TemplateKey => {
     const normalized = prompt.toLowerCase();
     if (/(heat|hot|dehydrat|summer|weather)/.test(normalized)) return "heatwave_alert";
@@ -683,8 +827,10 @@ export default function Campaigns() {
       name: isCustomTemplate(templateKey) ? "" : templateLabel(templateKey),
       objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, ""),
       audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, ""),
+      targetRules: defaultTargetRules(),
     });
     setAiSuggestion(null);
+    setWizardStep(1);
     setEditorOpen(true);
   };
 
@@ -713,6 +859,7 @@ export default function Campaigns() {
       templateKey: campaign.templateKey ?? "general_announcement",
       audience: campaign.audience ?? templateAudience(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       city: campaign.city ?? "",
+      targetRules: normalizeTargetRules(campaign.targetRules, campaign.city ?? ""),
       objective: campaign.objective ?? templateObjective(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
       scheduledAt: toDateTimeLocal(campaign.scheduledAt),
       callWindowStart: campaign.callWindowStart ?? "09:00",
@@ -722,8 +869,50 @@ export default function Campaigns() {
       aiPrompt: "",
     });
     setAiSuggestion(null);
+    setWizardStep(1);
     setEditorOpen(true);
   };
+
+  const updateTargetRules = (updater: (rules: CampaignTargetRules) => CampaignTargetRules) => {
+    setForm((current) => current ? { ...current, targetRules: updater(normalizeTargetRules(current.targetRules, current.city)) } : current);
+  };
+
+  const setCampaignCity = (city: string) => {
+    setForm((current) => {
+      if (!current) return current;
+      const rules = normalizeTargetRules(current.targetRules, city);
+      const nextRules = rules.geo.scope === "city" || rules.geo.scope === "organization"
+        ? { ...rules, geo: { scope: city.trim() ? "city" : "organization", value: city } as CampaignTargetRules["geo"] }
+        : rules;
+      return {
+        ...current,
+        city,
+        targetRules: nextRules,
+        audience: isCustomTemplate(current.templateKey) ? current.audience : templateAudience(current.templateKey, city),
+        objective: isCustomTemplate(current.templateKey) ? current.objective : templateObjective(current.templateKey, city),
+      };
+    });
+  };
+
+  const addHealthConditionRule = () => {
+    const condition = healthConditionDraft.trim();
+    if (!condition) return;
+    updateTargetRules((rules) => ({
+      ...rules,
+      healthConditions: Array.from(new Set([...rules.healthConditions, condition])),
+    }));
+    setHealthConditionDraft("");
+  };
+
+  const canMoveNext = (step: WizardStep) => {
+    if (!form) return false;
+    if (step === 1) return Boolean(form.templateKey);
+    if (step === 3) return Boolean(form.callScript.trim());
+    return true;
+  };
+
+  const nextWizardStep = () => setWizardStep((current) => Math.min(4, current + 1) as WizardStep);
+  const previousWizardStep = () => setWizardStep((current) => Math.max(1, current - 1) as WizardStep);
 
   const buildPayload = (draft: CampaignFormState, options?: { status?: string; queueNow?: boolean }) => {
     const status = options?.status ?? "draft";
@@ -734,6 +923,7 @@ export default function Campaigns() {
       objective: draft.objective.trim() || templateObjective(draft.templateKey, draft.city.trim()),
       audience: draft.audience.trim() || templateAudience(draft.templateKey, draft.city.trim()),
       city: draft.city.trim(),
+      targetRules: normalizeTargetRules(draft.targetRules, draft.city.trim()),
       channel: "phone",
       executionType: "vyva_call",
       status,
@@ -786,6 +976,7 @@ export default function Campaigns() {
       const payload = {
         templateKey: campaign.templateKey ?? "general_announcement",
         city: campaign.city ?? "",
+        targetRules: normalizeTargetRules(campaign.targetRules, campaign.city ?? ""),
         scheduledAt: action === "queue" ? null : campaign.scheduledAt,
         callWindowStart: campaign.callWindowStart ?? "09:00",
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
@@ -818,6 +1009,7 @@ export default function Campaigns() {
       const payload = {
         templateKey: campaign.templateKey ?? "general_announcement",
         city: campaign.city ?? "",
+        targetRules: normalizeTargetRules(campaign.targetRules, campaign.city ?? ""),
         scheduledAt: action === "queue" ? null : campaign.scheduledAt,
         callWindowStart: campaign.callWindowStart ?? "09:00",
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
@@ -1640,7 +1832,7 @@ export default function Campaigns() {
           if (!open) clearCreateIntent();
         }}
       >
-        <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto rounded-2xl border-border bg-[#f7f9ff] p-0">
+        <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden rounded-2xl border-border bg-[#f7f9ff] p-0">
           <DialogHeader className="border-b border-border bg-white px-6 py-5 text-left">
             <DialogTitle className="text-2xl font-bold text-foreground">
               {form?.id ? t("campaigns.form.editTitle") : t("campaigns.form.title")}
@@ -1649,51 +1841,49 @@ export default function Campaigns() {
           </DialogHeader>
 
           {form && (
-            <div className="space-y-6 p-6">
-              <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <StepLine
-                  number="1"
-                  title={t("campaigns.form.template")}
-                  description={templateLabel(form.templateKey)}
-                />
-                <StepLine
-                  number="2"
-                  title={t("campaigns.form.name")}
-                  description={form.name.trim() || t("campaigns.form.namePlaceholder")}
-                />
-                <StepLine
-                  number="3"
-                  title={t("campaigns.call.panelTitle")}
-                  description={[form.city.trim() || t("campaigns.scope.allCities"), formatDateTime(toIsoOrNull(form.scheduledAt))]
-                    .filter((value) => value && value !== "—")
-                    .join(" • ") || t("campaigns.form.cityPlaceholder")}
-                />
-                <StepLine
-                  number="4"
-                  title={t("campaigns.call.script")}
-                  description={form.callScript.trim()
-                    ? `${form.callScript.trim().slice(0, 90)}${form.callScript.trim().length > 90 ? "..." : ""}`
-                    : t("campaigns.call.scriptPlaceholder")}
-                />
-              </section>
-
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="flex flex-col gap-6">
-                  <section className="rounded-2xl border border-border bg-white p-5">
-                    <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-3">
-                          <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">1</span>
-                          <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
-                        </div>
-                        <p className="text-sm text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+              <div className="mb-5 rounded-2xl border border-border bg-white px-4 py-3">
+                <div className="grid gap-2 sm:grid-cols-4">
+                {[
+                  { step: 1 as WizardStep, title: t("campaigns.wizard.stepTemplate"), description: templateLabel(form.templateKey) },
+                  { step: 2 as WizardStep, title: t("campaigns.wizard.stepTarget"), description: `${localTargetSummary.eligible.length} ${t("campaigns.wizard.eligibleShort")}` },
+                  { step: 3 as WizardStep, title: t("campaigns.wizard.stepScript"), description: form.callScript.trim() ? t("campaigns.wizard.scriptReady") : t("campaigns.wizard.scriptMissing") },
+                  { step: 4 as WizardStep, title: t("campaigns.wizard.stepReview"), description: t("campaigns.wizard.reviewDescription") },
+                ].map((item) => (
+                  <button
+                    key={item.step}
+                    type="button"
+                    onClick={() => setWizardStep(item.step)}
+                    className={cn(
+                      "rounded-2xl border px-4 py-3 text-left transition",
+                      wizardStep === item.step ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-white hover:border-primary/20",
+                    )}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={cn(
+                        "flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold",
+                        wizardStep === item.step ? "bg-primary text-white" : "bg-primary/10 text-primary",
+                      )}>
+                        {item.step}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                        <p className="mt-1 truncate text-sm text-muted-foreground">{item.description}</p>
                       </div>
-                      <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
-                        {templateLabel(form.templateKey)}
-                      </Badge>
                     </div>
+                  </button>
+                ))}
+                </div>
+              </div>
 
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {wizardStep === 1 && (
+                <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
+                  <div className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-4 space-y-1">
+                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.form.template")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
+                    </div>
+                    <div className="space-y-3">
                       {createTemplateKeys.map((templateKey) => {
                         const Icon = templateIcon(templateKey);
                         const active = form.templateKey === templateKey;
@@ -1710,61 +1900,297 @@ export default function Campaigns() {
                               callScript: templateScript(templateKey),
                             } : current)}
                             className={cn(
-                              "rounded-2xl border p-4 text-left transition",
+                              "flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition",
                               active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
                             )}
                           >
-                            <div className="flex items-start gap-3">
-                              <span className="rounded-full bg-white p-2 text-primary shadow-sm">
-                                <Icon className="h-4 w-4" />
-                              </span>
-                              <div className="space-y-1">
-                                <p className="font-semibold text-foreground">{templateLabel(templateKey)}</p>
-                                <p className="text-sm text-muted-foreground">{templateDescription(templateKey)}</p>
-                              </div>
-                            </div>
+                            <span className={cn("rounded-full p-2 shadow-sm", active ? "bg-primary text-white" : "bg-white text-primary")}>
+                              <Icon className="h-4 w-4" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block font-semibold text-foreground">{templateLabel(templateKey)}</span>
+                              <span className="mt-1 block text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</span>
+                            </span>
+                            {active && <Badge className="rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
                           </button>
                         );
                       })}
                     </div>
+                  </div>
+                  <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <div className="space-y-2">
+                      <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
+                      <Input
+                        id="campaign-name"
+                        value={form.name}
+                        onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
+                        placeholder={t("campaigns.form.namePlaceholder")}
+                      />
+                    </div>
+                    <DetailBlock title={t("campaigns.wizard.templateChoice")}>
+                      <p className="text-sm leading-6 text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                    </DetailBlock>
+                  </aside>
+                </section>
+              )}
 
-                    <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
-                      <div className="space-y-2">
-                        <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
+              {wizardStep === 2 && (
+                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="space-y-5">
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.where")}</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whereHelp")}</p>
+                      <div className="mt-4 grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                        <Select
+                          value={form.targetRules.geo.scope}
+                          onValueChange={(value) => updateTargetRules((rules) => ({
+                            ...rules,
+                            geo: { ...rules.geo, scope: value as CampaignTargetRules["geo"]["scope"] },
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="organization">{t("campaigns.target.geo.organization")}</SelectItem>
+                            <SelectItem value="country">{t("campaigns.target.geo.country")}</SelectItem>
+                            <SelectItem value="city">{t("campaigns.target.geo.city")}</SelectItem>
+                            <SelectItem value="area">{t("campaigns.target.geo.area")}</SelectItem>
+                          </SelectContent>
+                        </Select>
                         <Input
-                          id="campaign-name"
-                          value={form.name}
-                          onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
-                          placeholder={t("campaigns.form.namePlaceholder")}
+                          value={form.targetRules.geo.scope === "city" ? form.city : form.targetRules.geo.value}
+                          list="campaign-city-options"
+                          disabled={form.targetRules.geo.scope === "organization"}
+                          onChange={(event) => {
+                            const value = event.target.value;
+                            if (form.targetRules.geo.scope === "city") setCampaignCity(value);
+                            else updateTargetRules((rules) => ({ ...rules, geo: { ...rules.geo, value } }));
+                          }}
+                          placeholder={form.targetRules.geo.scope === "organization" ? t("campaigns.target.geo.allOrg") : t("campaigns.form.cityPlaceholder")}
                         />
-                      </div>
-                      <div className="rounded-2xl border border-border bg-slate-50 px-4 py-4">
-                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.form.template")}</p>
-                        <p className="mt-2 font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
-                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                        <datalist id="campaign-city-options">
+                          {availableCities.map((city) => <option key={city} value={city} />)}
+                        </datalist>
                       </div>
                     </div>
-                  </section>
 
-                  <section className="rounded-2xl border border-border bg-white p-5">
-                    <div className="mb-5 space-y-2">
-                      <div className="flex items-center gap-3">
-                        <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">2</span>
-                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.call.panelTitle")}</h3>
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.who")}</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.whoHelp")}</p>
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>{t("campaigns.target.riskLevel")}</Label>
+                          <Select
+                            value={form.targetRules.riskLevel}
+                            onValueChange={(value) => updateTargetRules((rules) => ({ ...rules, riskLevel: value as CampaignTargetRules["riskLevel"] }))}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="all">{t("campaigns.target.risk.all")}</SelectItem>
+                              <SelectItem value="urgent">{t("campaigns.target.risk.urgent")}</SelectItem>
+                              <SelectItem value="high">{t("campaigns.target.risk.high")}</SelectItem>
+                              <SelectItem value="review">{t("campaigns.target.risk.review")}</SelectItem>
+                              <SelectItem value="stable">{t("campaigns.target.risk.stable")}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>{t("campaigns.target.healthConditions")}</Label>
+                          <div className="flex gap-2">
+                            <Input
+                              value={healthConditionDraft}
+                              onChange={(event) => setHealthConditionDraft(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addHealthConditionRule();
+                                }
+                              }}
+                              placeholder={t("campaigns.target.healthPlaceholder")}
+                            />
+                            <Button type="button" variant="outline" onClick={addHealthConditionRule}>{t("campaigns.target.add")}</Button>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {form.targetRules.healthConditions.map((condition) => (
+                              <button
+                                key={condition}
+                                type="button"
+                                className="rounded-full bg-primary/10 px-3 py-1 text-sm font-semibold text-primary"
+                                onClick={() => updateTargetRules((rules) => ({
+                                  ...rules,
+                                  healthConditions: rules.healthConditions.filter((item) => item !== condition),
+                                }))}
+                              >
+                                {condition}
+                              </button>
+                            ))}
+                            {form.targetRules.healthConditions.length === 0 && (
+                              <p className="text-sm text-muted-foreground">{t("campaigns.target.healthNone")}</p>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-sm text-muted-foreground">{t("campaigns.call.panelDescription")}</p>
                     </div>
 
+                    <div className="rounded-2xl border border-border bg-white p-5">
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.supportCoverage")}</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">{t("campaigns.target.supportHelp")}</p>
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <Select
+                          value={form.targetRules.careProvider.mode}
+                          onValueChange={(value) => updateTargetRules((rules) => ({
+                            ...rules,
+                            careProvider: { ...rules.careProvider, mode: value as CampaignTargetRules["careProvider"]["mode"] },
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">{t("campaigns.target.provider.all")}</SelectItem>
+                            <SelectItem value="unassigned">{t("campaigns.target.provider.unassigned")}</SelectItem>
+                            <SelectItem value="assigned">{t("campaigns.target.provider.assigned")}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Select
+                          value={form.targetRules.careProvider.providerName || "any"}
+                          disabled={form.targetRules.careProvider.mode !== "assigned"}
+                          onValueChange={(value) => updateTargetRules((rules) => ({
+                            ...rules,
+                            careProvider: { ...rules.careProvider, providerName: value === "any" ? "" : value, providerId: "" },
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="any">{t("campaigns.target.provider.choose")}</SelectItem>
+                            {careProviderOptions.map((name) => (
+                              <SelectItem key={name} value={name}>{name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <h3 className="text-lg font-bold text-foreground">{t("campaigns.target.summary")}</h3>
+                    <div className="grid grid-cols-2 gap-3">
+                      <MiniStat title={t("campaigns.preview.eligibleCount")} value={String(localTargetSummary.eligible.length)} />
+                      <MiniStat title={t("campaigns.preview.skippedCount")} value={String(localTargetSummary.skipped.length)} />
+                    </div>
+                    <DetailBlock title={t("campaigns.call.skipReasons")}>
+                      <div className="space-y-2">
+                        <GapLine label={t("campaigns.call.noPhone")} value={localTargetSummary.skippedReasons.noPhone} />
+                        <GapLine label={t("campaigns.call.outsideGeo")} value={localTargetSummary.skippedReasons.outsideGeo} />
+                        <GapLine label={t("campaigns.call.riskMismatch")} value={localTargetSummary.skippedReasons.riskMismatch} />
+                        <GapLine label={t("campaigns.call.healthMismatch")} value={localTargetSummary.skippedReasons.healthMismatch} />
+                        <GapLine label={t("campaigns.call.providerMismatch")} value={localTargetSummary.skippedReasons.providerMismatch} />
+                        <GapLine label={t("campaigns.call.templateMismatch")} value={localTargetSummary.skippedReasons.templateMismatch} />
+                      </div>
+                    </DetailBlock>
+                    <DetailBlock title={t("campaigns.target.requiredSafeguards")}>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge className="rounded-full border-0 bg-emerald-100 px-3 py-1 text-emerald-700">{t("campaigns.call.consentOnly")}</Badge>
+                        <Badge className="rounded-full border-0 bg-emerald-100 px-3 py-1 text-emerald-700">{t("campaigns.target.phoneRequired")}</Badge>
+                      </div>
+                    </DetailBlock>
+                    <DetailBlock title={t("campaigns.empty.likelyRecipientsTitle")}>
+                      <div className="space-y-2">
+                        {localTargetSummary.eligible.slice(0, 4).map((target) => (
+                          <div key={target.id} className="rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                            <p className="font-semibold text-foreground">{`${target.first_name ?? ""} ${target.last_name ?? ""}`.trim() || "Unknown"}</p>
+                            <p className="text-muted-foreground">{target.city || t("campaigns.scope.allCities")}</p>
+                          </div>
+                        ))}
+                        {localTargetSummary.eligible.length > 4 && (
+                          <p className="text-sm font-semibold text-primary">
+                            {t("campaigns.target.moreRecipients").replace("{count}", String(localTargetSummary.eligible.length - 4))}
+                          </p>
+                        )}
+                        {localTargetSummary.eligible.length === 0 && (
+                          <p className="text-sm text-muted-foreground">{t("campaigns.empty.noRecipients")}</p>
+                        )}
+                      </div>
+                    </DetailBlock>
+                  </aside>
+                </section>
+              )}
+
+              {wizardStep === 3 && (
+                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+                  <div className="space-y-5 rounded-2xl border border-border bg-white p-5">
+                    <div className="space-y-2">
+                      <h3 className="text-xl font-bold text-foreground">{t("campaigns.call.script")}</h3>
+                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                    </div>
+                    <Textarea
+                      id="campaign-script"
+                      value={form.callScript}
+                      onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                      placeholder={t("campaigns.call.scriptPlaceholder")}
+                      className="min-h-[320px]"
+                    />
+                  </div>
+                  <aside className="space-y-4 rounded-2xl border border-primary/15 bg-primary/5 p-5">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded-full bg-primary/10 p-2 text-primary">
+                        <Sparkles className="h-4 w-4" />
+                      </span>
+                      <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
+                    </div>
+                    <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
+                    <Textarea
+                      id="campaign-ai-prompt"
+                      value={form.aiPrompt}
+                      onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
+                      placeholder={t("campaigns.ai.promptPlaceholder")}
+                      className="min-h-[120px]"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full rounded-full"
+                      onClick={() => setAiSuggestion(buildAiSuggestion(form))}
+                    >
+                      <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                      {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                    </Button>
+                    {aiSuggestion && (
+                      <div className="space-y-3 rounded-2xl bg-slate-50 p-4">
+                        <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
+                        <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
+                        <Button
+                          type="button"
+                          className="w-full rounded-full bg-primary hover:bg-primary/90"
+                          onClick={() => {
+                            setForm((current) => current ? {
+                              ...current,
+                              templateKey: aiSuggestion.templateKey,
+                              name: aiSuggestion.name,
+                              audience: aiSuggestion.audience,
+                              objective: aiSuggestion.objective,
+                              callScript: aiSuggestion.callScript,
+                            } : current);
+                            toast({ title: t("campaigns.ai.appliedTitle"), description: t("campaigns.ai.appliedDescription") });
+                          }}
+                        >
+                          {t("campaigns.ai.apply")}
+                        </Button>
+                      </div>
+                    )}
+                  </aside>
+                </section>
+              )}
+
+              {wizardStep === 4 && (
+                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="space-y-5 rounded-2xl border border-border bg-white p-5">
                     <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="campaign-city">{t("campaigns.form.city")}</Label>
-                        <Input
-                          id="campaign-city"
-                          value={form.city}
-                          onChange={(event) => setForm((current) => current ? { ...current, city: event.target.value } : current)}
-                          placeholder={t("campaigns.form.cityPlaceholder")}
-                        />
-                      </div>
                       <div className="space-y-2">
                         <Label htmlFor="campaign-scheduled-at">{t("campaigns.form.scheduledAt")}</Label>
                         <Input
@@ -1772,6 +2198,17 @@ export default function Campaigns() {
                           type="datetime-local"
                           value={form.scheduledAt}
                           onChange={(event) => setForm((current) => current ? { ...current, scheduledAt: event.target.value } : current)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-retry">{t("campaigns.call.retryLimit")}</Label>
+                        <Input
+                          id="campaign-retry"
+                          type="number"
+                          min="0"
+                          max="5"
+                          value={form.retryLimit}
+                          onChange={(event) => setForm((current) => current ? { ...current, retryLimit: event.target.value } : current)}
                         />
                       </div>
                       <div className="space-y-2">
@@ -1792,198 +2229,71 @@ export default function Campaigns() {
                           onChange={(event) => setForm((current) => current ? { ...current, callWindowEnd: event.target.value } : current)}
                         />
                       </div>
-                      <div className="space-y-2 md:max-w-[220px]">
-                        <Label htmlFor="campaign-retry-limit">{t("campaigns.call.retryLimit")}</Label>
-                        <Select
-                          value={form.retryLimit}
-                          onValueChange={(value) => setForm((current) => current ? { ...current, retryLimit: value } : current)}
-                        >
-                          <SelectTrigger id="campaign-retry-limit">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {["0", "1", "2", "3", "4", "5"].map((value) => (
-                              <SelectItem key={value} value={value}>{value}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2 md:col-span-2">
-                        <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
-                        <Textarea
-                          id="campaign-audience"
-                          value={form.audience}
-                          onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
-                          className="min-h-[96px]"
-                        />
-                      </div>
-                      <div className="space-y-2 md:col-span-2">
-                        <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
-                        <Textarea
-                          id="campaign-objective"
-                          value={form.objective}
-                          onChange={(event) => setForm((current) => current ? { ...current, objective: event.target.value } : current)}
-                          className="min-h-[96px]"
-                        />
-                      </div>
-                    </div>
-                  </section>
-
-                  <section className="rounded-2xl border border-border bg-white p-5">
-                    <div className="mb-5 space-y-2">
-                      <div className="flex items-center gap-3">
-                        <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">3</span>
-                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.call.script")}</h3>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
+                      <Label htmlFor="campaign-objective">{t("campaigns.detail.objective")}</Label>
                       <Textarea
-                        id="campaign-script"
-                        value={form.callScript}
-                        onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
-                        placeholder={t("campaigns.call.scriptPlaceholder")}
-                        className="min-h-[260px]"
+                        id="campaign-objective"
+                        value={form.objective}
+                        onChange={(event) => setForm((current) => current ? { ...current, objective: event.target.value } : current)}
+                        className="min-h-[96px]"
                       />
                     </div>
-                  </section>
-                </div>
-
-                <aside className="flex flex-col gap-6 xl:sticky xl:top-6 self-start">
-                  <section className="space-y-4 rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/5 to-white p-5">
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <span className="rounded-full bg-primary/10 p-2 text-primary">
-                          <Sparkles className="h-4 w-4" />
-                        </span>
-                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
-                      </div>
-                      <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.ai.description")}</p>
-                    </div>
-
-                    <div className="rounded-2xl border border-primary/10 bg-white/80 px-4 py-3 text-sm text-muted-foreground">
-                      <p className="font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
-                      <p className="mt-1 leading-6">{templateDescription(form.templateKey)}</p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="campaign-ai-prompt">{t("campaigns.ai.promptLabel")}</Label>
+                      <Label htmlFor="campaign-audience">{t("campaigns.detail.audience")}</Label>
                       <Textarea
-                        id="campaign-ai-prompt"
-                        value={form.aiPrompt}
-                        onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
-                        placeholder={t("campaigns.ai.promptPlaceholder")}
-                        className="min-h-[140px]"
+                        id="campaign-audience"
+                        value={form.audience}
+                        onChange={(event) => setForm((current) => current ? { ...current, audience: event.target.value } : current)}
+                        className="min-h-[96px]"
                       />
-                      <p className="text-xs text-muted-foreground">{t("campaigns.ai.helper")}</p>
                     </div>
-
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="w-full rounded-full"
-                      onClick={() => {
-                        const suggestion = buildAiSuggestion(form);
-                        setAiSuggestion(suggestion);
-                      }}
-                    >
-                      <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                      {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
-                    </Button>
-
-                    {aiSuggestion && (
-                      <div className="space-y-4 rounded-2xl border border-border bg-white p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant="outline" className="rounded-full border-primary/20 bg-primary/5 px-3 py-1 font-semibold text-primary">
-                            {templateLabel(aiSuggestion.templateKey)}
-                          </Badge>
-                          <Badge className="rounded-full border-0 bg-slate-900 px-3 py-1 font-semibold text-white">
-                            {t("campaigns.ai.operatorFocus")}
-                          </Badge>
-                        </div>
-                        <div className="space-y-2">
-                          <p className="font-semibold text-foreground">{aiSuggestion.name}</p>
-                          <p className="text-sm leading-6 text-muted-foreground">{aiSuggestion.objective}</p>
-                        </div>
-                        <div className="space-y-2">
-                          {aiSuggestion.focus.map((item) => (
-                            <div key={item} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-foreground">
-                              {item}
-                            </div>
-                          ))}
-                        </div>
-                        <Button
-                          type="button"
-                          className="w-full rounded-full bg-primary hover:bg-primary/90"
-                          onClick={() => {
-                            setForm((current) => current ? {
-                              ...current,
-                              templateKey: aiSuggestion.templateKey,
-                              name: aiSuggestion.name,
-                              audience: aiSuggestion.audience,
-                              objective: aiSuggestion.objective,
-                              callScript: aiSuggestion.callScript,
-                            } : current);
-                            toast({
-                              title: t("campaigns.ai.appliedTitle"),
-                              description: t("campaigns.ai.appliedDescription"),
-                            });
-                          }}
-                        >
-                          {t("campaigns.ai.apply")}
-                        </Button>
-                      </div>
-                    )}
-                  </section>
-
-                  <section className="space-y-4 rounded-2xl border border-border bg-white p-5">
-                    <div className="space-y-1">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{form.id ? t("campaigns.form.editTitle") : t("campaigns.form.title")}</p>
-                      <p className="text-lg font-bold text-foreground">{form.name.trim() || templateLabel(form.templateKey)}</p>
-                      <p className="text-sm text-muted-foreground">{templateDescription(form.templateKey)}</p>
+                    <DetailBlock title={t("campaigns.call.scriptPreview")}>
+                      <p className="whitespace-pre-line text-sm leading-6 text-foreground">{form.callScript || t("campaigns.call.scriptPlaceholder")}</p>
+                    </DetailBlock>
+                  </div>
+                  <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
+                    <h3 className="text-lg font-bold text-foreground">{t("campaigns.wizard.reviewReady")}</h3>
+                    <InfoPair title={t("campaigns.form.template")} value={templateLabel(form.templateKey)} />
+                    <InfoPair title={t("campaigns.form.name")} value={form.name.trim() || templateLabel(form.templateKey)} />
+                    <InfoPair title={t("campaigns.detail.scope")} value={form.targetRules.geo.scope === "organization" ? t("campaigns.target.geo.allOrg") : form.targetRules.geo.value || form.city || t("campaigns.scope.allCities")} />
+                    <InfoPair title={t("campaigns.form.scheduledAt")} value={formatDateTime(toIsoOrNull(form.scheduledAt))} />
+                    <InfoPair title={t("campaigns.call.schedule")} value={formatTimeRange(form.callWindowStart, form.callWindowEnd)} />
+                    <InfoPair title={t("campaigns.call.retryLimit")} value={form.retryLimit} />
+                    <div className="grid grid-cols-2 gap-3">
+                      <MiniStat title={t("campaigns.preview.eligibleCount")} value={String(localTargetSummary.eligible.length)} />
+                      <MiniStat title={t("campaigns.preview.skippedCount")} value={String(localTargetSummary.skipped.length)} />
                     </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                      <InfoPair title={t("campaigns.form.city")} value={form.city.trim() || t("campaigns.scope.allCities")} />
-                      <InfoPair title={t("campaigns.form.scheduledAt")} value={formatDateTime(toIsoOrNull(form.scheduledAt))} />
-                      <InfoPair title={t("campaigns.call.schedule")} value={formatTimeRange(form.callWindowStart, form.callWindowEnd)} />
-                      <InfoPair title={t("campaigns.call.retryLimit")} value={form.retryLimit} />
-                    </div>
-
-                    <DetailBlock title={t("campaigns.detail.audience")}>
-                      <p className="text-sm leading-6 text-foreground">{form.audience || templateAudience(form.templateKey, form.city)}</p>
-                    </DetailBlock>
-                    <DetailBlock title={t("campaigns.detail.objective")}>
-                      <p className="text-sm leading-6 text-foreground">{form.objective || templateObjective(form.templateKey, form.city)}</p>
-                    </DetailBlock>
-                  </section>
-
-                  <section className="space-y-4 rounded-2xl border border-border bg-white p-5">
-                    <DetailBlock title={t("campaigns.call.panelDescription")}>
-                      <div className="space-y-2 text-sm text-muted-foreground">
-                        <p>{t("campaigns.call.consentOnly")}</p>
-                        <p>{t("campaigns.call.windowGuard")}</p>
-                        <p>{t("campaigns.call.noRealCalls")}</p>
-                      </div>
-                    </DetailBlock>
-                  </section>
-                </aside>
-              </div>
+                  </aside>
+                </section>
+              )}
             </div>
           )}
 
-          <DialogFooter className="border-t border-border bg-white px-6 py-4">
+          <DialogFooter className="flex flex-col gap-2 border-t border-border bg-white px-6 py-4 sm:flex-row sm:justify-between">
             <Button type="button" variant="outline" onClick={() => setEditorOpen(false)}>
               {t("campaigns.form.cancel")}
             </Button>
-            <Button
-              type="button"
-              onClick={() => form && saveMutation.mutate({ draft: form, status: "draft" })}
-              disabled={!form || saveMutation.isPending || !canDraftCampaigns}
-            >
-              {t("campaigns.action.saveDraft")}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              {wizardStep > 1 && (
+                <Button type="button" variant="outline" onClick={previousWizardStep}>
+                  {t("campaigns.wizard.back")}
+                </Button>
+              )}
+              {wizardStep < 4 ? (
+                <Button type="button" onClick={nextWizardStep} disabled={!canMoveNext(wizardStep)}>
+                  {t("campaigns.wizard.next")}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  onClick={() => form && saveMutation.mutate({ draft: form, status: "draft" })}
+                  disabled={!form || saveMutation.isPending || !canDraftCampaigns}
+                >
+                  {t("campaigns.action.saveDraft")}
+                </Button>
+              )}
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

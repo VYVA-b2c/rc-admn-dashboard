@@ -1687,6 +1687,98 @@ function resolveCampaignTemplateKey(rowOrPayload) {
   return defaultTemplateKeyForType(String(rowOrPayload?.type || "safety"));
 }
 
+function defaultCampaignTargetRules(city = "") {
+  const cleanCity = nullIfBlank(city) || "";
+  return {
+    geo: {
+      scope: cleanCity ? "city" : "organization",
+      value: cleanCity,
+    },
+    riskLevel: "all",
+    healthConditions: [],
+    careProvider: {
+      mode: "all",
+      providerId: "",
+      providerName: "",
+      providerType: "",
+    },
+    requireConsent: true,
+    requirePhone: true,
+  };
+}
+
+function normalizeCampaignTargetRules(value, city = "") {
+  let source = value;
+  if (typeof source === "string" && source.trim()) {
+    try {
+      source = JSON.parse(source);
+    } catch {
+      source = null;
+    }
+  }
+  const fallback = defaultCampaignTargetRules(city);
+  if (!source || typeof source !== "object" || Array.isArray(source)) return fallback;
+  const geo = source.geo && typeof source.geo === "object" ? source.geo : {};
+  const careProvider = source.careProvider && typeof source.careProvider === "object" ? source.careProvider : {};
+  const geoScope = ["organization", "country", "city", "area"].includes(String(geo.scope)) ? String(geo.scope) : fallback.geo.scope;
+  const providerMode = ["all", "unassigned", "assigned"].includes(String(careProvider.mode)) ? String(careProvider.mode) : "all";
+  const providerType = ["caregiver", "field_staff"].includes(String(careProvider.providerType)) ? String(careProvider.providerType) : "";
+  return {
+    geo: {
+      scope: geoScope,
+      value: nullIfBlank(geo.value) || "",
+    },
+    riskLevel: ["all", "stable", "review", "urgent", "high"].includes(String(source.riskLevel)) ? String(source.riskLevel) : "all",
+    healthConditions: Array.isArray(source.healthConditions)
+      ? source.healthConditions.map((item) => nullIfBlank(item)).filter(Boolean).slice(0, 12)
+      : [],
+    careProvider: {
+      mode: providerMode,
+      providerId: nullIfBlank(careProvider.providerId) || "",
+      providerName: nullIfBlank(careProvider.providerName) || "",
+      providerType,
+    },
+    requireConsent: source.requireConsent !== false,
+    requirePhone: source.requirePhone !== false,
+  };
+}
+
+function campaignTargetRuleSkipReason(rules, user) {
+  const geoValue = String(rules.geo?.value || "").trim().toLowerCase();
+  const city = String(user.city || "").trim().toLowerCase();
+  const country = String(user.country || "").trim().toLowerCase();
+  if (rules.geo?.scope === "city" && geoValue && city !== geoValue) return "outside_geo";
+  if (rules.geo?.scope === "country" && geoValue && country !== geoValue) return "outside_geo";
+  if (rules.geo?.scope === "area" && geoValue && !city.includes(geoValue)) return "outside_geo";
+
+  const riskStatus = targetRiskStatus(user);
+  if (rules.riskLevel === "urgent" && riskStatus !== "urgent") return "risk_mismatch";
+  if (rules.riskLevel === "review" && riskStatus !== "review") return "risk_mismatch";
+  if (rules.riskLevel === "stable" && riskStatus !== "stable") return "risk_mismatch";
+  if (rules.riskLevel === "high" && Number(user.riskScore || 0) < 70) return "risk_mismatch";
+
+  const requiredConditions = Array.isArray(rules.healthConditions) ? rules.healthConditions.map((item) => String(item).toLowerCase()) : [];
+  if (requiredConditions.length) {
+    const userConditions = Array.isArray(user.healthConditionNames) ? user.healthConditionNames.map((item) => String(item).toLowerCase()) : [];
+    if (!requiredConditions.some((condition) => userConditions.some((existing) => existing.includes(condition) || condition.includes(existing)))) {
+      return "health_condition_mismatch";
+    }
+  }
+
+  const providerMode = rules.careProvider?.mode || "all";
+  if (providerMode === "unassigned" && Number(user.careProviderCount || 0) > 0) return "provider_mismatch";
+  if (providerMode === "assigned") {
+    const providerId = String(rules.careProvider?.providerId || "");
+    const providerName = String(rules.careProvider?.providerName || "").toLowerCase();
+    const providerIds = Array.isArray(user.careProviderIds) ? user.careProviderIds.map(String) : [];
+    const providerNames = Array.isArray(user.careProviderNames) ? user.careProviderNames.map((item) => String(item).toLowerCase()) : [];
+    if (providerId && !providerIds.includes(providerId)) return "provider_mismatch";
+    if (!providerId && providerName && !providerNames.includes(providerName)) return "provider_mismatch";
+  }
+
+  return null;
+}
+
 function callTemplateReasonKey(templateKey, user) {
   if (templateKey === "custom_campaign") return "campaigns.targets.reason.generalAnnouncement";
   if (templateKey === "medication_reminder") return "campaigns.targets.reason.publicHealth";
@@ -1806,6 +1898,7 @@ function normalizeCampaign(row, targets = [], latestRun = null) {
     audience: row.audience,
     audienceKey: row.audience_key,
     templateKey: resolveCampaignTemplateKey(row),
+    targetRules: normalizeCampaignTargetRules(row.target_rules, row.city),
     dueKey: row.due_key || "campaigns.due.draft",
     city: row.city || "",
     owner: row.owner || "",
@@ -1844,6 +1937,7 @@ async function loadCampaigns(context) {
       audience,
       audience_key,
       template_key,
+      target_rules,
       due_key,
       city,
       owner,
@@ -2058,7 +2152,7 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
   const templateKey = resolveCampaignTemplateKey(payload);
   const campaignResult = await query(
     `
-      SELECT id::text, organization_id::text, city, template_key, type, call_script, call_window_start, call_window_end, retry_limit
+      SELECT id::text, organization_id::text, city, template_key, target_rules, type, call_script, call_window_start, call_window_end, retry_limit
       FROM public.campaigns
       WHERE id = $1 AND organization_id = $2
       LIMIT 1
@@ -2069,7 +2163,7 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
   if (!campaign) return null;
 
   const resolvedTemplateKey = isCampaignTemplateKey(templateKey) ? templateKey : resolveCampaignTemplateKey(campaign);
-  const city = nullIfBlank(payload.city) ?? nullIfBlank(campaign.city);
+  const targetRules = normalizeCampaignTargetRules(payload.targetRules ?? payload.target_rules ?? campaign.target_rules, payload.city ?? campaign.city);
   const scheduledAt = settings.scheduledAt ?? null;
   const callWindowStart = settings.callWindowStart || campaign.call_window_start || "09:00";
   const callWindowEnd = settings.callWindowEnd || campaign.call_window_end || "18:00";
@@ -2084,7 +2178,12 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
         u.first_name,
         u.last_name,
         u.city,
+        u.country,
         u.phone,
+        COALESCE(h.health_conditions, ARRAY[]::text[]) AS health_conditions,
+        COALESCE(provider_summary.provider_count, 0)::int AS provider_count,
+        COALESCE(provider_summary.provider_ids, ARRAY[]::text[]) AS provider_ids,
+        COALESCE(provider_summary.provider_names, ARRAY[]::text[]) AS provider_names,
         COALESCE(c.consent_given, false) AS consent_given,
         EXISTS (
           SELECT 1
@@ -2095,11 +2194,21 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
         ) AS duplicate_target
       FROM public.vyva_users u
       LEFT JOIN public.vyva_user_consent c ON c.vyva_user_id = u.id
-      WHERE u.organization_id = $3
-        AND ($2::text IS NULL OR LOWER(COALESCE(u.city, '')) = LOWER($2::text))
+      LEFT JOIN public.vyva_user_health h ON h.vyva_user_id = u.id
+      LEFT JOIN LATERAL (
+        SELECT
+          COUNT(*)::int AS provider_count,
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(a.care_provider_contact_id::text, a.field_staff_id::text)), NULL) AS provider_ids,
+          ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(cp.full_name, fs.full_name)), NULL) AS provider_names
+        FROM public.vyva_user_care_provider_assignments a
+        LEFT JOIN public.care_provider_contacts cp ON cp.id = a.care_provider_contact_id
+        LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+        WHERE a.vyva_user_id = u.id
+      ) provider_summary ON true
+      WHERE u.organization_id = $2
       ORDER BY u.created_at DESC
     `,
-    [campaignId, city, organizationId],
+    [campaignId, organizationId],
   );
 
   const skipped = {
@@ -2124,16 +2233,33 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
       checkinEnabled: false,
       riskScore: 0,
       careProviderCount: 0,
+      careProviderIds: [],
+      careProviderNames: [],
+      healthConditionNames: [],
     };
-    if (!campaignUserMatchesTemplate(resolvedTemplateKey, candidateUser)) continue;
+    const enrichedCandidateUser = {
+      ...candidateUser,
+      country: row.country || candidateUser.country || "",
+      healthConditionNames: Array.isArray(row.health_conditions) ? row.health_conditions : [],
+      careProviderCount: Number(row.provider_count || candidateUser.careProviderCount || 0),
+      careProviderIds: Array.isArray(row.provider_ids) ? row.provider_ids : [],
+      careProviderNames: Array.isArray(row.provider_names) && row.provider_names.length ? row.provider_names : candidateUser.careProviderNames || [],
+    };
 
     let status = "eligible";
     let skipReason = null;
-    if (!nullIfBlank(row.phone)) {
+    const rulesSkipReason = campaignTargetRuleSkipReason(targetRules, enrichedCandidateUser);
+    if (!campaignUserMatchesTemplate(resolvedTemplateKey, enrichedCandidateUser)) {
+      status = "skipped";
+      skipReason = "template_mismatch";
+    } else if (rulesSkipReason) {
+      status = "skipped";
+      skipReason = rulesSkipReason;
+    } else if (targetRules.requirePhone && !nullIfBlank(row.phone)) {
       status = "skipped";
       skipReason = "no_phone";
       skipped.noPhone += 1;
-    } else if (!row.consent_given) {
+    } else if (targetRules.requireConsent && !row.consent_given) {
       status = "skipped";
       skipReason = "no_consent";
       skipped.noConsent += 1;
@@ -2151,8 +2277,8 @@ async function buildCampaignCallPreview(campaignId, payload = {}, context) {
       userId: row.user_id,
       displayName: `${row.first_name || ""} ${row.last_name || ""}`.trim() || "Unknown user",
       city: row.city || "",
-      riskStatus: targetRiskStatus(candidateUser),
-      reasonKey: callTemplateReasonKey(resolvedTemplateKey, candidateUser),
+      riskStatus: targetRiskStatus(enrichedCandidateUser),
+      reasonKey: callTemplateReasonKey(resolvedTemplateKey, enrichedCandidateUser),
       status,
       skipReason,
     });
@@ -5001,6 +5127,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   const organizationId = scopeOrganizationId(req.context);
+  const targetRules = normalizeCampaignTargetRules(req.body.targetRules ?? req.body.target_rules, req.body.city);
   const result = await query(
     `
       INSERT INTO public.campaigns (
@@ -5009,6 +5136,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         objective,
         audience,
         template_key,
+        target_rules,
         due_key,
         city,
         owner,
@@ -5023,7 +5151,7 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
         execution_type,
         tone
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING id::text
     `,
     [
@@ -5032,9 +5160,10 @@ app.post("/api/v1/campaigns-dashboard/campaigns", asyncRoute(async (req, res) =>
       String(req.body.objective || "").trim() || null,
       String(req.body.audience || "").trim() || null,
       templateKey,
+      JSON.stringify(targetRules),
       String(req.body.dueKey || "campaigns.due.draft"),
       String(req.body.city || "").trim() || null,
-      String(req.body.owner || "Ana Novak").trim(),
+      String(req.body.owner || "").trim() || null,
       type,
       status,
       String(req.body.channel || "phone"),
@@ -5066,6 +5195,7 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
   const callSettings = normalizeCampaignCallSettings(req.body);
   const executionType = String(req.body.executionType || req.body.execution_type || "manual");
   const organizationId = scopeOrganizationId(req.context);
+  const targetRules = normalizeCampaignTargetRules(req.body.targetRules ?? req.body.target_rules, req.body.city);
   const updateResult = await query(
     `
       UPDATE public.campaigns
@@ -5077,20 +5207,21 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
         audience = $4,
         audience_key = NULL,
         template_key = $5,
-        due_key = $6,
-        city = $7,
-        owner = $8,
-        type = $9,
-        status = $10,
-        channel = $11,
-        scheduled_at = $12,
-        call_script = $13,
-        call_window_start = $14,
-        call_window_end = $15,
-        retry_limit = $16,
-        execution_type = $17,
-        tone = $18
-      WHERE id = $1 AND organization_id = $19
+        target_rules = $6::jsonb,
+        due_key = $7,
+        city = $8,
+        owner = $9,
+        type = $10,
+        status = $11,
+        channel = $12,
+        scheduled_at = $13,
+        call_script = $14,
+        call_window_start = $15,
+        call_window_end = $16,
+        retry_limit = $17,
+        execution_type = $18,
+        tone = $19
+      WHERE id = $1 AND organization_id = $20
       RETURNING id::text
     `,
     [
@@ -5099,9 +5230,10 @@ app.patch("/api/v1/campaigns-dashboard/campaigns/:id", asyncRoute(async (req, re
       String(req.body.objective || "").trim() || null,
       String(req.body.audience || "").trim() || null,
       templateKey,
+      JSON.stringify(targetRules),
       String(req.body.dueKey || "campaigns.due.draft"),
       String(req.body.city || "").trim() || null,
-      String(req.body.owner || "Ana Novak").trim(),
+      String(req.body.owner || "").trim() || null,
       type,
       status,
       String(req.body.channel || "phone"),
