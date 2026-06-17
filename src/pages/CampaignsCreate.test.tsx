@@ -246,7 +246,28 @@ describe("Campaigns create flow", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Draft with AI" }));
 
     await waitFor(() => {
-      expect((within(dialog).getByLabelText("Call script") as HTMLTextAreaElement).value).toContain("Operational emphasis");
+      const script = (within(dialog).getByLabelText("Call script") as HTMLTextAreaElement).value;
+      expect(script).toContain("vaccination appointment window");
+      expect(script).not.toContain("Operational emphasis");
+    });
+  });
+
+  it("does not classify a storm warning AI draft as a scam alert", async () => {
+    const dialog = await openCreateDialog("wellbeing_check");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /Create with AI/ }));
+    fireEvent.change(within(dialog).getByLabelText("What should this campaign do?"), {
+      target: { value: "warn users about a storm coming" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Draft with AI" }));
+
+    await waitFor(() => {
+      expect(within(dialog).getByText("General announcement")).toBeInTheDocument();
+      const script = (within(dialog).getByLabelText("Call script") as HTMLTextAreaElement).value;
+      expect(script).toContain("storm coming");
+      expect(script).not.toContain("Operational emphasis");
+      expect(script).not.toContain("scam");
+      expect(script).not.toContain("fraud");
     });
   });
 

@@ -1077,11 +1077,11 @@ export default function Campaigns() {
 
   const inferAiTemplate = (prompt: string, fallback: TemplateKey): TemplateKey => {
     const normalized = prompt.toLowerCase();
-    if (/(heat|hot|dehydrat|summer|weather)/.test(normalized)) return "heatwave_alert";
+    if (/(heat|hot|heatwave|dehydrat|summer)/.test(normalized)) return "heatwave_alert";
     if (/(vaccine|vaccination|booster|flu shot|shot clinic|immuni[sz]ation|public health)/.test(normalized)) return "medication_reminder";
-    if (/(scam|fraud|suspicious|phone scam|bank alert|identity theft|safety advisory|warning)/.test(normalized)) return "wellbeing_check";
+    if (/(scam|fraud|suspicious caller|phone scam|bank scam|identity theft|money request|phishing)/.test(normalized)) return "wellbeing_check";
     if (/(service|transport|pharmacy|update|hours|closure|appointment|referral)/.test(normalized)) return "service_update";
-    if (/(announce|announcement|inform|remind|warning|alert|campaign)/.test(normalized)) return "general_announcement";
+    if (/(storm|weather|rain|flood|wind|thunder|lightning|snow|ice|cold|wildfire|fire|smoke|air quality|evacuat|announce|announcement|inform|remind|warn|warning|alert|campaign)/.test(normalized)) return "general_announcement";
     return fallback;
   };
 
@@ -1090,6 +1090,9 @@ export default function Campaigns() {
     const city = draft.city.trim();
     const freeText = draft.aiPrompt.trim();
     const baseScript = aiTemplateScript(suggestedTemplate);
+    const scriptBridge = freeText
+      ? t("campaigns.ai.scriptBridge").replace("{goal}", freeText)
+      : "";
     const objective = freeText
       ? `${aiTemplateObjective(suggestedTemplate, city)} ${freeText}`
       : aiTemplateObjective(suggestedTemplate, city);
@@ -1099,7 +1102,7 @@ export default function Campaigns() {
       name: aiTemplateName(suggestedTemplate, city),
       audience: aiTemplateAudience(suggestedTemplate, city),
       objective,
-      callScript: freeText ? `${baseScript}\n\n${t("campaigns.ai.operationalEmphasis")}: ${freeText}` : baseScript,
+      callScript: scriptBridge ? `${baseScript}\n\n${scriptBridge}` : baseScript,
       focus: aiTemplateFocus(suggestedTemplate),
     };
   };
