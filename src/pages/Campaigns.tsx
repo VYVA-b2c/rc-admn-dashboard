@@ -48,6 +48,7 @@ import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import { demoOperationalUsers } from "@/lib/operationalDemoData";
+import { getTranslation, type Language } from "@/lib/translations";
 import { cn } from "@/lib/utils";
 
 type TemplateKey =
@@ -70,8 +71,11 @@ type ScheduleFrequency = "once" | "daily" | "weekly" | "monthly";
 type Campaign = {
   id: string;
   name: string;
+  nameKey?: string | null;
   objective?: string | null;
+  objectiveKey?: string | null;
   audience?: string | null;
+  audienceKey?: string | null;
   city?: string | null;
   targetRules?: CampaignTargetRules | null;
   status: string;
@@ -274,6 +278,7 @@ const campaignChannelOptions = [
 ];
 
 const scheduleFrequencyOptions: ScheduleFrequency[] = ["once", "daily", "weekly", "monthly"];
+const templateContentLanguages: Language[] = ["en", "de", "es"];
 
 function isCampaignChannel(value: string): value is CampaignChannel {
   return value === "voice" || value === "whatsapp" || value === "email" || value === "sms";
@@ -407,6 +412,29 @@ function templateType(templateKey: TemplateKey) {
 
 function isCustomTemplate(templateKey: TemplateKey) {
   return templateKey === "custom_campaign";
+}
+
+function normalizedContent(value?: string | null) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function templateContentKey(templateKey: TemplateKey, field: "name" | "objective" | "audience" | "script") {
+  if (field === "name") return `campaigns.template.${templateKey}.title`;
+  return `campaigns.template.${templateKey}.${field}`;
+}
+
+function translatedTemplateContent(templateKey: TemplateKey, field: "name" | "objective" | "audience" | "script", lang: Language, city = "") {
+  const key = templateContentKey(templateKey, field);
+  const translated = getTranslation(lang, key);
+  if (translated === key) return "";
+  const cityLabel = city || getTranslation(lang, "campaigns.scope.allCities");
+  return translated.replace("{city}", cityLabel);
+}
+
+function isKnownTemplateContent(templateKey: TemplateKey, field: "name" | "objective" | "audience" | "script", value?: string | null, city = "") {
+  const normalized = normalizedContent(value);
+  if (!normalized) return true;
+  return templateContentLanguages.some((lang) => normalizedContent(translatedTemplateContent(templateKey, field, lang, city)) === normalized);
 }
 
 function defaultTargetRules(city = ""): CampaignTargetRules {
@@ -692,6 +720,63 @@ export default function Campaigns() {
     return translated;
   };
 
+  const campaignTemplateKey = (campaign: Campaign) => campaign.templateKey ?? "general_announcement";
+
+  const translatedCampaignKey = (key?: string | null, city = "") => {
+    if (!key) return "";
+    const translated = t(key);
+    if (translated === key) return "";
+    return translated.replace("{city}", city || t("campaigns.scope.allCities"));
+  };
+
+  const campaignLocalizedField = (campaign: Campaign, field: "name" | "objective" | "audience" | "script") => {
+    const templateKey = campaignTemplateKey(campaign);
+    const city = campaign.city ?? "";
+    const keyValue =
+      field === "name"
+        ? translatedCampaignKey(campaign.nameKey, city)
+        : field === "objective"
+          ? translatedCampaignKey(campaign.objectiveKey, city)
+          : field === "audience"
+            ? translatedCampaignKey(campaign.audienceKey, city)
+            : "";
+    if (keyValue) return keyValue;
+
+    const stored =
+      field === "name"
+        ? campaign.name
+        : field === "objective"
+          ? campaign.objective
+          : field === "audience"
+            ? campaign.audience
+            : campaign.callScript;
+
+    const fallback =
+      field === "name"
+        ? templateLabel(templateKey)
+        : field === "objective"
+          ? templateObjective(templateKey, city)
+          : field === "audience"
+            ? templateAudience(templateKey, city)
+            : templateScript(templateKey);
+
+    if (!isCustomTemplate(templateKey) && isKnownTemplateContent(templateKey, field, stored, city)) return fallback;
+    return stored || fallback;
+  };
+
+  const campaignDisplayName = (campaign: Campaign) => campaignLocalizedField(campaign, "name");
+  const campaignDisplayObjective = (campaign: Campaign) => campaignLocalizedField(campaign, "objective");
+  const campaignDisplayAudience = (campaign: Campaign) => campaignLocalizedField(campaign, "audience");
+  const campaignDisplayScript = (campaign: Campaign) => {
+    const templateKey = campaignTemplateKey(campaign);
+    const latestScript = campaign.latestRun?.callScript;
+    if (!latestScript) return campaignLocalizedField(campaign, "script");
+    if (!isCustomTemplate(templateKey) && isKnownTemplateContent(templateKey, "script", latestScript, campaign.city ?? "")) {
+      return templateScript(templateKey);
+    }
+    return latestScript;
+  };
+
   const aiTemplateName = (templateKey: TemplateKey, city: string) => {
     const cityLabel = city || t("campaigns.scope.allCities");
     const key =
@@ -868,7 +953,7 @@ export default function Campaigns() {
       if (filter !== "all" && state !== filter) return false;
       if (!normalized) return true;
       return (
-        campaign.name.toLowerCase().includes(normalized)
+        campaignDisplayName(campaign).toLowerCase().includes(normalized)
         || templateLabel(campaign.templateKey ?? "general_announcement").toLowerCase().includes(normalized)
         || (campaign.city ?? "").toLowerCase().includes(normalized)
         || t(`campaigns.state.${state}`).toLowerCase().includes(normalized)
@@ -1013,7 +1098,7 @@ export default function Campaigns() {
       name: aiTemplateName(suggestedTemplate, city),
       audience: aiTemplateAudience(suggestedTemplate, city),
       objective,
-      callScript: freeText ? `${baseScript}\n\nOperational emphasis: ${freeText}` : baseScript,
+      callScript: freeText ? `${baseScript}\n\n${t("campaigns.ai.operationalEmphasis")}: ${freeText}` : baseScript,
       focus: aiTemplateFocus(suggestedTemplate),
     };
   };
@@ -1205,23 +1290,23 @@ export default function Campaigns() {
     const frequency = normalizeScheduleFrequency(targetRules.schedule?.frequency);
     setForm({
       id: campaign.id,
-      name: campaign.name,
+      name: campaignDisplayName(campaign),
       scriptMode: "template",
       templateKey: campaign.templateKey ?? "general_announcement",
       audienceMode,
-      audience: campaign.audience ?? templateAudience(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
+      audience: campaignDisplayAudience(campaign),
       city: campaign.city ?? "",
       targetRules: { ...targetRules, channels },
       channels,
       frequency,
       uploadedAudience,
       uploadedAudienceText: "",
-      objective: campaign.objective ?? templateObjective(campaign.templateKey ?? "general_announcement", campaign.city ?? ""),
+      objective: campaignDisplayObjective(campaign),
       scheduledAt: toDateTimeLocal(campaign.scheduledAt),
       callWindowStart: campaign.callWindowStart ?? "09:00",
       callWindowEnd: campaign.callWindowEnd ?? "18:00",
       retryLimit: String(campaign.retryLimit ?? 1),
-      callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+      callScript: campaignLocalizedField(campaign, "script"),
       aiPrompt: "",
     });
     setAiSuggestion(null);
@@ -1351,7 +1436,7 @@ export default function Campaigns() {
         callWindowStart: campaign.callWindowStart ?? "09:00",
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
         retryLimit: campaign.retryLimit ?? 1,
-        callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+        callScript: campaignLocalizedField(campaign, "script"),
         channel: legacyChannelForChannels(channels),
         executionType: executionTypeForChannels(channels),
       };
@@ -1387,7 +1472,7 @@ export default function Campaigns() {
         callWindowStart: campaign.callWindowStart ?? "09:00",
         callWindowEnd: campaign.callWindowEnd ?? "18:00",
         retryLimit: campaign.retryLimit ?? 1,
-        callScript: campaign.callScript ?? templateScript(campaign.templateKey ?? "general_announcement"),
+        callScript: campaignLocalizedField(campaign, "script"),
         channel: legacyChannelForChannels(channels),
         executionType: executionTypeForChannels(channels),
       };
@@ -1396,9 +1481,9 @@ export default function Campaigns() {
         method: "PATCH",
         body: JSON.stringify({
           ...payload,
-          name: campaign.name,
-          objective: campaign.objective ?? "",
-          audience: campaign.audience ?? "",
+          name: campaignDisplayName(campaign),
+          objective: campaignDisplayObjective(campaign),
+          audience: campaignDisplayAudience(campaign),
           status: action === "schedule" ? "scheduled" : "active",
           channel: legacyChannelForChannels(channels),
           executionType: executionTypeForChannels(channels),
@@ -1670,7 +1755,7 @@ export default function Campaigns() {
                           )}
                         </div>
                         <div>
-                          <h2 className="text-lg font-bold leading-tight text-foreground">{campaign.name}</h2>
+                          <h2 className="text-lg font-bold leading-tight text-foreground">{campaignDisplayName(campaign)}</h2>
                           <p className="mt-1 text-sm text-muted-foreground">{templateDescription(campaign.templateKey ?? "general_announcement")}</p>
                         </div>
                         <div className="flex flex-wrap gap-2 text-sm">
@@ -1780,7 +1865,7 @@ export default function Campaigns() {
                                         onClick={() => setSelectedCampaignId(campaign.id)}
                                       >
                                         <div className="min-w-0">
-                                          <p className="truncate font-semibold text-foreground">{campaign.name}</p>
+                                          <p className="truncate font-semibold text-foreground">{campaignDisplayName(campaign)}</p>
                                           <p className="text-sm text-muted-foreground">
                                             {[campaign.city || t("campaigns.scope.allCities"), formatDateTime(campaign.latestRun?.scheduledAt ?? campaign.scheduledAt)]
                                               .filter(Boolean)
@@ -1868,7 +1953,7 @@ export default function Campaigns() {
                               onClick={() => setSelectedCampaignId(campaign.id)}
                             >
                               <div className="min-w-0">
-                                <p className="truncate font-semibold text-foreground">{campaign.name}</p>
+                                <p className="truncate font-semibold text-foreground">{campaignDisplayName(campaign)}</p>
                                 <p className="text-sm text-muted-foreground">
                                   {[campaign.city || t("campaigns.scope.allCities"), formatDateTime(campaign.latestRun?.scheduledAt ?? campaign.scheduledAt)]
                                     .filter(Boolean)
@@ -1903,8 +1988,8 @@ export default function Campaigns() {
                         )}
                       </div>
                       <div>
-                        <h2 className="text-xl font-bold text-foreground">{selectedCampaign.name}</h2>
-                        <p className="text-sm text-muted-foreground">{selectedCampaign.objective || templateObjective(selectedCampaign.templateKey ?? "general_announcement", selectedCampaign.city ?? "")}</p>
+                        <h2 className="text-xl font-bold text-foreground">{campaignDisplayName(selectedCampaign)}</h2>
+                        <p className="text-sm text-muted-foreground">{campaignDisplayObjective(selectedCampaign)}</p>
                       </div>
                     </div>
 
@@ -1964,7 +2049,7 @@ export default function Campaigns() {
                         <div>
                           <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.objective")}</p>
                           <p className="mt-2 text-base font-semibold leading-7 text-foreground">
-                            {selectedCampaign.objective || templateObjective(selectedCampaign.templateKey ?? "general_announcement", selectedCampaign.city ?? "")}
+                            {campaignDisplayObjective(selectedCampaign)}
                           </p>
                         </div>
 
@@ -1972,13 +2057,13 @@ export default function Campaigns() {
                           <div>
                             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.audience")}</p>
                             <p className="mt-2 text-sm leading-6 text-foreground">
-                              {selectedCampaign.audience || templateAudience(selectedCampaign.templateKey ?? "general_announcement", selectedCampaign.city ?? "")}
+                              {campaignDisplayAudience(selectedCampaign)}
                             </p>
                           </div>
                           <div>
                             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.script")}</p>
                             <p className="mt-2 text-sm leading-6 text-foreground">
-                              {selectedCampaign.latestRun?.callScript || selectedCampaign.callScript || templateScript(selectedCampaign.templateKey ?? "general_announcement")}
+                              {campaignDisplayScript(selectedCampaign)}
                             </p>
                           </div>
                         </div>

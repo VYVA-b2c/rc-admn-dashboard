@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
+import { LanguageProvider } from "@/contexts/LanguageContext";
 import RiskQueue from "@/pages/RiskQueue";
 
 const apiFetchMock = vi.hoisted(() => vi.fn());
@@ -23,7 +24,9 @@ function renderRiskQueue() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <RiskQueue />
+      <LanguageProvider>
+        <RiskQueue />
+      </LanguageProvider>
     </QueryClientProvider>,
   );
 }

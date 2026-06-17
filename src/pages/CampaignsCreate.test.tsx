@@ -107,6 +107,7 @@ describe("Campaigns create flow", () => {
     campaignPosts.length = 0;
     mockedCampaigns = [];
     toastMock.mockClear();
+    window.localStorage.removeItem("app-language");
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -155,6 +156,7 @@ describe("Campaigns create flow", () => {
   });
 
   afterEach(() => {
+    window.localStorage.removeItem("app-language");
     vi.unstubAllGlobals();
   });
 
@@ -288,5 +290,48 @@ describe("Campaigns create flow", () => {
 
     expect(toastMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Add a schedule first" }));
     expect(await screen.findByRole("dialog")).toHaveTextContent("Edit campaign");
+  });
+
+  it("localizes saved template campaign content using the selected app language", async () => {
+    window.localStorage.setItem("app-language", "es");
+    mockedCampaigns = [
+      {
+        id: "campaign-language",
+        name: "Vaccination reminder",
+        nameKey: "campaigns.template.medication_reminder.title",
+        objective:
+          "Reach clients in Tarifa with a clear vaccination reminder and flag anyone who needs human follow-up or support booking the next step.",
+        objectiveKey: "campaigns.template.medication_reminder.objective",
+        audience: "Clients in Tarifa with a phone number and public-health follow-up relevance.",
+        audienceKey: "campaigns.template.medication_reminder.audience",
+        templateKey: "medication_reminder",
+        targetRules: {
+          channels: ["voice"],
+          schedule: { frequency: "once", scheduledAt: null },
+        },
+        dueKey: "campaigns.due.draft",
+        city: "Tarifa",
+        owner: "Codex",
+        status: "draft",
+        channel: "phone",
+        scheduledAt: null,
+        callScript:
+          "Hello, this is VYVA calling on behalf of the Red Cross. We are sharing a reminder about seasonal vaccinations and local health protection. If you would like help understanding the next step, we can arrange follow-up.",
+        callWindowStart: "09:00",
+        callWindowEnd: "18:00",
+        retryLimit: 1,
+        executionType: "vyva_call",
+        latestRun: null,
+        targets: [],
+      },
+    ];
+
+    renderCampaigns();
+
+    expect(await screen.findAllByText("Recordatorio de vacunacion")).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Llegar a clientes en Tarifa/)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Clientes en Tarifa con telefono/)).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Hola, soy VYVA llamando en nombre de Cruz Roja/)).not.toHaveLength(0);
+    expect(screen.queryByText("Vaccination reminder")).not.toBeInTheDocument();
   });
 });
