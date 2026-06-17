@@ -89,7 +89,7 @@ describe("Campaigns", () => {
   it("renders the call-first campaign workspace", async () => {
     renderCampaigns();
 
-    expect(screen.getByRole("heading", { name: "VYVA Call Campaigns" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "VYVA Campaigns" })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getAllByText("Heatwave alert - Madrid").length).toBeGreaterThan(0);

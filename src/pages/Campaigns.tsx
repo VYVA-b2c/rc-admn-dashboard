@@ -1121,10 +1121,29 @@ export default function Campaigns() {
     });
   };
 
-  const setScheduledAtParts = (datePart: string, timePart: string) => {
+  const setScheduleDatePart = (datePart: string) => {
     setForm((current) => {
       if (!current) return current;
-      const scheduledAt = combineScheduleDateTime(datePart, timePart);
+      const scheduledAt = datePart ? combineScheduleDateTime(datePart, scheduleTimePart(current.scheduledAt) || "09:00") : "";
+      const rules = normalizeTargetRules(current.targetRules, current.city);
+      return {
+        ...current,
+        scheduledAt,
+        targetRules: {
+          ...rules,
+          schedule: {
+            frequency: current.frequency,
+            scheduledAt: toIsoOrNull(scheduledAt),
+          },
+        },
+      };
+    });
+  };
+
+  const setScheduleTimePart = (timePart: string) => {
+    setForm((current) => {
+      if (!current) return current;
+      const scheduledAt = combineScheduleDateTime(scheduleDatePart(current.scheduledAt), timePart);
       const rules = normalizeTargetRules(current.targetRules, current.city);
       return {
         ...current,
@@ -2694,7 +2713,7 @@ export default function Campaigns() {
                           id="campaign-schedule-date"
                           type="date"
                           value={scheduleDatePart(form.scheduledAt)}
-                          onChange={(event) => setScheduledAtParts(event.target.value, scheduleTimePart(form.scheduledAt))}
+                          onChange={(event) => setScheduleDatePart(event.target.value)}
                         />
                       </div>
                       <div className="space-y-2">
@@ -2703,7 +2722,7 @@ export default function Campaigns() {
                           id="campaign-schedule-time"
                           type="time"
                           value={scheduleTimePart(form.scheduledAt)}
-                          onChange={(event) => setScheduledAtParts(scheduleDatePart(form.scheduledAt), event.target.value)}
+                          onChange={(event) => setScheduleTimePart(event.target.value)}
                         />
                       </div>
                     </div>
