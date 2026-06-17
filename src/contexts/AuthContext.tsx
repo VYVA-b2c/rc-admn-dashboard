@@ -43,6 +43,14 @@ function hasPendingAuthCallback() {
   );
 }
 
+async function clearLocalSession() {
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {
+    // Ignore cleanup failures during auth recovery.
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -58,6 +66,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(s?.user ?? null);
     };
 
+    const finalizeSignedOutState = async () => {
+      await clearLocalSession();
+      applySession(null);
+      setLoading(false);
+    };
+
+    const validateSession = async (candidate: Session | null) => {
+      if (!candidate?.access_token) return null;
+      const { data, error } = await supabase.auth.getUser(candidate.access_token);
+      if (error || !data.user) return null;
+      return {
+        ...candidate,
+        user: data.user,
+      } satisfies Session;
+    };
+
     if (!supabaseConfigured) {
       applySession(null);
       setLoading(false);
@@ -66,6 +90,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Listen first, then restore
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === "TOKEN_REFRESH_FAILED") {
+        void finalizeSignedOutState();
+        return;
+      }
       applySession(s);
       setLoading(false);
     });
@@ -78,23 +106,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data: { session: s }, error } = await supabase.auth.getSession();
 
         if (error) {
-          applySession(null);
-          setLoading(false);
+          await finalizeSignedOutState();
           return;
         }
 
         if (s) {
-          applySession(s);
-          setLoading(false);
-          return;
+          const validatedSession = await validateSession(s);
+          if (validatedSession) {
+            applySession(validatedSession);
+            setLoading(false);
+            return;
+          }
+
+          const { data: refreshed } = await supabase.auth.refreshSession();
+          const refreshedSession = await validateSession(refreshed.session ?? null);
+          if (refreshedSession) {
+            applySession(refreshedSession);
+            setLoading(false);
+            return;
+          }
         }
 
         if (!pendingCallback) break;
         await new Promise((resolve) => window.setTimeout(resolve, 250));
       }
 
-      applySession(null);
-      setLoading(false);
+      await finalizeSignedOutState();
     };
 
     void restoreSession();

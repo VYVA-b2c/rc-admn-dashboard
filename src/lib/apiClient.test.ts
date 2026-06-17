@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const supabaseAuthMocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   refreshSession: vi.fn(),
+  signOut: vi.fn(),
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -23,6 +24,7 @@ describe("apiFetch organization scoping", () => {
     localStorage.clear();
     supabaseAuthMocks.getSession.mockReset();
     supabaseAuthMocks.refreshSession.mockReset();
+    supabaseAuthMocks.signOut.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -72,5 +74,20 @@ describe("apiFetch organization scoping", () => {
 
     expect(supabaseAuthMocks.refreshSession).toHaveBeenCalledTimes(1);
     expect(authorizationHeaders).toEqual(["Bearer stale-token", "Bearer fresh-token"]);
+  });
+
+  it("clears the local session when the API still rejects the token after refresh", async () => {
+    supabaseAuthMocks.getSession.mockResolvedValue({ data: { session: { access_token: "stale-token" } } });
+    supabaseAuthMocks.refreshSession.mockResolvedValue({ data: { session: null } });
+    supabaseAuthMocks.signOut.mockResolvedValue({ error: null });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "Invalid session" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    })));
+
+    await expect(apiFetch("/api/v1/team-members")).rejects.toThrow("Your session expired. Please sign in again.");
+
+    expect(supabaseAuthMocks.refreshSession).toHaveBeenCalledTimes(1);
+    expect(supabaseAuthMocks.signOut).toHaveBeenCalledWith({ scope: "local" });
   });
 });

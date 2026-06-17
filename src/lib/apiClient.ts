@@ -32,6 +32,14 @@ function isSessionAuthError(status: number, message: string) {
   return status === 401 && /invalid session|authentication required|jwt|token/i.test(message);
 }
 
+async function clearExpiredSupabaseSession() {
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {
+    // Ignore cleanup failures and surface the original auth error instead.
+  }
+}
+
 export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptions = {}): Promise<T> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, headers, signal, ...fetchOptions } = options;
   const controller = new AbortController();
@@ -70,8 +78,15 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
             signal: signal ?? controller.signal,
           });
           if (retryRes.ok) return parseApiResponse<T>(retryRes);
-          throw new Error(await responseErrorMessage(retryRes));
+          const retryMessage = await responseErrorMessage(retryRes);
+          if (isSessionAuthError(retryRes.status, retryMessage)) {
+            await clearExpiredSupabaseSession();
+            throw new Error("Your session expired. Please sign in again.");
+          }
+          throw new Error(retryMessage);
         }
+        await clearExpiredSupabaseSession();
+        throw new Error("Your session expired. Please sign in again.");
       }
       throw new Error(message);
     }
