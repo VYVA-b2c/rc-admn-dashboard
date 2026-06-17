@@ -365,18 +365,22 @@ async function loadLatestMedicationActivity(userId) {
 
 async function loadExternalUserLocalServices(externalUserId, context) {
   const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
-  if (!localUserId) return { checkins: null, brainCoach: null, medicationActivity: null };
+  if (!localUserId) return { checkins: null, brainCoach: null, medicationActivity: null, sensors: [], alerts: [] };
 
-  const [checkins, brainCoach, medicationActivity] = await Promise.all([
+  const [checkins, brainCoach, medicationActivity, sensors, alerts] = await Promise.all([
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
     loadLatestMedicationActivity(localUserId),
+    optionalRows("SELECT *, id::text, vyva_user_id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [localUserId]),
+    optionalRows("SELECT *, id::text, vyva_user_id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [localUserId]),
   ]);
 
   return {
     checkins: checkins[0] ? normalizeCheckin({ ...checkins[0], user_name: "", user_phone: null, city: null, first_name: null, last_name: null }) : null,
     brainCoach: brainCoach[0] ? normalizeBrainCoachSession({ ...brainCoach[0], user_name: "", user_phone: null, city: null }) : null,
     medicationActivity,
+    sensors,
+    alerts,
   };
 }
 
@@ -390,8 +394,10 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
   const normalized = normalizeExternalProfilePayload(data);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
+  const hasSensors = Array.isArray(localServices?.sensors) && localServices.sensors.length;
+  const hasAlerts = Array.isArray(localServices?.alerts) && localServices.alerts.length;
   const hasAccess = Boolean(carePlanAccess);
-  if (!hasProviders && !hasServices && !hasAccess && !scheduledContact) return normalized;
+  if (!hasProviders && !hasServices && !hasSensors && !hasAlerts && !hasAccess && !scheduledContact) return normalized;
   const merged = {
     ...normalized,
     careProviders: hasProviders ? careProviders : normalized.careProviders,
@@ -399,6 +405,8 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     checkins: localServices?.checkins || normalized.checkins,
     brainCoach: localServices?.brainCoach || normalized.brainCoach,
     medicationActivity: localServices?.medicationActivity || normalized.medicationActivity,
+    sensors: hasSensors ? localServices.sensors : normalized.sensors,
+    alerts: hasAlerts ? localServices.alerts : normalized.alerts,
     can_edit_care_plan: carePlanAccess?.can_edit_care_plan ?? normalized.can_edit_care_plan,
     can_edit_medications: carePlanAccess?.can_edit_medications ?? normalized.can_edit_medications,
     can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
@@ -5368,6 +5376,115 @@ async function appendDashboardUserNote(userId, payload, context) {
   return { value: result.rows[0] };
 }
 
+function normalizeSensorPayload(payload, creating = false) {
+  const sensorType = nullIfBlank(firstValue(payload?.sensor_type, payload?.sensorType, payload?.type));
+  const deviceId = nullIfBlank(firstValue(payload?.device_id, payload?.deviceId));
+  if (!sensorType) return { error: "sensor_type is required" };
+  if (!deviceId) return { error: "device_id is required" };
+
+  const integrationMethod = nullIfBlank(firstValue(payload?.integration_method, payload?.integrationMethod)) || "manual";
+  const integrationConfig = objectValue(firstValue(payload?.integration_config, payload?.integrationConfig)) || {};
+  const statusValue = String(firstValue(payload?.status, payload?.state) || "").toLowerCase();
+  const status = statusValue === "online" ? "online" : "offline";
+
+  return {
+    value: {
+      vyva_user_id: nullIfBlank(firstValue(payload?.vyva_user_id, payload?.vyvaUserId, payload?.user_id, payload?.userId)),
+      sensor_type: sensorType,
+      device_id: deviceId,
+      device_name: nullIfBlank(firstValue(payload?.device_name, payload?.deviceName)),
+      integration_method: integrationMethod,
+      integration_config: integrationConfig,
+      status,
+      notes: nullIfBlank(payload?.notes),
+    },
+    error: creating && !nullIfBlank(firstValue(payload?.vyva_user_id, payload?.vyvaUserId, payload?.user_id, payload?.userId))
+      ? "vyva_user_id is required"
+      : null,
+  };
+}
+
+async function createSensor(payload, context) {
+  requireAdmin(context);
+  const sensor = normalizeSensorPayload(payload, true);
+  if (sensor.error) return sensor;
+
+  const user = await ensureLocalUserForAssignmentWithClient({ query }, sensor.value.vyva_user_id, context);
+  if (user.error) return user;
+  if (user.notFound) return { notFound: true };
+
+  const result = await query(
+    `
+      INSERT INTO public.vyva_user_sensors (
+        vyva_user_id,
+        sensor_type,
+        device_id,
+        device_name,
+        integration_method,
+        integration_config,
+        status,
+        notes
+      )
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
+      RETURNING *, id::text, vyva_user_id::text
+    `,
+    [
+      user.value,
+      sensor.value.sensor_type,
+      sensor.value.device_id,
+      sensor.value.device_name,
+      sensor.value.integration_method,
+      JSON.stringify(sensor.value.integration_config),
+      sensor.value.status,
+      sensor.value.notes,
+    ],
+  );
+
+  return { value: { sensor: result.rows[0] } };
+}
+
+async function updateSensor(sensorId, payload, context) {
+  requireAdmin(context);
+  if (!isUuid(sensorId)) return { notFound: true };
+  const organizationId = scopeOrganizationId(context);
+  const sensor = normalizeSensorPayload(payload);
+  if (sensor.error) return sensor;
+
+  const result = await query(
+    `
+      UPDATE public.vyva_user_sensors s
+      SET
+        sensor_type = $2,
+        device_id = $3,
+        device_name = $4,
+        integration_method = $5,
+        integration_config = $6::jsonb,
+        status = $7,
+        notes = $8,
+        updated_at = now()
+      FROM public.vyva_users u
+      WHERE s.id = $1
+        AND u.id = s.vyva_user_id
+        AND u.organization_id = $9
+      RETURNING s.*, s.id::text, s.vyva_user_id::text
+    `,
+    [
+      sensorId,
+      sensor.value.sensor_type,
+      sensor.value.device_id,
+      sensor.value.device_name,
+      sensor.value.integration_method,
+      JSON.stringify(sensor.value.integration_config),
+      sensor.value.status,
+      sensor.value.notes,
+      organizationId,
+    ],
+  );
+
+  if (!result.rows[0]) return { notFound: true };
+  return { value: { sensor: result.rows[0] } };
+}
+
 function normalizeMedicationPayload(payload, creating = false) {
   const medicationName = nullIfBlank(firstValue(payload?.medication_name, payload?.medicationName, payload?.name));
   if (!medicationName) return { error: "medication_name is required" };
@@ -6736,6 +6853,14 @@ app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, re
   if (handleVyvaBackendResponse(res, upstream)) return;
 
   sendWriteResult(res, await upsertBrainCoachConfig(req.params.user_id, req.body, req.context));
+}));
+
+app.post("/api/v1/user-dashboard/sensors", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await createSensor(req.body, req.context), 201);
+}));
+
+app.put("/api/v1/user-dashboard/sensors/:sensor_id", asyncRoute(async (req, res) => {
+  sendWriteResult(res, await updateSensor(req.params.sensor_id, req.body, req.context));
 }));
 
 app.post("/api/v1/routine-calls/pause", asyncRoute(async (req, res) => {
