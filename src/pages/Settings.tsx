@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { ArrowLeft, Building2, Languages, Lock, Pencil, Plus, ShieldCheck } from "lucide-react";
+import { ArrowLeft, Building2, Check, Languages, Lock, Pencil, Plus, ShieldCheck } from "lucide-react";
 import { authBypassEnabled } from "@/lib/authMode";
 import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
 import { useCurrentUserContext, type OrganizationContext } from "@/hooks/useCurrentUserContext";
@@ -217,6 +217,7 @@ export default function Settings() {
     setActiveOrganizationId(nextOrganizationId);
     localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, nextOrganizationId);
     await queryClient.invalidateQueries();
+    toast.success(t("settings.organizationSwitched"));
   };
 
   const handleSaveBranchSettings = () => {
@@ -412,8 +413,15 @@ export default function Settings() {
               <div className="border-b border-border px-4 py-3 text-sm font-bold text-foreground">{t("settings.organizations")}</div>
               <div className="divide-y divide-border">
                 {organizations.map((organization) => (
-                  <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_160px_110px]">
-                    <span className="font-semibold text-foreground">{organization.name}</span>
+                  <div key={organization.id || organization.slug} className="grid items-center gap-3 px-4 py-3 text-sm sm:grid-cols-[1.4fr_1fr_160px_250px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-foreground">{organization.name}</span>
+                      {organization.id === currentOrganization?.id && (
+                        <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">
+                          {t("settings.currentOrganizationBadge")}
+                        </Badge>
+                      )}
+                    </div>
                     <span className="text-muted-foreground">{organization.country || t("settings.notAvailable")}</span>
                     <span className="text-muted-foreground">
                       {organization.defaultLanguage ? t(`settings.language.${organization.defaultLanguage}`) : t("settings.notAvailable")}
@@ -422,6 +430,30 @@ export default function Settings() {
                       <Badge variant="outline" className={organization.active ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-muted bg-muted text-muted-foreground"}>
                         {organization.active ? t("settings.status.active") : t("settings.status.inactive")}
                       </Badge>
+                      {canManageOrganizationDirectory && organization.id && (
+                        organization.id === currentOrganization?.id ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-full"
+                            disabled
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                            {t("settings.currentOrganizationBadge")}
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-8 rounded-full"
+                            onClick={() => void handleSwitchOrganization(organization.id)}
+                          >
+                            {t("settings.makeActive")}
+                          </Button>
+                        )
+                      )}
                       {(canManageOrganizationDirectory || organization.id === currentOrganization?.id) && canManageCurrentOrganization && organization.id && (
                         <Button
                           type="button"
