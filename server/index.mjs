@@ -448,22 +448,77 @@ function normalizedExternalShadowUser(externalUserId, externalData, organization
 }
 
 function externalCaregiversForShadow(externalData) {
+  const caregiverFieldPayload = (value) => {
+    const record = objectValue(value);
+    if (!record) return null;
+    const hasCaregiverKeys = [
+      record.caretaker_name,
+      record.caretaker_phone,
+      record.caregiver_name,
+      record.caregiver_phone,
+      record.contact_name,
+      record.contact_phone,
+      record.family_contact,
+      record.family_phone,
+      record.emergency_contact_name,
+      record.emergency_contact_phone,
+    ].some(hasMeaningfulPayloadValue);
+    return hasCaregiverKeys ? record : null;
+  };
+
   const caregivers = [
     ...(Array.isArray(externalData?.caregivers) ? externalData.caregivers : []),
     ...(Array.isArray(externalData?.emergency_contacts) ? externalData.emergency_contacts : []),
     ...(Array.isArray(externalData?.emergencyContacts) ? externalData.emergencyContacts : []),
     ...(Array.isArray(externalData?.careProviders) ? externalData.careProviders.filter((provider) => normalizeCareProviderType(provider?.provider_type || provider?.type) === "caregiver") : []),
+    ...[
+      externalData?.caregiver,
+      externalData?.emergency_contact,
+      externalData?.emergencyContact,
+      externalData?.contact,
+      externalData?.user?.caregiver,
+      externalData?.user?.emergency_contact,
+      externalData?.user?.emergencyContact,
+      externalData?.user?.contact,
+      caregiverFieldPayload(externalData),
+      caregiverFieldPayload(externalData?.user),
+    ].filter(Boolean),
   ];
   return caregivers
     .map((caregiver) => objectValue(caregiver))
     .filter(hasMeaningfulPayloadValue)
     .map((caregiver) => ({
-      caretaker_name: nullIfBlank(firstValue(caregiver.caretaker_name, caregiver.caregiver_name, caregiver.display_name, caregiver.name, caregiver.full_name, caregiver.fullName, caregiver.provider_name, caregiver.providerName)),
-      caretaker_phone: nullIfBlank(firstValue(caregiver.caretaker_phone, caregiver.caregiver_phone, caregiver.phone, caregiver.phone_number, caregiver.phoneNumber)),
-      relationship_label: nullIfBlank(firstValue(caregiver.relationship_label, caregiver.relationship, caregiver.role)),
+      caretaker_name: nullIfBlank(firstValue(
+        caregiver.caretaker_name,
+        caregiver.caregiver_name,
+        caregiver.contact_name,
+        caregiver.family_contact,
+        caregiver.emergency_contact_name,
+        caregiver.display_name,
+        caregiver.name,
+        caregiver.full_name,
+        caregiver.fullName,
+        caregiver.provider_name,
+        caregiver.providerName,
+      )),
+      caretaker_phone: nullIfBlank(firstValue(
+        caregiver.caretaker_phone,
+        caregiver.caregiver_phone,
+        caregiver.contact_phone,
+        caregiver.family_phone,
+        caregiver.emergency_contact_phone,
+        caregiver.phone,
+        caregiver.phone_number,
+        caregiver.phoneNumber,
+      )),
+      relationship_label: nullIfBlank(firstValue(caregiver.relationship_label, caregiver.relationship, caregiver.relationshipLabel, caregiver.role)),
       source: normalizeContactSource(caregiver.source, "onboarding"),
     }))
-    .filter((caregiver) => caregiver.caretaker_name || caregiver.caretaker_phone);
+    .filter((caregiver) => caregiver.caretaker_name || caregiver.caretaker_phone)
+    .filter((caregiver, index, list) => {
+      const signature = JSON.stringify([caregiver.caretaker_name || "", caregiver.caretaker_phone || ""]);
+      return list.findIndex((candidate) => JSON.stringify([candidate.caretaker_name || "", candidate.caretaker_phone || ""]) === signature) === index;
+    });
 }
 
 async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context) {
@@ -4285,13 +4340,21 @@ async function loadCareProviders(filters = {}, context) {
       upstream?.data?.data,
       upstream?.data,
     ].find(Array.isArray) || [];
-    const externalIds = Array.from(
-      new Set(
-        upstreamUsers
-          .map((user) => nullIfBlank(firstValue(user?.id, user?.external_user_id)))
-          .filter(Boolean),
-      ),
-    ).slice(0, 100);
+    const localShadowUsers = await optionalRows(
+      `
+        SELECT external_user_id::text
+        FROM public.vyva_users
+        WHERE organization_id = $1
+          AND external_user_id IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 100
+      `,
+      [organizationId],
+    );
+    const externalIds = Array.from(new Set([
+      ...upstreamUsers.map((user) => nullIfBlank(firstValue(user?.id, user?.external_user_id))),
+      ...localShadowUsers.map((user) => nullIfBlank(user?.external_user_id)),
+    ].filter(Boolean))).slice(0, 100);
 
     if (externalIds.length) {
       const client = await pool.connect();

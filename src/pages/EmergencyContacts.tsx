@@ -18,12 +18,8 @@ import { providerCoverageLabel, providerPrimaryMeta, providerSourceKey } from "@
 import { demoCareProviders } from "@/lib/operationalDemoData";
 
 async function fetchCareProviders() {
-  try {
-    const data = await apiFetch<{ providers?: CareProviderOption[] }>("/api/v1/care-providers?type=caregiver");
-    return data.providers ?? [];
-  } catch {
-    return [];
-  }
+  const data = await apiFetch<{ providers?: CareProviderOption[] }>("/api/v1/care-providers?type=caregiver");
+  return data.providers ?? [];
 }
 
 export default function EmergencyContacts() {
@@ -32,7 +28,7 @@ export default function EmergencyContacts() {
   const navigate = useNavigate();
   const { t } = useLanguage();
 
-  const { data: providers = [], isLoading } = useQuery({
+  const { data: providers = [], error, isLoading, refetch, isFetching } = useQuery({
     queryKey: ["emergency-contacts"],
     queryFn: fetchCareProviders,
     retry: false,
@@ -131,6 +127,20 @@ export default function EmergencyContacts() {
                       ))}
                     </TableRow>
                   ))
+                ) : error ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-10">
+                      <div className="flex flex-col items-center gap-3 text-center">
+                        <p className="text-sm font-semibold text-foreground">{t("careProviders.loadFailed")}</p>
+                        <p className="max-w-xl text-sm text-muted-foreground">
+                          {error instanceof Error ? error.message : t("careProviders.loadFailedDescription")}
+                        </p>
+                        <Button type="button" variant="outline" className="rounded-full" onClick={() => void refetch()} disabled={isFetching}>
+                          {t("careProviders.retry")}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
                 ) : filtered.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="py-14 text-center text-muted-foreground">
