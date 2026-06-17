@@ -47,9 +47,16 @@ const publicAppUrl =
   process.env.VITE_APP_URL ||
   process.env.VITE_PUBLIC_APP_URL ||
   null;
-const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || "/guide/team-access";
+const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || teamInviteGuidePath;
+const teamInviteEmailFrom =
+  String(process.env.TEAM_INVITE_EMAIL_FROM || process.env.INVITE_EMAIL_FROM || process.env.EMAIL_FROM || "").trim() || null;
+const teamInviteEmailReplyTo =
+  String(process.env.TEAM_INVITE_EMAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || "").trim() || null;
+const resendApiKey = String(process.env.RESEND_API_KEY || "").trim() || null;
+const sendgridApiKey = String(process.env.SENDGRID_API_KEY || "").trim() || null;
+const postmarkServerToken = String(process.env.POSTMARK_SERVER_TOKEN || "").trim() || null;
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
@@ -687,9 +694,9 @@ async function verifySupabaseToken(token) {
 }
 
 function supabaseTeamInviteClient() {
-  if (!supabaseUrl || !supabaseAnonKey) return null;
+  if (!supabaseUrl || !supabaseServiceRoleKey) return null;
   if (!supabaseInviteAuthClient) {
-    supabaseInviteAuthClient = createSupabaseClient(supabaseUrl, supabaseAnonKey, {
+    supabaseInviteAuthClient = createSupabaseClient(supabaseUrl, supabaseServiceRoleKey, {
       auth: {
         autoRefreshToken: false,
         detectSessionInUrl: false,
@@ -698,6 +705,20 @@ function supabaseTeamInviteClient() {
     });
   }
   return supabaseInviteAuthClient;
+}
+
+function inviteEmailProvider() {
+  if (resendApiKey) return "resend";
+  if (sendgridApiKey) return "sendgrid";
+  if (postmarkServerToken) return "postmark";
+  return null;
+}
+
+function inviteEmailConfigurationError() {
+  if (!supabaseUrl || !supabaseServiceRoleKey) return "Supabase service role key is required to generate secure invite links";
+  if (!teamInviteEmailFrom) return "Invite email sender is not configured";
+  if (!inviteEmailProvider()) return "Invite email provider is not configured";
+  return null;
 }
 
 function requestOrigin(req) {
@@ -776,25 +797,291 @@ function teamInviteMetadata({ context, role, organization, origin }) {
   };
 }
 
-async function sendSupabaseTeamMagicLinkInvite({ email, metadata, redirectUrl }) {
+async function generateSupabaseTeamMagicLink({ email, metadata, redirectUrl }) {
   const supabase = supabaseTeamInviteClient();
   if (!supabase) {
-    return { sent: false, error: "Supabase Auth is not configured" };
+    return { actionLink: null, userId: null, error: "Supabase service role key is required to generate secure invite links" };
   }
 
-  const { error } = await supabase.auth.signInWithOtp({
+  const { data, error } = await supabase.auth.admin.generateLink({
+    type: "magiclink",
     email,
     options: {
-      shouldCreateUser: true,
-      emailRedirectTo: redirectUrl || undefined,
       data: metadata,
+      redirectTo: redirectUrl || undefined,
     },
   });
 
   if (error) {
-    return { sent: false, error: error.message || "Invite email could not be sent" };
+    return { actionLink: null, userId: null, error: error.message || "Invite link could not be generated" };
   }
-  return { sent: true, error: null };
+
+  const actionLink = data?.properties?.action_link || data?.properties?.actionLink || null;
+  if (!actionLink) {
+    return { actionLink: null, userId: data?.user?.id || null, error: "Invite link was not returned" };
+  }
+
+  return { actionLink, userId: data?.user?.id || null, error: null };
+}
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function inviteEmailCopy(language, values) {
+  const organizationName = values.organizationName || null;
+  const roleLabel = values.roleLabel || "team member";
+
+  if (language === "de") {
+    return {
+      subject: "Ihre Einladung zur VYVA Konsole",
+      eyebrow: "Teameinladung",
+      heading: "Willkommen bei VYVA",
+      intro: `Sie wurden${organizationName ? ` fuer ${organizationName}` : ""} als ${roleLabel} hinzugefuegt. Nutzen Sie den sicheren Link unten, um die Konsole zu oeffnen.`,
+      button: "VYVA oeffnen",
+      guideTitle: "Interaktiver Guide",
+      guideText: "Nach der Anmeldung koennen Sie den Guide oeffnen, um sich in der Konsole zu orientieren.",
+      guideButton: "Guide oeffnen",
+      securityTitle: "Sicherheitshinweis",
+      securityText: "Wenn Sie diese E-Mail nicht erwartet haben, koennen Sie sie ignorieren. Ohne Zugriff auf dieses Postfach kann sich niemand anmelden.",
+      fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
+      footer: "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
+    };
+  }
+
+  if (language === "es") {
+    return {
+      subject: "Tu invitacion a la consola VYVA",
+      eyebrow: "Invitacion de equipo",
+      heading: "Bienvenido a VYVA",
+      intro: `Te agregaron${organizationName ? ` a ${organizationName}` : ""} como ${roleLabel}. Usa el enlace seguro de abajo para abrir la consola.`,
+      button: "Abrir VYVA",
+      guideTitle: "Guia interactiva",
+      guideText: "Despues de iniciar sesion, puedes abrir la guia para orientarte en la consola.",
+      guideButton: "Abrir guia",
+      securityTitle: "Nota de seguridad",
+      securityText: "Si no esperabas este correo, puedes ignorarlo. Nadie iniciara sesion sin acceso a esta bandeja de entrada.",
+      fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
+      footer: "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
+    };
+  }
+
+  return {
+    subject: "Your VYVA console invitation",
+    eyebrow: "Team invite",
+    heading: "Welcome to VYVA",
+    intro: `You were added${organizationName ? ` to ${organizationName}` : ""} as ${roleLabel}. Use the secure link below to open the console.`,
+    button: "Open VYVA",
+    guideTitle: "Interactive guide",
+    guideText: "After signing in, open the guide for help getting oriented in the console.",
+    guideButton: "Open guide",
+    securityTitle: "Security note",
+    securityText: "If you were not expecting this email, you can ignore it. No one will be signed in without access to this inbox.",
+    fallback: "Button not working? Copy and paste this link into your browser:",
+    footer: "Automated invitation email for authorized VYVA console users.",
+  };
+}
+
+function renderTeamInviteEmail({ actionLink, invite }) {
+  const metadata = invite.metadata || {};
+  const language = invite.language || "en";
+  const copy = inviteEmailCopy(language, {
+    organizationName: metadata.organization_name,
+    roleLabel: metadata.invited_role_label,
+  });
+  const safeActionLink = escapeHtml(actionLink);
+  const safeGuideUrl = invite.guideUrl ? escapeHtml(invite.guideUrl) : null;
+  const plainLines = [
+    copy.heading,
+    "",
+    copy.intro,
+    "",
+    `${copy.button}: ${actionLink}`,
+    invite.guideUrl ? `${copy.guideButton}: ${invite.guideUrl}` : null,
+    "",
+    copy.securityText,
+  ].filter(Boolean);
+
+  const guideBlock = safeGuideUrl
+    ? `
+            <tr>
+              <td style="padding:0 32px 30px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #dfe5ef;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">${escapeHtml(copy.guideTitle)}</p>
+                      <p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.guideText)}</p>
+                      <a href="${safeGuideUrl}" style="display:inline-block;color:#6c4df6;text-decoration:none;font-size:14px;font-weight:700;">${escapeHtml(copy.guideButton)}</a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>`
+    : "";
+
+  return {
+    subject: copy.subject,
+    text: plainLines.join("\n"),
+    html: `<!doctype html>
+<html lang="${escapeHtml(language)}">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(copy.subject)}</title>
+  </head>
+  <body style="margin:0;background:#eef3fb;font-family:Arial,Helvetica,sans-serif;color:#17172f;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #dde3f0;border-radius:20px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
+            <tr>
+              <td style="padding:28px 32px 22px;border-bottom:1px solid #edf0f7;">
+                <span style="display:inline-block;width:42px;height:42px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:20px;font-weight:700;line-height:42px;text-align:center;margin-right:12px;">V</span>
+                <span style="font-size:20px;font-weight:700;color:#17172f;vertical-align:middle;">VYVA</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:34px 32px 8px;">
+                <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
+                <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">${escapeHtml(copy.heading)}</h1>
+                <p style="margin:0;font-size:16px;line-height:1.65;color:#5f667a;">${escapeHtml(copy.intro)}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:26px 32px 30px;">
+                <a href="${safeActionLink}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;line-height:1;border-radius:14px;padding:17px 24px;box-shadow:0 10px 22px rgba(108,77,246,0.28);">${escapeHtml(copy.button)}</a>
+              </td>
+            </tr>
+            ${guideBlock}
+            <tr>
+              <td style="padding:0 32px 30px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5ff;border:1px solid #ded8ff;border-radius:16px;">
+                  <tr>
+                    <td style="padding:18px 20px;">
+                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6c4df6;">${escapeHtml(copy.securityTitle)}</p>
+                      <p style="margin:0;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.securityText)}</p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 34px;">
+                <p style="margin:0 0 8px;font-size:13px;line-height:1.55;color:#7a8297;">${escapeHtml(copy.fallback)}</p>
+                <p style="margin:0;font-size:12px;line-height:1.55;color:#6c4df6;word-break:break-all;">${safeActionLink}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#17172f;padding:18px 32px;">
+                <p style="margin:0;font-size:12px;line-height:1.6;color:#c8ccda;">${escapeHtml(copy.footer)}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`,
+  };
+}
+
+function parseEmailIdentity(value) {
+  const text = String(value || "").trim();
+  const match = text.match(/^(.*?)\s*<([^>]+)>$/);
+  if (!match) return { email: text };
+  const name = match[1].trim().replace(/^"|"$/g, "");
+  return { email: match[2].trim(), name: name || undefined };
+}
+
+async function sendEmailProviderRequest({ url, headers, body, provider }) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+  const responseText = await response.text().catch(() => "");
+  let parsed = null;
+  try {
+    parsed = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    parsed = null;
+  }
+  if (!response.ok) {
+    const message =
+      (Array.isArray(parsed?.errors) && parsed.errors[0]?.message) ||
+      parsed?.message ||
+      parsed?.error ||
+      responseText ||
+      `${provider} email request failed`;
+    throw new Error(message);
+  }
+  return parsed;
+}
+
+async function sendRenderedTeamInviteEmail({ to, rendered }) {
+  const configError = inviteEmailConfigurationError();
+  if (configError) return { sent: false, error: configError, provider: null };
+
+  const provider = inviteEmailProvider();
+  try {
+    if (provider === "resend") {
+      await sendEmailProviderRequest({
+        provider,
+        url: "https://api.resend.com/emails",
+        headers: { Authorization: `Bearer ${resendApiKey}` },
+        body: {
+          from: teamInviteEmailFrom,
+          to: [to],
+          subject: rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+          reply_to: teamInviteEmailReplyTo || undefined,
+        },
+      });
+    } else if (provider === "sendgrid") {
+      const from = parseEmailIdentity(teamInviteEmailFrom);
+      const replyTo = teamInviteEmailReplyTo ? parseEmailIdentity(teamInviteEmailReplyTo) : null;
+      await sendEmailProviderRequest({
+        provider,
+        url: "https://api.sendgrid.com/v3/mail/send",
+        headers: { Authorization: `Bearer ${sendgridApiKey}` },
+        body: {
+          personalizations: [{ to: [{ email: to }], subject: rendered.subject }],
+          from,
+          reply_to: replyTo || undefined,
+          content: [
+            { type: "text/plain", value: rendered.text },
+            { type: "text/html", value: rendered.html },
+          ],
+        },
+      });
+    } else if (provider === "postmark") {
+      await sendEmailProviderRequest({
+        provider,
+        url: "https://api.postmarkapp.com/email",
+        headers: { "X-Postmark-Server-Token": postmarkServerToken },
+        body: {
+          From: teamInviteEmailFrom,
+          To: to,
+          Subject: rendered.subject,
+          HtmlBody: rendered.html,
+          TextBody: rendered.text,
+          ReplyTo: teamInviteEmailReplyTo || undefined,
+        },
+      });
+    }
+    return { sent: true, error: null, provider };
+  } catch (error) {
+    return { sent: false, error: error?.message || "Invite email could not be sent", provider };
+  }
 }
 
 async function reconcilePendingTeamMemberByEmail(userId, email) {
@@ -1439,7 +1726,24 @@ async function createTeamMember(payload, context, options = {}) {
 
   let userId = pendingTeamUserId(member.value.email);
   let inviteMode = "magic_link_pending";
-  if (member.value.password && teamInviteAuthConfigured(context.authToken)) {
+  let inviteLink = null;
+  let inviteEmailError = inviteEmailConfigurationError();
+
+  if (!inviteEmailError) {
+    const generatedLink = await generateSupabaseTeamMagicLink({
+      email: member.value.email,
+      metadata: invite.metadata,
+      redirectUrl: invite.redirectUrl,
+    });
+    if (generatedLink.actionLink) {
+      inviteLink = generatedLink;
+      userId = generatedLink.userId || userId;
+    } else {
+      inviteEmailError = generatedLink.error || "Invite link could not be generated";
+    }
+  }
+
+  if (!inviteLink && member.value.password && teamInviteAuthConfigured(context.authToken)) {
     try {
       const authUser = await createSupabaseAuthUser({
         email: member.value.email,
@@ -1490,14 +1794,24 @@ async function createTeamMember(payload, context, options = {}) {
     client.release();
   }
 
-  const inviteEmail = await sendSupabaseTeamMagicLinkInvite({
-    email: member.value.email,
-    metadata: invite.metadata,
-    redirectUrl: invite.redirectUrl,
-  }).catch((error) => ({
+  let inviteEmail = {
     sent: false,
-    error: error?.message || "Invite email could not be sent",
-  }));
+    error: inviteEmailError,
+    provider: inviteEmailProvider(),
+  };
+
+  if (inviteLink?.actionLink) {
+    const rendered = renderTeamInviteEmail({ actionLink: inviteLink.actionLink, invite });
+    inviteEmail = await sendRenderedTeamInviteEmail({
+      to: member.value.email,
+      rendered,
+    }).catch((error) => ({
+      sent: false,
+      error: error?.message || "Invite email could not be sent",
+      provider: inviteEmailProvider(),
+    }));
+  }
+
   if (inviteEmail.sent) {
     inviteMode = "magic_link_sent";
   } else {
@@ -1509,10 +1823,11 @@ async function createTeamMember(payload, context, options = {}) {
   }
 
   const members = await loadTeamMembers(context);
+  const responseInviteEmailError = inviteEmail.sent ? null : inviteMode === "password" ? null : inviteEmail.error;
   return {
     inviteMode,
     inviteEmailSent: Boolean(inviteEmail.sent),
-    inviteEmailError: inviteEmail.sent ? null : inviteEmail.error,
+    inviteEmailError: responseInviteEmailError,
     guideUrl: invite.guideUrl,
     value: members.find((item) => item.user_id === userId && item.role === member.value.role) || null,
   };

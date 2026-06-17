@@ -4,6 +4,10 @@ These templates are for the hosted auth provider that currently sends magic-link
 emails. They are stored here so the live auth email editor can be updated without
 losing the approved VYVA copy and design.
 
+Team member invitations are not sent from this hosted template anymore. The
+Replit backend generates the secure Supabase Auth link, renders the contextual
+invite email, and sends it through the configured backend email provider.
+
 ## Magic link
 
 Use `magic-link.html` for the one-time login / magic-link email template.
@@ -24,7 +28,8 @@ The app sends this value when requesting a magic link. It uses the language
 selected in Settings, or the browser language when no setting exists. Supported
 values are `en`, `de`, and `es`; the template falls back to English.
 
-Team invite emails also read optional metadata sent by the admin console:
+The hosted template can still read optional metadata if the fallback Supabase
+email sender is ever used:
 
 ```html
 {{ .Data.invite_type }}
@@ -33,9 +38,8 @@ Team invite emails also read optional metadata sent by the admin console:
 {{ .Data.guide_url }}
 ```
 
-When `invite_type` is `team_member`, the template explains that the recipient
-has been added to the console for the named organization and links to the team
-access guide.
+For the current admin-created team invite flow, update the backend email copy in
+`server/index.mjs` instead of editing the hosted Supabase template.
 
 Recommended subject:
 
@@ -43,11 +47,11 @@ Recommended subject:
 {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Ihre Einladung zur VYVA Konsole{{ else if eq .Data.language "es" }}Tu invitacion a la consola VYVA{{ else }}Your VYVA console invitation{{ end }}{{ else }}{{ if eq .Data.language "de" }}Ihr VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu acceso a VYVA{{ else }}Your VYVA sign-in link{{ end }}{{ end }}
 ```
 
-## Applying it now
+## Applying it
 
 Paste the full contents of `magic-link.html` into the hosted auth email template
-editor for the one-time login / magic-link email, then save and send a fresh
-test magic link. Existing emails in inboxes will not change.
+editor for regular one-time login / magic-link emails, then save and send a
+fresh test magic link. Existing emails in inboxes will not change.
 
 ## Sender settings
 
