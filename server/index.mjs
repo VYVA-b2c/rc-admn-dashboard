@@ -57,7 +57,18 @@ const userManualUrlOverride =
   process.env.VITE_USER_MANUAL_URL ||
   "/manual";
 const teamInviteEmailFrom =
-  String(process.env.TEAM_INVITE_EMAIL_FROM || process.env.INVITE_EMAIL_FROM || process.env.EMAIL_FROM || "").trim() || null;
+  String(
+    process.env.TEAM_INVITE_EMAIL_FROM ||
+      process.env.INVITE_EMAIL_FROM ||
+      process.env.RESEND_FROM ||
+      process.env.RESEND_FROM_EMAIL ||
+      process.env.RESEND_FROM_ADDRESS ||
+      process.env.FROM_EMAIL ||
+      process.env.MAIL_FROM ||
+      process.env.SMTP_FROM ||
+      process.env.EMAIL_FROM ||
+      "",
+  ).trim() || null;
 const teamInviteEmailReplyTo =
   String(process.env.TEAM_INVITE_EMAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || "").trim() || null;
 const resendApiKey = String(process.env.RESEND_API_KEY || "").trim() || null;
@@ -977,8 +988,8 @@ function inviteEmailProvider() {
 }
 
 function inviteEmailConfigurationError() {
-  if (!teamInviteEmailFrom) return "Invite email sender is not configured";
-  if (!inviteEmailProvider()) return "Invite email provider is not configured";
+  if (!teamInviteEmailFrom) return "Email sender address is not configured";
+  if (!inviteEmailProvider()) return "Email provider is not configured";
   return null;
 }
 
