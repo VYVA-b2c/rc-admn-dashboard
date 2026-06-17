@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Search, UserPlus, UsersRound } from "lucide-react";
+import { Check, Search, UsersRound } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -23,13 +23,6 @@ interface AssignCareProviderDialogProps {
   userName?: string;
 }
 
-function isValidPhoneInput(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return true;
-  const digits = trimmed.replace(/\D/g, "");
-  return /^\+[1-9][0-9\s().-]{6,24}$/.test(trimmed) && digits.length >= 8 && digits.length <= 15;
-}
-
 async function fetchCareProviders(search: string, type: CareProviderType) {
   const params = new URLSearchParams({ type });
   if (search.trim()) params.set("search", search.trim());
@@ -40,19 +33,16 @@ async function fetchCareProviders(search: string, type: CareProviderType) {
 export function AssignCareProviderDialog({ open, onOpenChange, userId, userName }: AssignCareProviderDialogProps) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
-  const [providerType, setProviderType] = useState<CareProviderType>("caregiver");
   const [search, setSearch] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
-  const [newPhone, setNewPhone] = useState("");
   const [relationship, setRelationship] = useState("");
   const [notes, setNotes] = useState("");
   const [makePrimary, setMakePrimary] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const { data: providers = [], isLoading } = useQuery({
-    queryKey: ["care-providers", providerType, search],
-    queryFn: () => fetchCareProviders(search, providerType),
+    queryKey: ["care-providers", "field_staff", search],
+    queryFn: () => fetchCareProviders(search, "field_staff"),
     enabled: open && !authBypassEnabled,
     retry: false,
   });
@@ -61,22 +51,11 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
     () => providers.find((provider) => provider.provider_id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
-  const creatingNewContact = providerType === "caregiver" && !selectedProviderId;
-
-  const resetForType = (type: CareProviderType) => {
-    setProviderType(type);
-    setSelectedProviderId(null);
-    setSearch("");
-    setNewName("");
-    setNewPhone("");
-  };
 
   const close = () => {
     onOpenChange(false);
     setSelectedProviderId(null);
     setSearch("");
-    setNewName("");
-    setNewPhone("");
     setRelationship("");
     setNotes("");
     setMakePrimary(true);
@@ -88,40 +67,18 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
       return;
     }
 
-    if (creatingNewContact && !newName.trim()) {
-      toast({ title: t("careProviders.validation.name"), variant: "destructive" });
-      return;
-    }
-
-    if (creatingNewContact && !isValidPhoneInput(newPhone)) {
-      toast({ title: t("userForm.validation.caregiverPhone"), variant: "destructive" });
-      return;
-    }
-
-    if (!creatingNewContact && !selectedProvider) {
+    if (!selectedProvider) {
       toast({ title: t("careProviders.validation.provider"), variant: "destructive" });
       return;
     }
 
-    const payload = creatingNewContact
-      ? {
-          provider_type: "caregiver",
-          provider: {
-            caretaker_name: newName.trim(),
-            caretaker_phone: newPhone.trim() || null,
-            source: "manual",
-          },
-          is_primary: makePrimary,
-          relationship_label: relationship.trim() || null,
-          notes: notes.trim() || null,
-        }
-      : {
-          provider_type: providerType,
-          provider_id: selectedProvider!.provider_id,
-          is_primary: makePrimary,
-          relationship_label: relationship.trim() || null,
-          notes: notes.trim() || null,
-        };
+    const payload = {
+      provider_type: "field_staff",
+      provider_id: selectedProvider.provider_id,
+      is_primary: makePrimary,
+      relationship_label: relationship.trim() || null,
+      notes: notes.trim() || null,
+    };
 
     setSaving(true);
     try {
@@ -155,38 +112,21 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
         <DialogHeader className="border-b border-border px-6 py-5">
           <DialogTitle className="flex items-center gap-2 text-xl font-bold">
             <UsersRound className="h-5 w-5 text-primary" />
-            {t("careProviders.assignTitle")}
+            {t("careProviders.assignStaffTitle")}
           </DialogTitle>
           <DialogDescription>
-            {userName ? t("careProviders.assignDescriptionNamed").replace("{name}", userName) : t("careProviders.assignDescription")}
+            {userName ? t("careProviders.assignStaffDescriptionNamed").replace("{name}", userName) : t("careProviders.assignStaffDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-5 px-6 py-5">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {(["caregiver", "field_staff"] as CareProviderType[]).map((type) => (
-              <Button
-                key={type}
-                type="button"
-                variant={providerType === type ? "default" : "outline"}
-                className={cn(
-                  "h-auto justify-start rounded-xl px-4 py-3 text-left",
-                  providerType !== type && "border-border bg-muted/30 text-foreground hover:bg-primary/10 hover:text-primary",
-                )}
-                onClick={() => resetForType(type)}
-              >
-                <span>
-                  <span className="block text-sm font-bold">{t(providerTypeKey(type))}</span>
-                  <span className="block text-xs font-medium opacity-80">
-                    {type === "field_staff" ? t("careProviders.professionalHelp") : t("careProviders.informalHelp")}
-                  </span>
-                </span>
-              </Button>
-            ))}
+          <div className="rounded-2xl border border-primary/15 bg-primary/5 p-4">
+            <p className="text-sm font-bold text-foreground">{t("careProviders.professional")}</p>
+            <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("careProviders.assignStaffHelp")}</p>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="care-provider-search">{t("careProviders.searchExisting")}</Label>
+            <Label htmlFor="care-provider-search">{t("careProviders.searchStaff")}</Label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -204,7 +144,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
               <p className="px-3 py-6 text-center text-sm font-medium text-muted-foreground">{t("careProviders.loading")}</p>
             ) : providers.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm font-medium text-muted-foreground">
-                {providerType === "caregiver" ? t("careProviders.noMatchesCreate") : t("careProviders.noRedCrossStaff")}
+                {t("careProviders.noRedCrossStaff")}
               </p>
             ) : (
               providers.map((provider) => {
@@ -234,32 +174,6 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
             )}
           </div>
 
-          {providerType === "caregiver" && !selectedProviderId && (
-            <div className="rounded-2xl border border-dashed border-primary/30 bg-primary/5 p-4">
-              <div className="mb-3 flex items-center gap-2">
-                <UserPlus className="h-4 w-4 text-primary" />
-                <p className="text-sm font-bold text-foreground">{t("careProviders.createInformal")}</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="care-provider-name">{t("careProviders.name")}</Label>
-                  <Input id="care-provider-name" value={newName} onChange={(event) => setNewName(event.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="care-provider-phone">{t("careProviders.phone")}</Label>
-                  <Input
-                    id="care-provider-phone"
-                    type="tel"
-                    inputMode="tel"
-                    placeholder={t("userForm.phonePlaceholder")}
-                    value={newPhone}
-                    onChange={(event) => setNewPhone(event.target.value)}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="care-provider-relationship">{t("careProviders.relationship")}</Label>
@@ -267,7 +181,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
                 id="care-provider-relationship"
                 value={relationship}
                 onChange={(event) => setRelationship(event.target.value)}
-                placeholder={providerType === "field_staff" ? t("careProviders.relationshipProfessionalPlaceholder") : t("careProviders.relationshipPlaceholder")}
+                placeholder={t("careProviders.relationshipProfessionalPlaceholder")}
               />
             </div>
             <div className="flex items-center justify-between rounded-xl border border-border bg-muted/25 px-4 py-3">
@@ -296,7 +210,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
             {t("userForm.cancel")}
           </Button>
           <Button type="button" className="rounded-full" disabled={saving} onClick={handleSave}>
-            {saving ? t("userForm.saving") : t("careProviders.assign")}
+            {saving ? t("userForm.saving") : t("careProviders.assignStaff")}
           </Button>
         </DialogFooter>
       </DialogContent>
