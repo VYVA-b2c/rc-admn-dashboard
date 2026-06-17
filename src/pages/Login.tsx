@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { useEffect, useState, useRef } from "react";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Mail } from "lucide-react";
 import drkLogo from "@/assets/drk-logo.svg";
 import { useAuth } from "@/contexts/AuthContext";
@@ -17,13 +17,38 @@ function safeNextPath(value: string | null) {
 }
 
 export default function Login() {
-  const { session, signInWithMagicLink } = useAuth();
+  const { session, signInWithMagicLink, signInWithConsoleToken } = useAuth();
   const { t } = useLanguage();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const magicLinkInFlight = useRef(false);
+  const tokenExchangeInFlight = useRef(false);
+  const consumedConsoleToken = useRef<string | null>(null);
   const nextPath = safeNextPath(searchParams.get("next"));
+  const consoleToken = searchParams.get("console_token");
+
+  useEffect(() => {
+    if (!consoleToken || tokenExchangeInFlight.current || session) return;
+    if (consumedConsoleToken.current === consoleToken) return;
+    consumedConsoleToken.current = consoleToken;
+    tokenExchangeInFlight.current = true;
+    setLoading(true);
+
+    void signInWithConsoleToken(consoleToken)
+      .then(({ error, next }) => {
+        if (error) {
+          toast.error(t("login.magicLinkFailed"), { description: error.message });
+          return;
+        }
+        navigate(safeNextPath(next || nextPath), { replace: true });
+      })
+      .finally(() => {
+        tokenExchangeInFlight.current = false;
+        setLoading(false);
+      });
+  }, [consoleToken, navigate, nextPath, session, signInWithConsoleToken, t]);
 
   if (session || authBypassEnabled) return <Navigate to={nextPath} replace />;
 

@@ -1,6 +1,7 @@
 import express from "express";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
@@ -62,6 +63,9 @@ const teamInviteEmailReplyTo =
 const resendApiKey = String(process.env.RESEND_API_KEY || "").trim() || null;
 const sendgridApiKey = String(process.env.SENDGRID_API_KEY || "").trim() || null;
 const postmarkServerToken = String(process.env.POSTMARK_SERVER_TOKEN || "").trim() || null;
+const consoleSessionSecret =
+  String(process.env.SESSION_SECRET || process.env.AUTH_SESSION_SECRET || process.env.CONSOLE_SESSION_SECRET || "").trim() ||
+  (!isProduction ? "dev-vyva-console-session-secret" : null);
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
@@ -781,6 +785,69 @@ function decodeJwtPayload(token) {
   }
 }
 
+function encodeTokenPart(value) {
+  return Buffer.from(typeof value === "string" ? value : JSON.stringify(value)).toString("base64url");
+}
+
+function signTokenPayload(encodedPayload) {
+  if (!consoleSessionSecret) return null;
+  return crypto.createHmac("sha256", consoleSessionSecret).update(encodedPayload).digest("base64url");
+}
+
+function createConsoleToken(payload) {
+  const encodedPayload = encodeTokenPart(payload);
+  const signature = signTokenPayload(encodedPayload);
+  if (!signature) return null;
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyConsoleToken(token, expectedKind) {
+  if (!consoleSessionSecret) return null;
+  const [encodedPayload, signature] = String(token || "").split(".");
+  if (!encodedPayload || !signature) return null;
+  const expectedSignature = signTokenPayload(encodedPayload);
+  const actual = Buffer.from(signature);
+  const expected = Buffer.from(expectedSignature || "");
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
+
+  let payload = null;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+
+  if (payload?.typ !== "vyva_console") return null;
+  if (expectedKind && payload?.kind !== expectedKind) return null;
+  if (!payload?.email || !isValidEmail(payload.email)) return null;
+  if (Number(payload?.exp || 0) <= Math.floor(Date.now() / 1000)) return null;
+  return payload;
+}
+
+function createConsoleLoginToken({ email, redirectPath }) {
+  const now = Math.floor(Date.now() / 1000);
+  return createConsoleToken({
+    typ: "vyva_console",
+    kind: "login_link",
+    email: normalizedEmail(email),
+    next: loginRedirectPath(redirectPath),
+    iat: now,
+    exp: now + 15 * 60,
+  });
+}
+
+function createConsoleSessionToken({ email, userId }) {
+  const now = Math.floor(Date.now() / 1000);
+  return createConsoleToken({
+    typ: "vyva_console",
+    kind: "session",
+    sub: userId || `console:${normalizedEmail(email)}`,
+    email: normalizedEmail(email),
+    iat: now,
+    exp: now + 12 * 60 * 60,
+  });
+}
+
 async function devProjectAdminContextFromInvalidToken(token) {
   if (isProduction) return null;
   const payload = decodeJwtPayload(token);
@@ -910,7 +977,6 @@ function inviteEmailProvider() {
 }
 
 function inviteEmailConfigurationError() {
-  if (!supabaseUrl || !supabaseServiceRoleKey) return "Supabase service role key is required to generate secure invite links";
   if (!teamInviteEmailFrom) return "Invite email sender is not configured";
   if (!inviteEmailProvider()) return "Invite email provider is not configured";
   return null;
@@ -1701,6 +1767,8 @@ async function resolveRequestContext(req, options = {}) {
 
   const user = await verifySupabaseToken(token);
   if (!user?.id) {
+    const consoleSessionContext = await contextFromConsoleSessionToken(token);
+    if (consoleSessionContext) return applyOrganizationOverride(req, consoleSessionContext);
     const devProjectAdminContext = await devProjectAdminContextFromInvalidToken(token);
     if (devProjectAdminContext) return applyOrganizationOverride(req, devProjectAdminContext);
     throw httpError(401, "Invalid session");
@@ -1767,33 +1835,79 @@ async function consoleLoginAccess(email) {
   const allowed = isConfiguredPlatformAdmin || Boolean(row?.is_platform_admin) || Number(row?.role_count || 0) > 0;
   return {
     allowed,
+    userId: row?.user_id || null,
+    isPlatformAdmin: isConfiguredPlatformAdmin || Boolean(row?.is_platform_admin),
     language: loginEmailLanguage(row?.default_language || (isConfiguredPlatformAdmin ? "en" : null)),
   };
 }
 
-async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
-  const redirectUrl = absoluteAppUrl(loginRedirectPath(redirectPath), origin);
-  const manualUrl = userManualUrl(origin);
-  const generatedLink = await generateSupabaseTeamMagicLink({
-    email,
-    redirectUrl,
-    metadata: {
-      language,
-      email_language: language,
-      login_source: "vyva_console",
-      manual_url: manualUrl,
-    },
-  });
-  if (generatedLink.error) {
+async function loadConsoleContextByEmail(email) {
+  const normalized = normalizedEmail(email);
+  const access = await consoleLoginAccess(normalized);
+  if (!access.allowed) throw httpError(403, "No console access has been granted for this email");
+
+  if (access.userId) {
+    return loadUserContext({ id: access.userId, email: normalized });
+  }
+
+  if (access.isPlatformAdmin) {
+    const org = await defaultOrganization();
     return {
-      sent: false,
-      error: generatedLink.error,
-      provider: "supabase-admin-link",
+      userId: `platform-admin:${normalized}`,
+      email: normalized,
+      fullName: null,
+      roles: ["admin"],
+      role: "admin",
+      isAdmin: true,
+      isPlatformAdmin: true,
+      organizationId: org?.id || null,
+      organization: {
+        id: org?.id || null,
+        slug: org?.slug || "red-cross-leipzig",
+        name: org?.name || "Red Cross Leipzig",
+        country: org?.country || "Germany",
+        defaultLanguage: org?.default_language || "de",
+        timezone: org?.timezone || "Europe/Berlin",
+      },
     };
   }
 
+  throw httpError(403, "No console access has been granted for this email");
+}
+
+async function contextFromConsoleSessionToken(token) {
+  const payload = verifyConsoleToken(token, "session");
+  if (!payload) return null;
+  const context = await loadConsoleContextByEmail(payload.email);
+  return { ...context, authToken: token };
+}
+
+async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
+  const loginToken = createConsoleLoginToken({ email, redirectPath });
+  if (!loginToken) {
+    return {
+      sent: false,
+      error: "Console session secret is not configured",
+      provider: null,
+    };
+  }
+
+  const nextPath = loginRedirectPath(redirectPath);
+  const loginUrl = absoluteAppUrl("/login", origin);
+  if (!loginUrl) {
+    return {
+      sent: false,
+      error: "Console app URL is not configured",
+      provider: null,
+    };
+  }
+  const actionUrl = new URL(loginUrl);
+  actionUrl.searchParams.set("console_token", loginToken);
+  if (nextPath !== "/") actionUrl.searchParams.set("next", nextPath);
+
+  const manualUrl = userManualUrl(origin);
   const rendered = renderConsoleMagicLinkEmail({
-    actionLink: generatedLink.actionLink,
+    actionLink: actionUrl.toString(),
     language,
     manualUrl,
   });
@@ -6526,6 +6640,47 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
   }
 
   res.json({ sent: true, provider: sent.provider });
+}, { auth: "none" }));
+
+app.post("/api/v1/auth/session", asyncRoute(async (req, res) => {
+  const payload = verifyConsoleToken(req.body?.token, "login_link");
+  if (!payload) {
+    res.status(401).json({ error: "Sign-in link is invalid or expired" });
+    return;
+  }
+
+  const context = await loadConsoleContextByEmail(payload.email);
+  const sessionToken = createConsoleSessionToken({
+    email: context.email,
+    userId: context.userId,
+  });
+  const sessionPayload = verifyConsoleToken(sessionToken, "session");
+  if (!sessionToken || !sessionPayload) {
+    res.status(503).json({ error: "Console session could not be created" });
+    return;
+  }
+
+  res.json({
+    session: {
+      access_token: sessionToken,
+      expires_at: sessionPayload.exp,
+      token_type: "bearer",
+      user: {
+        id: context.userId,
+        email: context.email,
+        user_metadata: {
+          full_name: context.fullName || undefined,
+        },
+        app_metadata: {
+          provider: "vyva_console",
+        },
+        aud: "authenticated",
+        role: "authenticated",
+      },
+    },
+    user: publicContext(context),
+    next: loginRedirectPath(payload.next),
+  });
 }, { auth: "none" }));
 
 app.get("/api/v1/organizations", async (req, res, next) => {

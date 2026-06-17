@@ -1,5 +1,6 @@
 import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
 import { authBypassEnabled } from "@/lib/authMode";
+import { clearBackendSession, getBackendSessionToken } from "@/lib/backendSession";
 
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 export const ACTIVE_ORGANIZATION_STORAGE_KEY = "active-organization-id";
@@ -38,6 +39,7 @@ function isSessionAuthError(status: number, message: string) {
 }
 
 async function clearExpiredSupabaseSession() {
+  clearBackendSession();
   try {
     await supabase.auth.signOut({ scope: "local" });
   } catch {
@@ -60,7 +62,13 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
   if (activeOrganizationId && !requestHeaders.has("x-organization-id")) {
     requestHeaders.set("x-organization-id", activeOrganizationId);
   }
-  const canAttachSupabaseAuth = !authBypassEnabled && supabaseConfigured && !requestHeaders.has("Authorization");
+  const backendSessionToken = !authBypassEnabled && !requestHeaders.has("Authorization")
+    ? getBackendSessionToken()
+    : null;
+  if (backendSessionToken) {
+    requestHeaders.set("Authorization", `Bearer ${backendSessionToken}`);
+  }
+  const canAttachSupabaseAuth = !backendSessionToken && !authBypassEnabled && supabaseConfigured && !requestHeaders.has("Authorization");
   if (canAttachSupabaseAuth) {
     const { data } = await supabase.auth.getSession();
     const token = data.session?.access_token;
@@ -77,6 +85,11 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
     });
     if (!res.ok) {
       const message = await responseErrorMessage(res);
+      if (backendSessionToken && isSessionAuthError(res.status, message)) {
+        clearBackendSession();
+        notifySessionExpired();
+        throw new Error("Your session expired. Please sign in again.");
+      }
       if (canAttachSupabaseAuth && isSessionAuthError(res.status, message)) {
         const { data } = await supabase.auth.refreshSession();
         const refreshedToken = data.session?.access_token;
