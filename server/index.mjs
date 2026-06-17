@@ -1785,18 +1785,10 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
     },
   });
   if (generatedLink.error) {
-    const fallback = await sendHostedConsoleMagicLink({ email, redirectPath, language, origin });
-    if (fallback.sent) {
-      console.warn("Custom console magic-link generation failed; sent hosted Supabase magic link instead.", {
-        email,
-        error: generatedLink.error,
-      });
-      return fallback;
-    }
     return {
       sent: false,
-      error: fallback.error ? `${generatedLink.error}; fallback failed: ${fallback.error}` : generatedLink.error,
-      provider: fallback.provider || null,
+      error: generatedLink.error,
+      provider: "supabase-admin-link",
     };
   }
 
@@ -1808,20 +1800,10 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
   const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
   if (custom.sent) return custom;
 
-  const fallback = await sendHostedConsoleMagicLink({ email, redirectPath, language, origin });
-  if (fallback.sent) {
-    console.warn("Custom console magic-link email failed; sent hosted Supabase magic link instead.", {
-      email,
-      provider: custom.provider,
-      error: custom.error,
-    });
-    return fallback;
-  }
-
   return {
     sent: false,
-    error: fallback.error ? `${custom.error || "Custom email could not be sent"}; fallback failed: ${fallback.error}` : custom.error,
-    provider: custom.provider || fallback.provider || null,
+    error: custom.error || "VYVA email sender is not configured",
+    provider: custom.provider || null,
   };
 }
 
@@ -6536,7 +6518,7 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
 
   if (!sent.sent) {
     if (isMagicLinkRateLimitError(sent.error)) {
-      res.json({ sent: true, delayed: true, provider: sent.provider });
+      res.status(429).json({ error: "Email sender asked us to wait before sending another sign-in link" });
       return;
     }
     res.status(503).json({ error: sent.error || "Sign-in email could not be sent" });
