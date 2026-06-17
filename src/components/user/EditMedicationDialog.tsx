@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/apiClient";
 import type { OperationalMedication } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 interface EditMedicationDialogProps {
   open: boolean;
@@ -17,6 +18,7 @@ interface EditMedicationDialogProps {
 
 export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medication }: EditMedicationDialogProps) {
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     medication_name: medication?.medication_name || "",
@@ -29,7 +31,7 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
 
   const handleSave = async () => {
     if (!form.medication_name.trim()) {
-      toast({ title: "Medication name is required", variant: "destructive" });
+      toast({ title: t("profile.medicationNameRequired"), variant: "destructive" });
       return;
     }
     const times = form.schedule_times.split(",").map(t => t.trim()).filter(Boolean);
@@ -48,12 +50,12 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
         body: JSON.stringify(payload),
       });
 
-      toast({ title: medication ? "Medication updated" : "Medication added" });
+      toast({ title: medication ? t("profile.medicationUpdated") : t("profile.medicationAdded") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
     } catch (error) {
       toast({
-        title: "Error saving",
+        title: t("profile.medicationSaveFailed"),
         description: error instanceof Error ? error.message : undefined,
         variant: "destructive",
       });
@@ -66,31 +68,31 @@ export function EditMedicationDialog({ open, onOpenChange, vyvaUserId, medicatio
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{medication ? "Edit Medication" : "Add Medication"}</DialogTitle>
+          <DialogTitle>{medication ? t("profile.editMedication") : t("profile.addMedication")}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="space-y-1.5">
-            <Label>Medication Name *</Label>
+            <Label>{t("profile.medicationName")} *</Label>
             <Input value={form.medication_name} onChange={e => update("medication_name", e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Dosage</Label>
-              <Input value={form.dosage} onChange={e => update("dosage", e.target.value)} placeholder="e.g. 10mg" />
+              <Label>{t("profile.medicationDosage")}</Label>
+              <Input value={form.dosage} onChange={e => update("dosage", e.target.value)} placeholder={t("profile.medicationDosagePlaceholder")} />
             </div>
             <div className="space-y-1.5">
-              <Label>Purpose</Label>
-              <Input value={form.purpose} onChange={e => update("purpose", e.target.value)} placeholder="e.g. Blood pressure" />
+              <Label>{t("profile.medicationPurpose")}</Label>
+              <Input value={form.purpose} onChange={e => update("purpose", e.target.value)} placeholder={t("profile.medicationPurposePlaceholder")} />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label>Schedule Times (comma-separated)</Label>
-            <Input value={form.schedule_times} onChange={e => update("schedule_times", e.target.value)} placeholder="08:00, 20:00" />
+            <Label>{t("profile.medicationScheduleTimes")}</Label>
+            <Input value={form.schedule_times} onChange={e => update("schedule_times", e.target.value)} placeholder={t("profile.medicationSchedulePlaceholder")} />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("checkin.cancel")}</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? t("checkin.saving") : t("checkin.save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

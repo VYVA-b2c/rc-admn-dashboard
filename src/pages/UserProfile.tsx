@@ -443,6 +443,9 @@ export default function UserProfile() {
 
   const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
   const canAssignProviders = !authBypassEnabled && !isPreviewDemo;
+  const canEditMedications = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_medications ?? isAdmin);
+  const canEditCheckins = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_checkins ?? isAdmin);
+  const canEditBrainCoach = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_brain_coach ?? isAdmin);
 
   return (
     <div className="space-y-5">
@@ -592,7 +595,7 @@ export default function UserProfile() {
                 <Calendar className="mr-1.5 h-3.5 w-3.5" />
                 {t("profile.viewAdherence")}
               </Button>
-              {showAdminControls && (
+              {canEditMedications && (
                 <AdminIconButton
                   label={t("profile.addMedication")}
                   icon={Plus}
@@ -621,7 +624,7 @@ export default function UserProfile() {
                           <p className="mt-1 text-xs font-semibold text-primary">{med.schedule_times.join(", ")}</p>
                         )}
                       </div>
-                      {showAdminControls && (
+                      {canEditMedications && (
                         <div className="flex gap-1">
                           <AdminIconButton label={t("profile.editMedication")} onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }} />
                           <AdminIconButton label={t("profile.deleteMedication")} icon={Trash2} danger onClick={() => handleDeleteMedication(med.id)} />
@@ -641,7 +644,7 @@ export default function UserProfile() {
                 pausedUntil={checkins?.paused_until}
                 pauseSource={checkins?.pause_source}
                 isPaused={Boolean(checkins?.is_paused)}
-                onEdit={showAdminControls && checkins ? () => setEditCheckinOpen(true) : undefined}
+                onEdit={canEditCheckins && checkins ? () => setEditCheckinOpen(true) : undefined}
               />
               <ServiceSummary
                 title={t("profile.service.brainCoach")}
@@ -651,7 +654,7 @@ export default function UserProfile() {
                 pausedUntil={brainCoach?.paused_until}
                 pauseSource={brainCoach?.pause_source}
                 isPaused={Boolean(brainCoach?.is_paused)}
-                onEdit={showAdminControls && brainCoach ? () => setEditBrainOpen(true) : undefined}
+                onEdit={canEditBrainCoach && brainCoach ? () => setEditBrainOpen(true) : undefined}
               />
             </div>
           </CardContent>

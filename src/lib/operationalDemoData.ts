@@ -146,6 +146,11 @@ export interface OperationalProfileResponse {
   readings?: ProfileRecord[];
   operationalContext?: OperationalProfileContext;
   isPreviewDemo?: boolean;
+  can_edit_care_plan?: boolean;
+  can_edit_medications?: boolean;
+  can_edit_checkins?: boolean;
+  can_edit_brain_coach?: boolean;
+  edit_block_reason?: string | null;
 }
 
 const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();

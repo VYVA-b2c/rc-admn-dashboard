@@ -9,6 +9,7 @@ import { apiFetch } from "@/lib/apiClient";
 import type { OperationalService } from "@/lib/operationalDemoData";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
+import { useLanguage } from "@/contexts/LanguageContext";
 
 interface EditServiceDialogProps {
   open: boolean;
@@ -19,8 +20,10 @@ interface EditServiceDialogProps {
   serviceType: "checkin" | "brainCoach";
 }
 
-export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, serviceName, serviceType }: EditServiceDialogProps) {
+export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, serviceType }: EditServiceDialogProps) {
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
+  const serviceLabel = serviceType === "checkin" ? t("profile.service.checkins") : t("profile.service.brainCoach");
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     enabled: service?.enabled ?? false,
@@ -30,7 +33,7 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
 
   const handleSave = async () => {
     if (serviceType === "checkin" && !service.id) {
-      toast({ title: "Check-in settings are not available", variant: "destructive" });
+      toast({ title: t("profile.serviceUnavailable"), variant: "destructive" });
       return;
     }
 
@@ -50,12 +53,12 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
         }),
       });
 
-      toast({ title: `${serviceName} settings updated` });
+      toast({ title: t("profile.serviceUpdated") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       onOpenChange(false);
     } catch (error) {
       toast({
-        title: "Error saving",
+        title: t("profile.serviceSaveFailed"),
         description: error instanceof Error ? error.message : undefined,
         variant: "destructive",
       });
@@ -68,33 +71,33 @@ export function EditServiceDialog({ open, onOpenChange, vyvaUserId, service, ser
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Edit {serviceName} Settings</DialogTitle>
+          <DialogTitle>{t("profile.editServiceSettings").replace("{service}", serviceLabel)}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-2">
           <div className="flex items-center justify-between">
-            <Label>Enabled</Label>
+            <Label>{t("profile.serviceEnabled")}</Label>
             <Switch checked={form.enabled} onCheckedChange={v => setForm(f => ({ ...f, enabled: v }))} />
           </div>
           <div className="space-y-1.5">
-            <Label>Frequency</Label>
+            <Label>{t("userForm.frequency")}</Label>
             <Select value={form.frequency} onValueChange={v => setForm(f => ({ ...f, frequency: v }))}>
-              <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
+              <SelectTrigger><SelectValue placeholder={t("profile.select")} /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="daily">Daily</SelectItem>
-                <SelectItem value="weekly">Weekly</SelectItem>
-                <SelectItem value="biweekly">Biweekly</SelectItem>
-                <SelectItem value="monthly">Monthly</SelectItem>
+                <SelectItem value="daily">{t("userForm.frequency.daily")}</SelectItem>
+                <SelectItem value="weekly">{t("userForm.frequency.weekly")}</SelectItem>
+                <SelectItem value="biweekly">{t("userForm.frequency.biweekly")}</SelectItem>
+                <SelectItem value="monthly">{t("userForm.frequency.monthly")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label>Preferred Time</Label>
+            <Label>{t("checkin.preferredTime")}</Label>
             <Input type="time" value={form.preferred_time} onChange={e => setForm(f => ({ ...f, preferred_time: e.target.value }))} />
           </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("checkin.cancel")}</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? t("checkin.saving") : t("checkin.save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -332,17 +332,29 @@ async function loadExternalUserLocalServices(externalUserId, context) {
   };
 }
 
-function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}) {
+async function loadExternalUserCarePlanAccess(externalUserId, context) {
+  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
+  if (!localUserId) return null;
+  return (await loadCarePlanAccessMap([localUserId], context)).get(String(localUserId)) || null;
+}
+
+function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null) {
   const normalized = normalizeExternalProfilePayload(data);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach);
-  if (!hasProviders && !hasServices) return normalized;
+  const hasAccess = Boolean(carePlanAccess);
+  if (!hasProviders && !hasServices && !hasAccess) return normalized;
   return {
     ...normalized,
     careProviders: hasProviders ? careProviders : normalized.careProviders,
     caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
     checkins: localServices?.checkins || normalized.checkins,
     brainCoach: localServices?.brainCoach || normalized.brainCoach,
+    can_edit_care_plan: carePlanAccess?.can_edit_care_plan ?? normalized.can_edit_care_plan,
+    can_edit_medications: carePlanAccess?.can_edit_medications ?? normalized.can_edit_medications,
+    can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
+    can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
+    edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
   };
 }
 
@@ -1023,6 +1035,7 @@ async function loadCheckinAccessMap(userIds, context, client = { query }) {
         MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
         BOOL_OR(
           a.provider_type = 'field_staff'
+          AND a.is_primary = true
           AND a.field_staff_id IS NOT NULL
           AND a.field_staff_id = ANY($3::uuid[])
         ) AS assigned_to_current_provider
@@ -1064,6 +1077,67 @@ async function requireCheckinScheduleAccess(userId, context, client = { query })
   const access = (await loadCheckinAccessMap([userId], context, client)).get(String(userId));
   if (!access?.consent_given) throw httpError(403, "Client consent required");
   if (!access.can_edit) throw httpError(403, "Assigned provider or admin access required");
+  return access;
+}
+
+async function loadCarePlanAccessMap(userIds, context, client = { query }) {
+  if (!context?.organizationId) return new Map();
+
+  const ids = Array.from(new Set((userIds || []).map((value) => String(value || "").trim()).filter(Boolean)));
+  const uuidIds = ids.filter(isUuid);
+  if (!uuidIds.length) return new Map();
+
+  const fieldStaffIds = context.isAdmin ? [] : await resolveContextFieldStaffIds(context, client);
+  const result = await client.query(
+    `
+      SELECT
+        u.id::text AS user_id,
+        COALESCE(consent.consent_given, false) AS consent_given,
+        MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
+        BOOL_OR(
+          a.provider_type = 'field_staff'
+          AND a.is_primary = true
+          AND a.field_staff_id IS NOT NULL
+          AND a.field_staff_id = ANY($3::uuid[])
+        ) AS primary_staff_is_current_user
+      FROM public.vyva_users u
+      LEFT JOIN public.vyva_user_consent consent ON consent.vyva_user_id = u.id
+      LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
+      LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      WHERE u.organization_id = $1
+        AND u.id = ANY($2::uuid[])
+      GROUP BY u.id, consent.consent_given
+    `,
+    [context.organizationId, uuidIds, fieldStaffIds],
+  );
+
+  const map = new Map();
+  for (const row of result.rows) {
+    const consentGiven = Boolean(row.consent_given);
+    const canEditCarePlan = Boolean(context.isAdmin) || Boolean(row.primary_staff_is_current_user);
+    map.set(String(row.user_id), {
+      assigned_provider_name: row.primary_professional_name || null,
+      can_edit_care_plan: canEditCarePlan,
+      can_edit_medications: canEditCarePlan,
+      can_edit_checkins: consentGiven && canEditCarePlan,
+      can_edit_brain_coach: consentGiven && canEditCarePlan,
+      consent_given: consentGiven,
+      edit_block_reason: !canEditCarePlan
+        ? "assigned_provider_required"
+        : !consentGiven
+          ? "consent_required"
+          : null,
+    });
+  }
+
+  return map;
+}
+
+async function requireCarePlanAccess(userId, context, client = { query }) {
+  if (!(await userBelongsToOrganization(userId, context, client))) throw httpError(404, "User not found");
+
+  const access = (await loadCarePlanAccessMap([userId], context, client)).get(String(userId));
+  if (!access?.can_edit_care_plan) throw httpError(403, "Assigned primary Red Cross staff or admin access required");
   return access;
 }
 
@@ -2763,6 +2837,7 @@ async function loadCheckins(context) {
         WHEN $2::boolean = true THEN true
         ELSE BOOL_OR(
           a.provider_type = 'field_staff'
+          AND a.is_primary = true
           AND a.field_staff_id IS NOT NULL
           AND a.field_staff_id = ANY($3::uuid[])
         )
@@ -2772,6 +2847,7 @@ async function loadCheckins(context) {
         WHEN $2::boolean = true THEN NULL
         WHEN BOOL_OR(
           a.provider_type = 'field_staff'
+          AND a.is_primary = true
           AND a.field_staff_id IS NOT NULL
           AND a.field_staff_id = ANY($3::uuid[])
         ) THEN NULL
@@ -2887,6 +2963,13 @@ async function loadUserInfo(userId, context) {
       source: provider.source,
       created_at: provider.created_at,
     }));
+  const carePlanAccess = (await loadCarePlanAccessMap([userId], context)).get(String(userId)) || {
+    can_edit_care_plan: Boolean(context.isAdmin),
+    can_edit_medications: Boolean(context.isAdmin),
+    can_edit_checkins: Boolean(context.isAdmin && consent[0]?.consent_given),
+    can_edit_brain_coach: Boolean(context.isAdmin && consent[0]?.consent_given),
+    edit_block_reason: null,
+  };
 
   return {
     user,
@@ -2900,6 +2983,11 @@ async function loadUserInfo(userId, context) {
     sensors,
     alerts,
     readings: [],
+    can_edit_care_plan: carePlanAccess.can_edit_care_plan,
+    can_edit_medications: carePlanAccess.can_edit_medications,
+    can_edit_checkins: carePlanAccess.can_edit_checkins,
+    can_edit_brain_coach: carePlanAccess.can_edit_brain_coach,
+    edit_block_reason: carePlanAccess.edit_block_reason,
   };
 }
 
@@ -3875,6 +3963,7 @@ async function createMedication(payload, context) {
   const medication = normalizeMedicationPayload(payload, true);
   if (medication.error) return medication;
   if (!(await userBelongsToOrganization(medication.value.vyva_user_id, context))) return { notFound: true };
+  await requireCarePlanAccess(medication.value.vyva_user_id, context);
 
   const result = await query(
     `
@@ -3898,6 +3987,19 @@ async function updateMedication(medicationId, payload, context) {
   const organizationId = scopeOrganizationId(context);
   const medication = normalizeMedicationPayload(payload);
   if (medication.error) return medication;
+  const existing = await query(
+    `
+      SELECT m.vyva_user_id::text AS user_id
+      FROM public.vyva_user_medications m
+      JOIN public.vyva_users u ON u.id = m.vyva_user_id
+      WHERE m.id = $1
+        AND u.organization_id = $2
+      LIMIT 1
+    `,
+    [medicationId, organizationId],
+  );
+  if (!existing.rows[0]) return { notFound: true };
+  await requireCarePlanAccess(existing.rows[0].user_id, context);
 
   const result = await query(
     `
@@ -3925,6 +4027,20 @@ async function updateMedication(medicationId, payload, context) {
 
 async function deleteMedication(medicationId, context) {
   const organizationId = scopeOrganizationId(context);
+  const existing = await query(
+    `
+      SELECT m.vyva_user_id::text AS user_id
+      FROM public.vyva_user_medications m
+      JOIN public.vyva_users u ON u.id = m.vyva_user_id
+      WHERE m.id = $1
+        AND u.organization_id = $2
+      LIMIT 1
+    `,
+    [medicationId, organizationId],
+  );
+  if (!existing.rows[0]) return { notFound: true };
+  await requireCarePlanAccess(existing.rows[0].user_id, context);
+
   const result = await query(
     `
       DELETE FROM public.vyva_user_medications m
@@ -3937,6 +4053,24 @@ async function deleteMedication(medicationId, context) {
     [medicationId, organizationId],
   );
   return result.rows[0] ? { value: result.rows[0] } : { notFound: true };
+}
+
+async function requireMedicationRecordAccess(medicationId, context) {
+  const organizationId = scopeOrganizationId(context);
+  const existing = await query(
+    `
+      SELECT m.vyva_user_id::text AS user_id
+      FROM public.vyva_user_medications m
+      JOIN public.vyva_users u ON u.id = m.vyva_user_id
+      WHERE m.id = $1
+        AND u.organization_id = $2
+      LIMIT 1
+    `,
+    [medicationId, organizationId],
+  );
+  if (!existing.rows[0]) throw httpError(404, "Medication not found");
+  await requireCarePlanAccess(existing.rows[0].user_id, context);
+  return existing.rows[0];
 }
 
 function normalizeCaregiverPayload(payload, creating = false) {
@@ -4118,6 +4252,7 @@ async function updateCheckinConfig(checkinId, payload, context) {
 
 async function upsertBrainCoachConfig(userId, payload, context) {
   if (!(await userBelongsToOrganization(userId, context))) return { notFound: true };
+  await requireCheckinScheduleAccess(userId, context);
   const config = normalizeServicePayload(payload);
   if (config.error) return config;
 
@@ -4892,16 +5027,18 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
     if (upstream?.ok) {
       let careProviders = [];
       let localServices = { checkins: null, brainCoach: null };
+      let carePlanAccess = null;
       if (pool) {
         try {
           req.context = await resolveRequestContext(req);
           careProviders = await loadExternalUserCareProviders(userId, req.context);
           localServices = await loadExternalUserLocalServices(userId, req.context);
+          carePlanAccess = await loadExternalUserCarePlanAccess(userId, req.context);
         } catch (error) {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices));
+      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices, carePlanAccess));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -4992,6 +5129,11 @@ app.delete("/api/v1/user-dashboard/care-provider-assignments/:id", asyncRoute(as
 }));
 
 app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
+  if (!req.context?.isAdmin && pool) {
+    const userId = nullIfBlank(firstValue(req.body?.vyva_user_id, req.body?.user_id, req.body?.userId));
+    if (!userId) throw httpError(400, "vyva_user_id is required");
+    await requireCarePlanAccess(userId, req.context);
+  }
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/medications", {
     method: "POST",
     body: req.body,
@@ -5002,6 +5144,9 @@ app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
 }));
 
 app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  if (!req.context?.isAdmin && pool) {
+    await requireMedicationRecordAccess(req.params.med_id, req.context);
+  }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "PUT",
     body: req.body,
@@ -5012,6 +5157,9 @@ app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res
 }));
 
 app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res) => {
+  if (!req.context?.isAdmin && pool) {
+    await requireMedicationRecordAccess(req.params.med_id, req.context);
+  }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "DELETE",
   });
