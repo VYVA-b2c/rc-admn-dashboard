@@ -289,6 +289,7 @@ export default function UserProfile() {
   const alerts = safeArray(data.alerts);
   const checkins = data.checkins ?? null;
   const brainCoach = data.brainCoach ?? null;
+  const medicationActivity = data.medicationActivity ?? null;
   const isPreviewDemo = Boolean(data.isPreviewDemo);
 
   const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || t("profile.unknownPerson");
@@ -330,25 +331,6 @@ export default function UserProfile() {
   ];
   const servicesActive = services.filter((service) => service.active).length;
 
-  const formatFrequency = (frequency?: string | number | null) => {
-    if (frequency == null || frequency === "") return t("profile.frequencyUnknown");
-    const numeric = Number(frequency);
-    if (Number.isFinite(numeric) && numeric > 0) {
-      if (numeric === 1) return t("checkin.everyDay");
-      return copy("checkin.everyDays", { count: numeric });
-    }
-
-    const key = `userForm.frequency.${String(frequency)}`;
-    const label = t(key);
-    return label === key ? String(frequency) : label;
-  };
-
-  const formatScheduleDetail = (frequency?: string | number | null, preferredTime?: string | null) =>
-    copy("profile.timeline.scheduleDetail", {
-      frequency: formatFrequency(frequency),
-      time: preferredTime || t("profile.timeUnknown"),
-    });
-
   const formatDateTime = (date?: string | null) => {
     if (!date) return "";
     const parsed = new Date(date);
@@ -356,54 +338,66 @@ export default function UserProfile() {
     return parsed.toLocaleString();
   };
 
+  const formatOutcomeLabel = (value?: string | null) => {
+    if (!value) return t("checkin.outcomeUnknown");
+    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, "_");
+    const key = `checkin.outcome.${normalized}`;
+    const label = t(key);
+    if (label !== key) return label;
+    return normalized
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const outcomeTone = (value?: string | null) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["missed", "failed", "escalated"].includes(normalized)) return "red";
+    if (["confirmed", "completed", "taken"].includes(normalized)) return "teal";
+    return "orange";
+  };
+
   const eventTimeline = (() => {
     const events: { date?: string | null; label: string; detail?: string; tone: string; icon: LucideIcon }[] = [];
     if (user.created_at) events.push({ date: user.created_at, label: t("profile.timeline.onboarded"), detail: t("profile.timeline.onboardedDetail"), tone: "primary", icon: UserRound });
     if (checkins) {
-      const paused = isServicePaused(checkins);
-      events.push({
-        date: recordDate(checkins, ["updated_at", "created_at"]) || user.created_at,
-        label: t(paused ? "profile.timeline.checkinsPaused" : checkins.enabled ? "profile.timeline.checkinsActive" : "profile.timeline.checkinsInactive"),
-        detail: formatScheduleDetail(checkins.frequency, checkins.preferred_time),
-        tone: paused ? "orange" : checkins.enabled ? "teal" : "muted",
-        icon: PhoneCall,
-      });
-
-      const lastDate = recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt"]);
+      const lastDate = recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
       if (lastDate) {
-        const outcome = recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome"]);
-        const outcomeKey = outcome ? `checkin.outcome.${outcome}` : "";
-        const outcomeLabel = outcomeKey ? t(outcomeKey) : "";
+        const outcome = recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
         events.push({
           date: lastDate,
           label: t("profile.timeline.lastCheckin"),
-          detail: outcomeLabel && outcomeLabel !== outcomeKey ? outcomeLabel : t("checkin.outcomeUnknown"),
-          tone: outcome === "missed" ? "red" : outcome === "confirmed" ? "teal" : "orange",
+          detail: formatOutcomeLabel(outcome),
+          tone: outcomeTone(outcome),
           icon: CheckCircle2,
         });
       }
     }
     if (brainCoach) {
-      const paused = isServicePaused(brainCoach);
-      events.push({
-        date: recordDate(brainCoach, ["updated_at", "created_at"]) || user.created_at,
-        label: t(paused ? "profile.timeline.brainCoachPaused" : brainCoach.enabled ? "profile.timeline.brainCoachActive" : "profile.timeline.brainCoachInactive"),
-        detail: formatScheduleDetail(brainCoach.frequency, brainCoach.preferred_time),
-        tone: paused ? "orange" : brainCoach.enabled ? "primary" : "muted",
-        icon: Brain,
-      });
+      const lastDate = recordDate(brainCoach, ["last_session_at", "lastSessionAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
+      if (lastDate) {
+        const outcome = recordString(brainCoach, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
+        events.push({
+          date: lastDate,
+          label: t("profile.service.brainCoach"),
+          detail: formatOutcomeLabel(outcome),
+          tone: outcomeTone(outcome),
+          icon: Brain,
+        });
+      }
     }
-    medications.forEach((med) => {
-      if (med.created_at) events.push({ date: med.created_at, label: copy("profile.timeline.medicationAdded", { item: med.medication_name }), detail: [med.dosage, safeArray(med.schedule_times).join(", ")].filter(Boolean).join(" · "), tone: "orange", icon: Pill });
-    });
-    if (medications.length && !medications.some((med) => med.created_at)) {
-      events.push({
-        date: user.created_at,
-        label: copy("profile.timeline.medicationPlan", { count: medications.length }),
-        detail: medications.map((med) => med.medication_name).filter(Boolean).slice(0, 3).join(", "),
-        tone: "orange",
-        icon: Pill,
-      });
+    if (medicationActivity) {
+      const lastDate = recordDate(medicationActivity, ["occurred_at", "occurredAt", "reported_at", "reportedAt", "created_at", "scheduled_date", "scheduledDate"]);
+      const medicationName = recordString(medicationActivity, ["medication_name", "medicationName"]);
+      const status = recordString(medicationActivity, ["status", "last_status", "lastStatus"]);
+      if (lastDate) {
+        events.push({
+          date: lastDate,
+          label: t("profile.service.medications"),
+          detail: [medicationName, formatOutcomeLabel(status)].filter(Boolean).join(" - "),
+          tone: outcomeTone(status),
+          icon: Pill,
+        });
+      }
     }
     if (careProviders.length) {
       events.push({

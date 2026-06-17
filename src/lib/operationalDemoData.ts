@@ -68,6 +68,17 @@ export interface OperationalMedication extends ProfileRecord {
   schedule_times?: string[];
 }
 
+export interface OperationalMedicationActivity extends ProfileRecord {
+  id?: string;
+  medication_id?: string | null;
+  medication_name?: string | null;
+  status?: string | null;
+  occurred_at?: string | null;
+  reported_at?: string | null;
+  scheduled_date?: string | null;
+  scheduled_time?: string | null;
+}
+
 export interface OperationalService extends ProfileRecord {
   id?: string;
   created_at?: string;
@@ -137,6 +148,7 @@ export interface OperationalProfileResponse {
   consent?: OperationalConsent | null;
   health?: OperationalHealth | null;
   medications?: OperationalMedication[];
+  medicationActivity?: OperationalMedicationActivity | null;
   checkins?: OperationalService | null;
   brainCoach?: OperationalService | null;
   careProviders?: OperationalCareProviderAssignment[];

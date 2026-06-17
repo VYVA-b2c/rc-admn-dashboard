@@ -317,18 +317,43 @@ async function loadExternalUserCareProviders(externalUserId, context) {
   return localUserId ? loadUserCareProviders(localUserId, context) : [];
 }
 
+async function loadLatestMedicationActivity(userId) {
+  const rows = await optionalRows(
+    `
+      SELECT
+        l.id::text,
+        l.medication_id::text,
+        m.medication_name,
+        l.status,
+        l.reported_at,
+        l.scheduled_date::text,
+        l.scheduled_time,
+        COALESCE(l.reported_at, l.created_at) AS occurred_at
+      FROM public.vyva_medication_logs l
+      LEFT JOIN public.vyva_user_medications m ON m.id = l.medication_id
+      WHERE l.vyva_user_id = $1
+      ORDER BY COALESCE(l.reported_at, l.created_at) DESC, l.scheduled_date DESC, l.scheduled_time DESC NULLS LAST
+      LIMIT 1
+    `,
+    [userId],
+  );
+  return rows[0] || null;
+}
+
 async function loadExternalUserLocalServices(externalUserId, context) {
   const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
-  if (!localUserId) return { checkins: null, brainCoach: null };
+  if (!localUserId) return { checkins: null, brainCoach: null, medicationActivity: null };
 
-  const [checkins, brainCoach] = await Promise.all([
+  const [checkins, brainCoach, medicationActivity] = await Promise.all([
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
+    loadLatestMedicationActivity(localUserId),
   ]);
 
   return {
     checkins: checkins[0] ? normalizeCheckin({ ...checkins[0], user_name: "", user_phone: null, city: null, first_name: null, last_name: null }) : null,
     brainCoach: brainCoach[0] ? normalizeBrainCoachSession({ ...brainCoach[0], user_name: "", user_phone: null, city: null }) : null,
+    medicationActivity,
   };
 }
 
@@ -341,7 +366,7 @@ async function loadExternalUserCarePlanAccess(externalUserId, context) {
 function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null) {
   const normalized = normalizeExternalProfilePayload(data);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
-  const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach);
+  const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
   const hasAccess = Boolean(carePlanAccess);
   if (!hasProviders && !hasServices && !hasAccess) return normalized;
   return {
@@ -350,6 +375,7 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
     checkins: localServices?.checkins || normalized.checkins,
     brainCoach: localServices?.brainCoach || normalized.brainCoach,
+    medicationActivity: localServices?.medicationActivity || normalized.medicationActivity,
     can_edit_care_plan: carePlanAccess?.can_edit_care_plan ?? normalized.can_edit_care_plan,
     can_edit_medications: carePlanAccess?.can_edit_medications ?? normalized.can_edit_medications,
     can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
@@ -624,10 +650,10 @@ async function loadOrganizationById(id) {
     `
       SELECT id::text, slug, name, country, default_language, timezone, active, created_at, updated_at
       FROM public.organizations
-      WHERE id = $1
+      WHERE id::text = $1 OR slug = $1
       LIMIT 1
     `,
-    [id],
+    [String(id || "")],
   );
   return organizationRow(result.rows[0]);
 }
@@ -708,7 +734,7 @@ async function loadUserContext(user) {
       SELECT role::text, organization_id::text
       FROM public.user_roles
       WHERE user_id = $1
-      ORDER BY CASE role WHEN 'admin' THEN 0 WHEN 'coordinator' THEN 1 ELSE 2 END
+      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END
     `,
     [user.id],
   );
@@ -736,7 +762,11 @@ async function loadUserContext(user) {
   const profile = profileResult.rows[0] || null;
   const email = String(user.email || profile?.email || "").toLowerCase();
   const isPlatformAdmin = Boolean(profile?.is_platform_admin) || platformAdminEmails().includes(email);
-  const roles = rolesResult.rows.map((row) => row.role);
+  const roles = Array.from(new Set(
+    rolesResult.rows
+      .map((row) => row.role === "admin" ? "admin" : "operator")
+      .filter(Boolean),
+  ));
   const primaryRole = roles.includes("admin") ? "admin" : roles[0] || "operator";
   const roleOrg = rolesResult.rows.find((row) => row.organization_id)?.organization_id;
   let organization = profile?.org_id
@@ -801,7 +831,8 @@ async function loadUserContext(user) {
 async function applyOrganizationOverride(req, context) {
   const overrideId = req.get("x-organization-id") || req.query.organization_id;
   if (!overrideId) return context;
-  if (!context?.isAdmin) throw httpError(403, "Admin access required");
+  if (overrideId === context?.organizationId || overrideId === context?.organization?.slug) return context;
+  if (!context?.isPlatformAdmin) throw httpError(403, "Platform admin access required");
   const organization = await loadOrganizationById(overrideId);
   if (!organization?.id || !organization.active) throw httpError(404, "Organization not found");
   return {
@@ -848,6 +879,13 @@ async function resolveRequestContext(req, options = {}) {
 
 function requireAdmin(context) {
   if (!context?.isAdmin) throw httpError(403, "Admin access required");
+}
+
+function requireTargetOrganizationAdmin(context, organizationId) {
+  requireAdmin(context);
+  if (!context?.isPlatformAdmin && String(organizationId || "") !== String(context?.organizationId || "")) {
+    throw httpError(403, "Organization admin access required");
+  }
 }
 
 function requireCampaignDraftAccess(context, status = "draft") {
@@ -1228,7 +1266,7 @@ async function loadTeamMembers(context) {
         r.id::text,
         r.user_id,
         r.organization_id::text,
-        r.role::text,
+        CASE WHEN r.role::text = 'admin' THEN 'admin' ELSE 'operator' END AS role,
         p.full_name,
         p.email,
         p.created_at
@@ -1236,7 +1274,7 @@ async function loadTeamMembers(context) {
       LEFT JOIN public.profiles p ON p.user_id = r.user_id
       WHERE r.organization_id = $1
       ORDER BY
-        CASE r.role WHEN 'admin' THEN 0 WHEN 'coordinator' THEN 1 ELSE 2 END,
+        CASE r.role WHEN 'admin' THEN 0 ELSE 1 END,
         COALESCE(p.email, r.user_id) ASC
     `,
     [organizationId],
@@ -1251,7 +1289,7 @@ function normalizeTeamMemberPayload(payload = {}) {
   const fullName = nullIfBlank(firstValue(payload.full_name, payload.fullName, payload.name));
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "email is required" };
   if (password && password.length < 6) return { error: "password must be at least 6 characters" };
-  if (!["admin", "operator", "coordinator"].includes(role)) return { error: "role is invalid" };
+  if (!["admin", "operator"].includes(role)) return { error: "role is invalid" };
   return { value: { email, password, role, fullName } };
 }
 
@@ -2938,10 +2976,11 @@ async function loadUserInfo(userId, context) {
   const user = userResult.rows[0];
   if (!user) return null;
 
-  const [consent, health, medications, checkins, brainCoach, careProviders, sensors, alerts] = await Promise.all([
+  const [consent, health, medications, medicationActivity, checkins, brainCoach, careProviders, sensors, alerts] = await Promise.all([
     optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
+    loadLatestMedicationActivity(userId),
     optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId]),
     loadUserCareProviders(userId, context),
@@ -2976,6 +3015,7 @@ async function loadUserInfo(userId, context) {
     consent: consent[0] || null,
     health: health[0] || null,
     medications,
+    medicationActivity,
     checkins: checkins[0] || null,
     brainCoach: brainCoach[0] || null,
     careProviders,
@@ -4860,9 +4900,14 @@ app.get("/api/v1/organizations", async (req, res, next) => {
     if (pool) {
       try {
         const databaseOrganizations = await loadOrganizations({
-          includeInactive: Boolean(context?.isAdmin) && req.query.includeInactive === "true",
+          includeInactive: Boolean(context?.isPlatformAdmin) && req.query.includeInactive === "true",
         });
-        if (databaseOrganizations.length) organizations = databaseOrganizations;
+        if (databaseOrganizations.length) {
+          organizations = context?.isPlatformAdmin
+            ? databaseOrganizations
+            : databaseOrganizations.filter((organization) => organization.id === context?.organizationId);
+        }
+        if (!organizations.length && context?.organization?.id) organizations = [context.organization];
       } catch (error) {
         console.warn("Organization list unavailable:", error instanceof Error ? error.message : "query failed");
       }
@@ -4883,7 +4928,7 @@ app.get("/api/v1/organizations", async (req, res, next) => {
 });
 
 app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
-  requireAdmin(req.context);
+  requirePlatformAdmin(req.context);
   const payload = normalizeOrganizationPayload(req.body, true);
   if (payload.error) {
     res.status(400).json({ error: payload.error });
@@ -4908,7 +4953,7 @@ app.post("/api/v1/organizations", asyncRoute(async (req, res) => {
 }));
 
 app.patch("/api/v1/organizations/:id", asyncRoute(async (req, res) => {
-  requireAdmin(req.context);
+  requireTargetOrganizationAdmin(req.context, req.params.id);
   const payload = normalizeOrganizationPayload(req.body);
   if (payload.error) {
     res.status(400).json({ error: payload.error });
