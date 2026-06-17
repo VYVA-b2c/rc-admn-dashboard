@@ -37,7 +37,7 @@ export default function Login() {
 
     if (magicLinkInFlight.current) return;
     if (Date.now() < rateLimitUntil.current) {
-      toast.error(t("login.rateLimited"), { description: t("login.rateLimitDesc") });
+      toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkAlreadyRequestedDesc") });
       return;
     }
 
@@ -49,7 +49,7 @@ export default function Login() {
         const msg = error.message?.toLowerCase() ?? "";
         if (msg.includes("rate") || msg.includes("429") || msg.includes("too many")) {
           rateLimitUntil.current = Date.now() + 60_000;
-          toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
+          toast.success(t("login.magicLinkSent"), { description: t("login.magicLinkAlreadyRequestedDesc") });
         } else {
           toast.error(t("login.magicLinkFailed"), { description: error.message });
         }

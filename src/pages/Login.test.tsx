@@ -107,4 +107,26 @@ describe("Login", () => {
       });
     });
   });
+
+  it("does not show an error when the provider asks the user to wait", async () => {
+    authMocks.signInWithMagicLink.mockResolvedValue({
+      error: new Error("For security purposes, please wait before requesting another link."),
+    });
+    renderLogin();
+
+    fireEvent.change(screen.getByLabelText(/admin email/i), {
+      target: { value: "karim.assad@mokadigital.net" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Magic link sent", {
+        description: "A recent link may already be on its way. Check your inbox before requesting another one.",
+      });
+    });
+    expect(toast.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("delayed"),
+      expect.anything(),
+    );
+  });
 });
