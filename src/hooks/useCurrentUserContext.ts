@@ -45,6 +45,19 @@ const previewUserContext: CurrentUserContext = {
   userId: "preview",
 };
 
+function projectPlatformAdminContext(email?: string | null, userId?: string | null): CurrentUserContext {
+  return {
+    email: email ?? null,
+    fullName: null,
+    isAdmin: true,
+    isPlatformAdmin: true,
+    organization: null,
+    role: "admin",
+    roles: ["admin"],
+    userId: userId ?? null,
+  };
+}
+
 function applyProjectAdminFallback(user: CurrentUserContext): CurrentUserContext {
   if (!isProjectPlatformAdminEmail(user.email)) return user;
   const roles = user.roles.includes("admin") ? user.roles : ["admin", ...user.roles];
@@ -59,18 +72,31 @@ function applyProjectAdminFallback(user: CurrentUserContext): CurrentUserContext
 
 export function useCurrentUserContext() {
   const { user } = useAuth();
+  const fallbackProjectAdmin = isProjectPlatformAdminEmail(user?.email)
+    ? projectPlatformAdminContext(user?.email, user?.id)
+    : null;
 
   return useQuery({
     queryKey: ["current-user-context", user?.id ?? "preview"],
     enabled: authBypassEnabled || Boolean(user?.id),
     retry: false,
-    placeholderData: authBypassEnabled ? { user: previewUserContext } : undefined,
+    placeholderData: authBypassEnabled
+      ? { user: previewUserContext }
+      : fallbackProjectAdmin
+        ? { user: fallbackProjectAdmin }
+        : undefined,
     queryFn: async () => {
       try {
         const response = await apiFetch<{ user: CurrentUserContext }>("/api/v1/me");
-        return { user: applyProjectAdminFallback(response.user) };
+        const responseUser = {
+          ...response.user,
+          email: response.user.email || user?.email || null,
+          userId: response.user.userId || user?.id || null,
+        };
+        return { user: applyProjectAdminFallback(responseUser) };
       } catch (error) {
         if (authBypassEnabled) return { user: previewUserContext };
+        if (fallbackProjectAdmin) return { user: fallbackProjectAdmin };
         throw error;
       }
     },

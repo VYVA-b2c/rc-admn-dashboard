@@ -37,6 +37,7 @@ import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { useGISData } from "@/hooks/useGISData";
 import { authBypassEnabled } from "@/lib/authMode";
 import { demoOperationalUsers, type OperationalQueueUser } from "@/lib/operationalDemoData";
+import { isProjectPlatformAdminEmail } from "@/lib/projectAdmin";
 import { deriveRiskQueueRows } from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 
@@ -153,9 +154,12 @@ export function AppSidebar() {
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const accountEmail = currentUser?.email || user?.email;
-  const roleLabel = currentUser?.isPlatformAdmin
+  const isProjectPlatformAdmin = isProjectPlatformAdminEmail(accountEmail);
+  const isPlatformAdmin = Boolean(currentUser?.isPlatformAdmin || isProjectPlatformAdmin);
+  const isAdmin = Boolean(currentUser?.isAdmin || isPlatformAdmin);
+  const roleLabel = isPlatformAdmin
     ? t("settings.role.superAdmin")
-    : currentUser?.isAdmin
+    : isAdmin
       ? t("settings.role.admin")
       : t("sidebar.operator");
 
