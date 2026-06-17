@@ -905,7 +905,7 @@ function InfoTile({ label, value }: { label: string; value?: string | null }) {
   return (
     <div className="rounded-xl border border-border/70 bg-muted/25 px-4 py-3">
       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
-      <p className="mt-2 text-sm font-bold leading-5 text-foreground">{value || "â€”"}</p>
+      <p className="mt-2 text-sm font-bold leading-5 text-foreground">{value || "-"}</p>
     </div>
   );
 }
