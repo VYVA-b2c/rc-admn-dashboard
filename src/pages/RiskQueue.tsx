@@ -1,160 +1,396 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
+  BrainCircuit,
   CheckCircle2,
-  ChevronRight,
-  Clock,
-  MapPin,
-  MessageCircle,
-  PhoneCall,
-  Search,
+  Clock3,
+  LineChart,
+  Loader2,
+  Pill,
   ShieldAlert,
-  UserRound,
+  UserRoundCheck,
+  UsersRound,
   type LucideIcon,
 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
-import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { useLanguage } from "@/contexts/LanguageContext";
-import { useGISData } from "@/hooks/useGISData";
+import { toast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
-import {
-  demoOperationalUsers,
-  type OperationalChannel,
-  type OperationalQueueUser,
-  type OperationalStatus,
-} from "@/lib/operationalDemoData";
-import {
-  deriveRiskQueueRows,
-  riskQueueFilterKeys,
-  type FilterKey,
-  type QueueAction,
-  type RiskQueueRow,
-} from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 
-function statusClasses(status: OperationalStatus) {
-  switch (status) {
-    case "urgent":
-      return "bg-red-50 text-red-700 ring-red-200";
-    case "review":
-      return "bg-orange-50 text-orange-700 ring-orange-200";
-    case "stable":
-      return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+type Kpis = {
+  predictedEscalations7d: number;
+  clientsTrendingUp: number;
+  adherenceRiskFlags: number;
+  operatorsOverCapacity: number;
+};
+
+type HorizonRow = {
+  date: string;
+  urgent: number;
+  review: number;
+  medication: number;
+  noResponse: number;
+  hoursNeeded: number;
+  hoursAvailable: number;
+};
+
+type InsightFactor = {
+  signal?: string | null;
+  label: string;
+  severity: "low" | "moderate" | "high";
+};
+
+type InsightClient = {
+  id: string;
+  name: string;
+  age?: number | null;
+  zone?: string | null;
+  operator?: string | null;
+  score: number;
+  delta: number;
+  band: "low" | "moderate" | "high";
+  history: number[];
+  forecast: { mid: number[]; low: number[]; high: number[] };
+  factors: InsightFactor[];
+  window: string;
+};
+
+type OperatorCapacity = {
+  id: string;
+  name: string;
+  current: number;
+  capacity: number;
+  recommended: number;
+};
+
+type Suggestion = {
+  id: string;
+  from: string;
+  to: string;
+  clientCount: number;
+  reason: string;
+  status: "pending" | "applied" | "dismissed";
+};
+
+type InsightsPayload = {
+  kpis: Kpis;
+  horizon: HorizonRow[];
+  clients: InsightClient[];
+  operators: OperatorCapacity[];
+  suggestions: Suggestion[];
+  isPreview: boolean;
+};
+
+const horizonOptions = [7, 14, 30] as const;
+const filterOptions = [
+  { value: "all", label: "All" },
+  { value: "high", label: "High" },
+  { value: "mood", label: "Mood" },
+  { value: "medication", label: "Medication" },
+  { value: "noresponse", label: "No response" },
+  { value: "unassigned", label: "Unassigned" },
+] as const;
+
+const demoClients: InsightClient[] = [
+  {
+    id: "demo-carmen-lopez",
+    name: "Carmen Lopez",
+    age: 84,
+    zone: "Madrid",
+    operator: "Ana Novak",
+    score: 82,
+    delta: 6,
+    band: "high",
+    history: [64, 66, 67, 68, 72, 70, 74, 76, 78, 77, 79, 81, 80, 82],
+    forecast: {
+      mid: [84, 85, 86, 87, 88, 88, 89, 89, 90, 90, 90, 91, 91, 91],
+      low: [77, 77, 76, 76, 75, 74, 74, 73, 72, 72, 71, 70, 70, 69],
+      high: [91, 93, 96, 98, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100],
+    },
+    factors: [
+      { signal: "response", label: "2 missed calls", severity: "high" },
+      { signal: "medication", label: "Meds 58%", severity: "high" },
+      { signal: "mood", label: "Mood declining", severity: "moderate" },
+    ],
+    window: "Escalation likely if unreached this week",
+  },
+  {
+    id: "demo-hans-mueller",
+    name: "Hans Mueller",
+    age: 86,
+    zone: "Dresden",
+    operator: "Mila Weber",
+    score: 59,
+    delta: 4,
+    band: "moderate",
+    history: [42, 44, 45, 48, 49, 50, 52, 54, 53, 55, 56, 57, 58, 59],
+    forecast: {
+      mid: [61, 62, 63, 65, 66, 67, 68, 69, 70, 70, 71, 72, 72, 73],
+      low: [55, 55, 54, 54, 53, 52, 52, 51, 51, 50, 49, 49, 48, 48],
+      high: [67, 69, 72, 75, 78, 80, 83, 86, 88, 90, 93, 95, 96, 98],
+    },
+    factors: [
+      { signal: "response", label: "No response", severity: "moderate" },
+      { signal: "checkin", label: "Check-in overdue", severity: "moderate" },
+    ],
+    window: "Risk likely to peak in 4-6 days",
+  },
+  {
+    id: "demo-elena-garcia",
+    name: "Elena Garcia",
+    age: 77,
+    zone: "Madrid",
+    operator: null,
+    score: 45,
+    delta: 2,
+    band: "moderate",
+    history: [36, 37, 38, 39, 39, 40, 41, 42, 42, 43, 44, 43, 44, 45],
+    forecast: {
+      mid: [46, 47, 48, 49, 50, 51, 52, 52, 53, 54, 55, 55, 56, 56],
+      low: [39, 39, 39, 38, 38, 37, 37, 36, 36, 35, 35, 34, 34, 33],
+      high: [53, 55, 57, 60, 62, 65, 67, 69, 71, 73, 75, 77, 78, 80],
+    },
+    factors: [
+      { signal: "assignment", label: "Unassigned operator", severity: "high" },
+      { signal: "medication", label: "Meds 74%", severity: "moderate" },
+    ],
+    window: "Needs an assigned operator before risk peaks",
+  },
+];
+
+const demoOperators: OperatorCapacity[] = [
+  { id: "demo-ana", name: "Ana Novak", current: 11, capacity: 32, recommended: 8 },
+  { id: "demo-mila", name: "Mila Weber", current: 6, capacity: 32, recommended: 8 },
+  { id: "demo-joel", name: "Joel Martin", current: 4, capacity: 28, recommended: 7 },
+];
+
+const demoSuggestions: Suggestion[] = [
+  {
+    id: "demo-suggestion-1",
+    from: "Unassigned",
+    to: "Joel Martin",
+    clientCount: 1,
+    reason: "Elena Garcia's risk score is rising with no assigned operator - Joel Martin has the most available hours.",
+    status: "pending",
+  },
+  {
+    id: "demo-suggestion-2",
+    from: "Ana Novak",
+    to: "Mila Weber",
+    clientCount: 2,
+    reason: "Ana Novak is over capacity (11/8 cases). Mila Weber has 8h of headroom this week.",
+    status: "pending",
+  },
+];
+
+function demoHorizon(days: number): HorizonRow[] {
+  return Array.from({ length: days }, (_, index) => {
+    const date = new Date();
+    date.setDate(date.getDate() + index + 1);
+    return {
+      date: date.toISOString().slice(0, 10),
+      urgent: index < 4 ? 2 + (index % 2) : 3 + (index % 3 === 0 ? 1 : 0),
+      review: 6 + Math.round(index / 3),
+      medication: 3 + (index % 3),
+      noResponse: 2 + (index % 2),
+      hoursNeeded: 18 + index * 0.9,
+      hoursAvailable: 21,
+    };
+  });
+}
+
+function filterDemoClients(filter: string) {
+  if (filter === "all") return demoClients;
+  if (filter === "high") return demoClients.filter((client) => client.band === "high");
+  if (filter === "unassigned") return demoClients.filter((client) => !client.operator);
+  return demoClients.filter((client) =>
+    client.factors.some((factor) => `${factor.signal || ""} ${factor.label}`.toLowerCase().includes(filter)),
+  );
+}
+
+function previewPayload(days: number, filter: string): InsightsPayload {
+  return {
+    kpis: {
+      predictedEscalations7d: 6,
+      clientsTrendingUp: 18,
+      adherenceRiskFlags: 9,
+      operatorsOverCapacity: 1,
+    },
+    horizon: demoHorizon(days),
+    clients: filterDemoClients(filter),
+    operators: demoOperators,
+    suggestions: demoSuggestions,
+    isPreview: true,
+  };
+}
+
+async function fetchInsights(days: number, filter: string): Promise<InsightsPayload> {
+  try {
+    const [kpis, horizon, clients, operators, suggestions] = await Promise.all([
+      apiFetch<Kpis>("/api/insights/kpis"),
+      apiFetch<HorizonRow[]>(`/api/insights/horizon?days=${days}`),
+      apiFetch<InsightClient[]>(`/api/insights/clients?filter=${filter}&days=${days}`),
+      apiFetch<OperatorCapacity[]>("/api/insights/operators"),
+      apiFetch<Suggestion[]>("/api/insights/suggestions?status=pending"),
+    ]);
+    const hasData = horizon.length > 0 || clients.length > 0 || operators.length > 0 || suggestions.length > 0;
+    if (!hasData && authBypassEnabled) return previewPayload(days, filter);
+    return { kpis, horizon, clients, operators, suggestions, isPreview: false };
+  } catch (error) {
+    if (authBypassEnabled) return previewPayload(days, filter);
+    throw error;
   }
 }
 
-function actionClasses(action: QueueAction) {
-  if (action === "call") return "bg-primary text-white hover:bg-primary/90";
-  if (action === "assign") return "border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary";
-  return "border-border bg-white text-muted-foreground hover:bg-primary/10 hover:text-primary";
+function bandClasses(band: InsightClient["band"]) {
+  if (band === "high") return "bg-red-50 text-red-700 ring-red-200";
+  if (band === "moderate") return "bg-orange-50 text-orange-700 ring-orange-200";
+  return "bg-emerald-50 text-emerald-700 ring-emerald-200";
 }
 
-function actionLabelKey(action: QueueAction) {
-  if (action === "call") return "riskQueue.action.prepareCall";
-  if (action === "assign") return "queue.action.assign";
-  if (action === "monitor") return "usersList.nextAction.monitor";
-  return "queue.action.review";
+function factorClasses(severity: InsightFactor["severity"]) {
+  if (severity === "high") return "bg-red-50 text-red-700 ring-red-200";
+  if (severity === "moderate") return "bg-amber-50 text-amber-700 ring-amber-200";
+  return "bg-slate-50 text-slate-600 ring-slate-200";
 }
 
-function channelIcon(channel: OperationalChannel) {
-  if (channel === "whatsapp") return MessageCircle;
-  if (channel === "app") return CheckCircle2;
-  return PhoneCall;
+function shortDate(value: string) {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(date);
 }
 
-function channelKey(channel: OperationalChannel) {
-  if (channel === "whatsapp") return "profile.channel.whatsApp";
-  if (channel === "app") return "profile.channel.app";
-  return "profile.channel.phone";
+function linePath(points: Array<[number, number]>) {
+  return points.map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+}
+
+function polygonPath(high: Array<[number, number]>, low: Array<[number, number]>) {
+  return [...high, ...low.slice().reverse()]
+    .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`)
+    .join(" ") + " Z";
+}
+
+function RiskTrajectory({ client }: { client: InsightClient }) {
+  const history = client.history.length ? client.history : [client.score];
+  const mid = client.forecast.mid.length ? client.forecast.mid : [client.score];
+  const low = client.forecast.low.length ? client.forecast.low : mid.map((value) => Math.max(0, value - 7));
+  const high = client.forecast.high.length ? client.forecast.high : mid.map((value) => Math.min(100, value + 7));
+  const width = 300;
+  const height = 106;
+  const padX = 10;
+  const padY = 12;
+  const values = [...history, ...mid, ...low, ...high];
+  const minValue = Math.max(0, Math.min(...values) - 8);
+  const maxValue = Math.min(100, Math.max(...values) + 8);
+  const span = Math.max(1, maxValue - minValue);
+  const totalPoints = history.length + mid.length;
+  const step = (width - padX * 2) / Math.max(1, totalPoints - 1);
+  const yFor = (value: number) => height - padY - ((value - minValue) / span) * (height - padY * 2);
+  const historyPoints = history.map((value, index) => [padX + index * step, yFor(value)] as [number, number]);
+  const forecastStart = history.length - 1;
+  const midPoints = [history[history.length - 1], ...mid].map(
+    (value, index) => [padX + (forecastStart + index) * step, yFor(value)] as [number, number],
+  );
+  const highPoints = [history[history.length - 1], ...high].map(
+    (value, index) => [padX + (forecastStart + index) * step, yFor(value)] as [number, number],
+  );
+  const lowPoints = [history[history.length - 1], ...low].map(
+    (value, index) => [padX + (forecastStart + index) * step, yFor(value)] as [number, number],
+  );
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-28 w-full overflow-visible" role="img" aria-label={`${client.name} risk trajectory`}>
+      <path d={polygonPath(highPoints, lowPoints)} className="fill-primary/10" />
+      <path d={linePath(historyPoints)} className="fill-none stroke-slate-400" strokeWidth="2.5" />
+      <path d={linePath(midPoints)} className="fill-none stroke-primary" strokeWidth="3" strokeLinecap="round" />
+      <line
+        x1={historyPoints[historyPoints.length - 1][0]}
+        x2={historyPoints[historyPoints.length - 1][0]}
+        y1={padY}
+        y2={height - padY}
+        className="stroke-slate-200"
+        strokeDasharray="4 4"
+      />
+      <circle
+        cx={historyPoints[historyPoints.length - 1][0]}
+        cy={historyPoints[historyPoints.length - 1][1]}
+        r="4"
+        className="fill-white stroke-primary"
+        strokeWidth="2.5"
+      />
+    </svg>
+  );
 }
 
 export default function RiskQueue() {
-  const [search, setSearch] = useState("");
-  const [cityFilter, setCityFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState<FilterKey>("all");
-  const [assignTarget, setAssignTarget] = useState<RiskQueueRow | null>(null);
-  const navigate = useNavigate();
-  const { data: gisData, isLoading } = useGISData();
-  const { t } = useLanguage();
+  const [days, setDays] = useState<(typeof horizonOptions)[number]>(7);
+  const [filter, setFilter] = useState<(typeof filterOptions)[number]["value"]>("all");
+  const queryClient = useQueryClient();
+  const insightsQuery = useQuery({
+    queryKey: ["insights", days, filter],
+    queryFn: () => fetchInsights(days, filter),
+    retry: false,
+  });
 
-  const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
-  const usingPreviewData = authBypassEnabled && apiUsers.length === 0;
-  const sourceUsers = usingPreviewData ? demoOperationalUsers : apiUsers;
-  const canAssignProviders = !authBypassEnabled && !usingPreviewData;
+  const applyMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/api/insights/suggestions/${id}/apply`, { method: "POST" }),
+    onSuccess: async () => {
+      toast({ title: "Suggestion applied" });
+      await queryClient.invalidateQueries({ queryKey: ["insights"] });
+    },
+    onError: (error) => {
+      toast({
+        title: "Could not apply suggestion",
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    },
+  });
 
-  const queueRows = useMemo(
-    () => deriveRiskQueueRows(sourceUsers),
-    [sourceUsers],
+  const dismissMutation = useMutation({
+    mutationFn: (id: string) => apiFetch(`/api/insights/suggestions/${id}/dismiss`, { method: "POST" }),
+    onSuccess: async () => {
+      toast({ title: "Suggestion dismissed" });
+      await queryClient.invalidateQueries({ queryKey: ["insights"] });
+    },
+  });
+
+  const data = insightsQuery.data;
+  const maxHours = useMemo(
+    () => Math.max(1, ...(data?.horizon ?? []).map((row) => Math.max(row.hoursNeeded, row.hoursAvailable))),
+    [data?.horizon],
   );
 
-  const cities = useMemo(() => {
-    const uniqueCities = new Set(queueRows.map((row) => row.city).filter(Boolean));
-    return Array.from(uniqueCities).sort();
-  }, [queueRows]);
-
-  const filteredRows = useMemo(() => {
-    const normalizedSearch = search.trim().toLowerCase();
-
-    return queueRows.filter((row) => {
-      if (cityFilter !== "all" && row.city !== cityFilter) return false;
-      if (statusFilter === "urgent" && row.status !== "urgent") return false;
-      if (statusFilter === "review" && row.status !== "review") return false;
-      if (statusFilter === "no-response" && !row.hasNoResponse) return false;
-      if (statusFilter === "medication" && !row.hasMedicationIssue) return false;
-      if (statusFilter === "checkins" && !row.hasCheckinIssue) return false;
-      if (statusFilter === "unassigned" && !row.isUnassigned) return false;
-
-      if (!normalizedSearch) return true;
-
-      return (
-        row.name.toLowerCase().includes(normalizedSearch) ||
-        row.city.toLowerCase().includes(normalizedSearch) ||
-        t(row.reasonKey).toLowerCase().includes(normalizedSearch) ||
-        (row.assignedTo ?? "").toLowerCase().includes(normalizedSearch)
-      );
-    });
-  }, [cityFilter, queueRows, search, statusFilter, t]);
-
-  const urgentCount = queueRows.filter((row) => row.status === "urgent").length;
-  const reviewCount = queueRows.filter((row) => row.status === "review").length;
-  const noResponseCount = queueRows.filter((row) => row.hasNoResponse).length;
-  const unassignedCount = queueRows.filter((row) => row.isUnassigned).length;
-  const medicationCount = queueRows.filter((row) => row.hasMedicationIssue).length;
-
-  const openPrimaryAction = (row: RiskQueueRow) => {
-    if (row.action === "call") {
-      navigate(`/risk-queue/${row.id}/prepare-call`);
-      return;
-    }
-
-    if (row.action === "assign") {
-      if (canAssignProviders) setAssignTarget(row);
-      else navigate(`/users/${row.id}`);
-      return;
-    }
-
-    navigate(`/users/${row.id}`);
-  };
-
-  if (isLoading) {
+  if (insightsQuery.isLoading) {
     return (
-      <div className="space-y-5">
-        <Skeleton className="h-10 w-72" />
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-          {Array.from({ length: 5 }).map((_, index) => (
-            <Skeleton key={index} className="h-28 rounded-2xl" />
-          ))}
+      <div className="mx-auto max-w-[1520px] space-y-5">
+        <Skeleton className="h-10 w-80" />
+        <div className="grid gap-4 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-28 rounded-lg" />)}
         </div>
-        <Skeleton className="h-[480px] rounded-2xl" />
+        <Skeleton className="h-[540px] rounded-lg" />
       </div>
+    );
+  }
+
+  if (insightsQuery.isError || !data) {
+    return (
+      <Card className="mx-auto max-w-2xl border-border bg-white">
+        <CardContent className="p-8 text-center">
+          <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+          <p className="text-base font-semibold text-foreground">Predictive insights are unavailable.</p>
+          <p className="mt-1 text-sm text-muted-foreground">The precomputed risk tables could not be read.</p>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -163,281 +399,295 @@ export default function RiskQueue() {
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="font-display text-2xl font-bold text-foreground">{t("riskQueue.title")}</h1>
-            {usingPreviewData && (
+            <h1 className="font-display text-2xl font-bold text-foreground">Predictive insights</h1>
+            {data.isPreview && (
               <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                {t("usersList.previewData")}
+                Preview data
               </Badge>
             )}
           </div>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{t("riskQueue.subtitle")}</p>
+          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+            Risk forecasting, operator capacity, and reassignment suggestions on the same horizon.
+          </p>
         </div>
-        <div className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-2 text-xs font-semibold text-muted-foreground shadow-sm">
-          <ShieldAlert className="h-4 w-4 text-primary" />
-          {filteredRows.length} {t("queue.cases")}
+        <div className="flex rounded-lg border border-border bg-white p-1 shadow-sm">
+          {horizonOptions.map((option) => (
+            <Button
+              key={option}
+              type="button"
+              size="sm"
+              variant={days === option ? "default" : "ghost"}
+              onClick={() => setDays(option)}
+              className="h-8 rounded-md px-3 text-xs font-semibold"
+            >
+              {option}d
+            </Button>
+          ))}
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <MetricCard accent="border-t-red-500" icon={AlertTriangle} label={t("riskQueue.metric.urgent")} value={urgentCount} />
-        <MetricCard accent="border-t-orange-500" icon={Clock} label={t("riskQueue.metric.review")} value={reviewCount} />
-        <MetricCard accent="border-t-primary" icon={PhoneCall} label={t("riskQueue.metric.noResponse")} value={noResponseCount} />
-        <MetricCard accent="border-t-amber-500" icon={MessageCircle} label={t("riskQueue.metric.medication")} value={medicationCount} />
-        <MetricCard accent="border-t-slate-300" icon={UserRound} label={t("riskQueue.metric.unassigned")} value={unassignedCount} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiCard icon={AlertTriangle} label="Escalations 7d" value={data.kpis.predictedEscalations7d} tone="red" />
+        <KpiCard icon={ArrowUpRight} label="Trending up" value={data.kpis.clientsTrendingUp} tone="orange" />
+        <KpiCard icon={Pill} label="Adherence risk" value={data.kpis.adherenceRiskFlags} tone="amber" />
+        <KpiCard icon={UsersRound} label="Over capacity" value={data.kpis.operatorsOverCapacity} tone="slate" />
       </div>
 
-      <Card className="overflow-hidden rounded-2xl border-border bg-white shadow-sm">
-        <CardContent className="p-0">
-          <div className="flex flex-col gap-3 border-b border-border bg-white p-4 xl:flex-row xl:items-center">
-            <div className="relative min-w-0 flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t("riskQueue.searchPlaceholder")}
-                className="h-10 rounded-xl border-border bg-muted/45 pl-9 text-sm"
-              />
-            </div>
-            <Select value={cityFilter} onValueChange={setCityFilter}>
-              <SelectTrigger className="h-10 w-full rounded-xl border-border bg-muted/45 xl:w-52">
-                <MapPin className="mr-2 h-4 w-4 text-muted-foreground" />
-                <SelectValue placeholder={t("usersList.allCities")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{t("usersList.allCities")}</SelectItem>
-                {cities.map((city) => (
-                  <SelectItem key={city} value={city}>
-                    {city}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+      <Card className="border-border bg-white shadow-sm">
+        <CardHeader className="flex-row items-center justify-between gap-4 p-5">
+          <div>
+            <CardTitle className="text-base font-bold">Forecast horizon</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">Daily predicted demand versus available operator hours.</p>
           </div>
-
-          <div className="flex gap-2 overflow-x-auto border-b border-border bg-muted/35 px-4 py-3">
-            {riskQueueFilterKeys.map((filter) => (
-              <Button
-                key={filter}
-                type="button"
-                variant={statusFilter === filter ? "default" : "outline"}
-                size="sm"
-                onClick={() => setStatusFilter(filter)}
-                className={cn(
-                  "h-9 shrink-0 rounded-full px-4 text-xs font-semibold",
-                  statusFilter !== filter && "border-border bg-white text-muted-foreground hover:bg-primary/10 hover:text-primary",
-                )}
-              >
-                {t(`usersList.filter.${filter}`)}
-              </Button>
-            ))}
-          </div>
-
-          {filteredRows.length === 0 ? (
-            <div className="px-4 py-16 text-center">
-              <ShieldAlert className="mx-auto mb-3 h-10 w-10 text-muted-foreground/60" />
-              <p className="text-base font-semibold text-foreground">
-                {queueRows.length === 0 ? t("riskQueue.noCasesYet") : t("riskQueue.noCasesMatch")}
-              </p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {queueRows.length === 0 ? t("riskQueue.dataWillAppear") : t("usersList.adjustFilters")}
-              </p>
-            </div>
+          <Clock3 className="h-5 w-5 text-primary" />
+        </CardHeader>
+        <CardContent className="px-5 pb-5">
+          {data.horizon.length === 0 ? (
+            <EmptyState label="No horizon forecast yet" />
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/40 hover:bg-muted/40">
-                    <TableHead className="min-w-[260px] text-xs font-bold uppercase tracking-[0.12em]">
-                      {t("queue.person")}
-                    </TableHead>
-                    <TableHead className="hidden min-w-[150px] text-xs font-bold uppercase tracking-[0.12em] 2xl:table-cell">
-                      {t("queue.status")}
-                    </TableHead>
-                    <TableHead className="min-w-[300px] text-xs font-bold uppercase tracking-[0.12em]">
-                      {t("queue.reason")}
-                    </TableHead>
-                    <TableHead className="min-w-[140px] text-xs font-bold uppercase tracking-[0.12em]">
-                      {t("queue.channel")}
-                    </TableHead>
-                    <TableHead className="hidden min-w-[150px] text-xs font-bold uppercase tracking-[0.12em] 2xl:table-cell">
-                      {t("queue.lastContact")}
-                    </TableHead>
-                    <TableHead className="hidden min-w-[170px] text-xs font-bold uppercase tracking-[0.12em] 2xl:table-cell">
-                      {t("careProviders.coverage")}
-                    </TableHead>
-                    <TableHead className="sticky right-0 z-10 min-w-[300px] bg-muted/40 text-right text-xs font-bold uppercase tracking-[0.12em] shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">
-                      {t("queue.action")}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredRows.map((row) => {
-                    const ChannelIcon = channelIcon(row.channel);
-                    const assignedLabel = row.assignedTo ?? t("usersList.unassigned");
-                    const lastContactLabel = t(row.lastContactKey);
-                    return (
-                      <TableRow
-                        key={row.id}
-                        className="cursor-pointer bg-white hover:bg-primary/5"
-                        onClick={() => navigate(`/users/${row.id}`)}
+            <div className="grid gap-3 md:grid-cols-7">
+              {data.horizon.map((row) => {
+                const pressure = row.hoursAvailable > 0 ? row.hoursNeeded / row.hoursAvailable : 0;
+                return (
+                  <div key={row.date} className="rounded-lg border border-border bg-muted/30 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{shortDate(row.date)}</p>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "rounded-full px-2 py-0.5 text-[10px] font-bold",
+                          pressure > 1 ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700",
+                        )}
                       >
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-white">
-                              {row.initials}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="font-semibold text-foreground">{row.name}</p>
-                              <div className="mt-1 flex items-center gap-2 2xl:hidden">
-                                <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold ring-1", statusClasses(row.status))}>
-                                  {t(`usersList.status.${row.status}`)}
-                                </span>
-                                <span className="text-xs font-semibold text-muted-foreground">{row.score}</span>
-                              </div>
-                              <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                                {row.age ? <span>{row.age} {t("profile.yearsShort")}</span> : null}
-                                {row.age && row.city ? <span>·</span> : null}
-                                {row.city ? <span>{row.city}</span> : null}
-                                {row.livingContextKey ? (
-                                  <>
-                                    <span>·</span>
-                                    <span>{t(row.livingContextKey)}</span>
-                                  </>
-                                ) : null}
-                                <span className="hidden sm:inline 2xl:hidden">·</span>
-                                <span className="hidden sm:inline 2xl:hidden">
-                                  {lastContactLabel}
-                                </span>
-                                <span className="hidden sm:inline 2xl:hidden">·</span>
-                                <span className="hidden sm:inline 2xl:hidden">
-                                  {t("careProviders.coverage")}: {assignedLabel}
-                                </span>
-                              </p>
-                            </div>
-                          </div>
-                        </TableCell>
-                        <TableCell className="hidden 2xl:table-cell">
-                          <div className="flex items-center gap-2">
-                            <span className={cn("rounded-full px-2.5 py-1 text-xs font-bold ring-1", statusClasses(row.status))}>
-                              {t(`usersList.status.${row.status}`)}
-                            </span>
-                            <span className="text-xs font-semibold text-muted-foreground">{row.score}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <p className="max-w-md text-sm font-medium text-foreground">{t(row.reasonKey)}</p>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <ChannelIcon className="h-4 w-4 text-primary" />
-                            {t(channelKey(row.channel))}
-                          </div>
-                        </TableCell>
-                        <TableCell className="hidden text-sm text-muted-foreground 2xl:table-cell">{lastContactLabel}</TableCell>
-                        <TableCell className="hidden 2xl:table-cell">
-                          {row.assignedTo ? (
-                            <div>
-                              <span className="text-sm font-semibold text-foreground">{row.assignedTo}</span>
-                              {row.careProviderCount > 1 && (
-                                <p className="mt-0.5 text-xs font-semibold text-muted-foreground">
-                                  {row.careProviderCount} {t("careProviders.linkedShort")}
-                                </p>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
-                              {t("usersList.unassigned")}
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="sticky right-0 z-10 bg-white text-right shadow-[-12px_0_18px_-18px_rgba(15,23,42,0.45)]">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              type="button"
-                              variant={row.action === "call" ? "default" : "outline"}
-                              size="sm"
-                              className={cn("h-9 rounded-full px-3 text-xs font-semibold", actionClasses(row.action))}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openPrimaryAction(row);
-                              }}
-                            >
-                              {t(actionLabelKey(row.action))}
-                              <ChevronRight className="ml-1 h-4 w-4" />
-                            </Button>
-                            {canAssignProviders && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="h-9 rounded-full border-primary/20 bg-primary/5 px-3 text-xs font-semibold text-primary hover:bg-primary/10 hover:text-primary"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  setAssignTarget(row);
-                                }}
-                              >
-                                {t("careProviders.assign")}
-                              </Button>
-                            )}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-9 rounded-full border-border bg-white px-3 text-xs font-semibold text-muted-foreground hover:bg-primary/10 hover:text-primary"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                navigate(`/users/${row.id}`);
-                              }}
-                            >
-                              {t("riskQueue.action.profile")}
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
+                        {pressure > 1 ? "gap" : "ok"}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 flex h-24 items-end gap-2">
+                      <div className="w-full rounded-t bg-red-500" style={{ height: `${Math.max(8, (row.urgent / 8) * 100)}%` }} />
+                      <div className="w-full rounded-t bg-orange-400" style={{ height: `${Math.max(8, (row.review / 12) * 100)}%` }} />
+                      <div className="w-full rounded-t bg-amber-400" style={{ height: `${Math.max(8, (row.medication / 8) * 100)}%` }} />
+                      <div className="w-full rounded-t bg-primary" style={{ height: `${Math.max(8, (row.noResponse / 8) * 100)}%` }} />
+                    </div>
+                    <div className="mt-3 space-y-1 text-xs font-medium text-muted-foreground">
+                      <div className="flex justify-between"><span>Needed</span><span>{row.hoursNeeded.toFixed(1)}h</span></div>
+                      <Progress value={(row.hoursNeeded / maxHours) * 100} className="h-1.5 bg-slate-100" />
+                      <div className="flex justify-between"><span>Available</span><span>{row.hoursAvailable.toFixed(1)}h</span></div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>
       </Card>
-      {assignTarget && (
-        <AssignCareProviderDialog
-          open={Boolean(assignTarget)}
-          onOpenChange={(open) => {
-            if (!open) setAssignTarget(null);
-          }}
-          userId={assignTarget.id}
-          userName={assignTarget.name}
-        />
-      )}
+
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(360px,0.55fr)]">
+        <Card className="border-border bg-white shadow-sm">
+          <CardHeader className="gap-4 p-5">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <CardTitle className="text-base font-bold">Client trajectories</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">Composite score history with 30-day uncertainty cones.</p>
+              </div>
+              <div className="flex max-w-full gap-2 overflow-x-auto">
+                {filterOptions.map((option) => (
+                  <Button
+                    key={option.value}
+                    type="button"
+                    size="sm"
+                    variant={filter === option.value ? "default" : "outline"}
+                    onClick={() => setFilter(option.value)}
+                    className={cn(
+                      "h-8 shrink-0 rounded-full px-3 text-xs font-semibold",
+                      filter !== option.value && "border-border bg-white text-muted-foreground",
+                    )}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3 px-5 pb-5">
+            {data.clients.length === 0 ? (
+              <EmptyState label="No clients match this forecast filter" />
+            ) : (
+              data.clients.map((client) => <ClientTrajectoryCard key={client.id} client={client} />)
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="space-y-5">
+          <Card className="border-border bg-white shadow-sm">
+            <CardHeader className="flex-row items-center justify-between gap-4 p-5">
+              <div>
+                <CardTitle className="text-base font-bold">Operator capacity</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">Current caseload against recommended load.</p>
+              </div>
+              <UserRoundCheck className="h-5 w-5 text-primary" />
+            </CardHeader>
+            <CardContent className="space-y-4 px-5 pb-5">
+              {data.operators.length === 0 ? (
+                <EmptyState label="No capacity rows yet" />
+              ) : (
+                data.operators.map((operator) => <OperatorRow key={operator.id} operator={operator} />)
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-white shadow-sm">
+            <CardHeader className="flex-row items-center justify-between gap-4 p-5">
+              <div>
+                <CardTitle className="text-base font-bold">Reassignment suggestions</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">Pending moves generated by the nightly run.</p>
+              </div>
+              <BrainCircuit className="h-5 w-5 text-primary" />
+            </CardHeader>
+            <CardContent className="space-y-3 px-5 pb-5">
+              {data.suggestions.length === 0 ? (
+                <EmptyState label="No pending suggestions" />
+              ) : (
+                data.suggestions.map((suggestion) => (
+                  <div key={suggestion.id} className="rounded-lg border border-border bg-muted/25 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-bold text-foreground">{suggestion.from} to {suggestion.to}</p>
+                        <p className="mt-1 text-xs font-semibold text-muted-foreground">{suggestion.clientCount} client{suggestion.clientCount === 1 ? "" : "s"}</p>
+                      </div>
+                      <Badge className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+                        {suggestion.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-3 text-sm leading-6 text-muted-foreground">{suggestion.reason}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={data.isPreview || applyMutation.isPending}
+                        onClick={() => applyMutation.mutate(suggestion.id)}
+                        className="h-8 rounded-full px-3 text-xs font-semibold"
+                      >
+                        {applyMutation.isPending ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="mr-1 h-3.5 w-3.5" />}
+                        Apply
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={data.isPreview || dismissMutation.isPending}
+                        onClick={() => dismissMutation.mutate(suggestion.id)}
+                        className="h-8 rounded-full border-border bg-white px-3 text-xs font-semibold text-muted-foreground"
+                      >
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
 
-function MetricCard({
-  accent,
-  icon: Icon,
-  label,
-  value,
-}: {
-  accent: string;
-  icon: LucideIcon;
-  label: string;
-  value: number | string;
-}) {
+function KpiCard({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: number; tone: "red" | "orange" | "amber" | "slate" }) {
+  const toneClass = {
+    red: "bg-red-50 text-red-700",
+    orange: "bg-orange-50 text-orange-700",
+    amber: "bg-amber-50 text-amber-700",
+    slate: "bg-slate-100 text-slate-700",
+  }[tone];
+
   return (
-    <Card className={cn("rounded-2xl border-border bg-white shadow-sm", "border-t-4", accent)}>
+    <Card className="border-border bg-white shadow-sm">
       <CardContent className="flex h-28 items-center justify-between p-5">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
           <p className="mt-2 text-3xl font-bold tracking-tight text-foreground">{value}</p>
         </div>
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <div className={cn("flex h-11 w-11 items-center justify-center rounded-lg", toneClass)}>
           <Icon className="h-5 w-5" />
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ClientTrajectoryCard({ client }: { client: InsightClient }) {
+  const DeltaIcon = client.delta >= 0 ? ArrowUpRight : ArrowDownRight;
+  return (
+    <div className="grid gap-4 rounded-lg border border-border bg-white p-4 lg:grid-cols-[minmax(180px,0.65fr)_minmax(240px,1fr)] 2xl:grid-cols-[minmax(230px,0.72fr)_minmax(280px,1fr)_minmax(210px,0.52fr)]">
+      <div className="min-w-0">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="truncate text-base font-bold text-foreground">{client.name}</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {[client.age ? `${client.age}y` : null, client.zone, client.operator || "Unassigned"].filter(Boolean).join(" / ")}
+            </p>
+          </div>
+          <Badge className={cn("shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ring-1", bandClasses(client.band))}>
+            {client.band}
+          </Badge>
+        </div>
+        <div className="mt-4 flex items-end gap-3">
+          <p className="text-4xl font-bold tracking-tight text-foreground">{Math.round(client.score)}</p>
+          <div className={cn("mb-1 flex items-center gap-1 text-sm font-bold", client.delta >= 0 ? "text-red-600" : "text-emerald-600")}>
+            <DeltaIcon className="h-4 w-4" />
+            {Math.abs(client.delta).toFixed(1)}
+          </div>
+        </div>
+      </div>
+
+      <RiskTrajectory client={client} />
+
+      <div className="min-w-0 lg:col-span-2 2xl:col-span-1">
+        <p className="text-sm font-semibold text-foreground">{client.window}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {client.factors.slice(0, 4).map((factor) => (
+            <span key={`${client.id}-${factor.label}`} className={cn("rounded-full px-2.5 py-1 text-xs font-bold ring-1", factorClasses(factor.severity))}>
+              {factor.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OperatorRow({ operator }: { operator: OperatorCapacity }) {
+  const target = Math.max(1, operator.recommended || Math.round(operator.capacity / 3));
+  const percent = Math.min(100, (operator.current / target) * 100);
+  const overloaded = operator.current > target;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-foreground">{operator.name}</p>
+          <p className="text-xs font-medium text-muted-foreground">{operator.capacity.toFixed(0)}h capacity</p>
+        </div>
+        <Badge
+          variant="outline"
+          className={cn(
+            "rounded-full px-2.5 py-1 text-xs font-bold",
+            overloaded ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700",
+          )}
+        >
+          {operator.current}/{target}
+        </Badge>
+      </div>
+      <Progress value={percent} className={cn("h-2 bg-slate-100", overloaded && "[&>div]:bg-red-500")} />
+    </div>
+  );
+}
+
+function EmptyState({ label }: { label: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-muted/20 px-4 py-10 text-center">
+      <LineChart className="mx-auto mb-3 h-8 w-8 text-muted-foreground/60" />
+      <p className="text-sm font-semibold text-muted-foreground">{label}</p>
+    </div>
   );
 }
