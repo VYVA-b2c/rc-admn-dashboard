@@ -229,8 +229,26 @@ function formatFrequencyLabel(call: ScheduledCallRow, t: (key: string) => string
   return t("checkin.everyDays").replace("{count}", String(call.frequency_days));
 }
 
+function scheduledTodayAt(value?: string | null) {
+  if (!value) return null;
+  const [hour, minute] = value.split(":").map((part) => Number(part));
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
+
+function fallbackOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
+  const scheduledAt = scheduledTodayAt(call.preferred_time);
+  if (!scheduledAt) return t("checkin.outcomeNoHistory");
+  if (!call.is_active || isPaused(call)) return t("checkin.outcomeNoHistory");
+  return scheduledAt.getTime() <= Date.now()
+    ? t("checkin.outcomeMissedToday")
+    : t("checkin.outcomeScheduledToday");
+}
+
 function lastOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
-  if (!call.lastOutcome) return t("checkin.outcomeUnknown");
+  if (!call.lastOutcome) return fallbackOutcomeLabel(call, t);
   const key = `checkin.outcome.${call.lastOutcome}`;
   const translated = t(key);
   return translated !== key ? translated : call.lastOutcome;
@@ -241,6 +259,14 @@ function lastOutcomeTime(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function lastOutcomeTimeForCall(call: ScheduledCallRow) {
+  const actual = lastOutcomeTime(call.lastOutcomeAt);
+  if (actual) return actual;
+  const scheduledAt = scheduledTodayAt(call.preferred_time);
+  if (!scheduledAt || call.lastOutcome) return null;
+  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
 }
 
 function formatPreferredTime(value?: string | null) {
@@ -628,8 +654,8 @@ export default function CheckInMonitoring() {
                     <TableCell>
                       <div className="space-y-0.5">
                         <p>{lastOutcomeLabel(c, t)}</p>
-                        {lastOutcomeTime(c.lastOutcomeAt) && (
-                          <p className="text-xs text-muted-foreground">{lastOutcomeTime(c.lastOutcomeAt)}</p>
+                        {lastOutcomeTimeForCall(c) && (
+                          <p className="text-xs text-muted-foreground">{lastOutcomeTimeForCall(c)}</p>
                         )}
                       </div>
                     </TableCell>
