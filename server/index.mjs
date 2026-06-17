@@ -1604,12 +1604,12 @@ async function loadUserContext(user) {
       .map((row) => row.role === "admin" ? "admin" : "operator")
       .filter(Boolean),
   ));
-  const hasConsoleAccess = isPlatformAdmin || roles.length > 0;
+  const hasConsoleAccess = isPlatformAdmin || roles.includes("admin");
   if (!hasConsoleAccess) {
     throw httpError(403, "No console access has been granted for this email");
   }
 
-  const primaryRole = isPlatformAdmin || roles.includes("admin") ? "admin" : roles[0] || "operator";
+  const primaryRole = "admin";
   const roleOrg = rolesResult.rows.find((row) => row.organization_id)?.organization_id;
   let organization = profile?.org_id
     ? {
