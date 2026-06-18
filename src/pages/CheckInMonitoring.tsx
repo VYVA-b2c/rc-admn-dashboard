@@ -40,6 +40,7 @@ import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
+import { cn } from "@/lib/utils";
 import type { ScheduledCall, ScheduledCallPayload, ScheduledCallUser } from "@/types/scheduledCalls";
 
 type FilterTab = "all" | "active" | "inactive";
@@ -380,7 +381,7 @@ export default function CheckInMonitoring() {
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
   const { data: currentUserContext } = useCurrentUserContext();
-  const organizationTimezone = currentUserContext?.user.organization?.timezone ?? "Europe/Berlin";
+  const organizationTimezone = currentUserContext?.user?.organization?.timezone ?? "Europe/Berlin";
 
   const {
     data: checkinsData,
