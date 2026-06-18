@@ -2791,6 +2791,18 @@ async function reconcilePendingTeamMemberByEmail(userId, email) {
   }
 }
 
+function consoleTeamUserIdForEmail(email) {
+  return `console:${normalizedEmail(email)}`;
+}
+
+async function activatePendingConsoleTeamMember(email) {
+  const normalized = normalizedEmail(email);
+  if (!normalized) return null;
+  const consoleId = consoleTeamUserIdForEmail(normalized);
+  await reconcilePendingTeamMemberByEmail(consoleId, normalized);
+  return consoleId;
+}
+
 async function loadUserContext(user) {
   const authEmail = String(user.email || "").toLowerCase();
   if (authEmail) await reconcilePendingTeamMemberByEmail(user.id, authEmail);
@@ -3008,6 +3020,7 @@ async function consoleLoginAccess(email) {
       LEFT JOIN public.organizations role_org ON role_org.id = r.organization_id
       WHERE LOWER(p.email) = LOWER($1)
       GROUP BY p.user_id, p.is_platform_admin
+      ORDER BY CASE WHEN p.user_id LIKE 'pending:%' THEN 1 ELSE 0 END
       LIMIT 1
     `,
     [normalized],
@@ -3028,7 +3041,10 @@ async function loadConsoleContextByEmail(email) {
   if (!access.allowed) throw httpError(403, "No console access has been granted for this email");
 
   if (access.userId) {
-    return loadUserContext({ id: access.userId, email: normalized });
+    const userId = String(access.userId || "").startsWith("pending:")
+      ? await activatePendingConsoleTeamMember(normalized)
+      : access.userId;
+    return loadUserContext({ id: userId, email: normalized });
   }
 
   if (access.isPlatformAdmin) {
