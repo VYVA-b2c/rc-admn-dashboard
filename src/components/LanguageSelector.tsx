@@ -11,10 +11,12 @@ export function LanguageSelector() {
   const { language, setLanguage } = useLanguage();
 
   return (
-    <div className="flex items-center rounded-full border border-border bg-white p-0.5 text-[11px] shadow-sm">
+    <div className="flex w-fit items-center rounded-full border border-border bg-white p-0.5 text-[11px] shadow-sm">
       {languages.map((item) => (
         <button
           key={item.value}
+          type="button"
+          aria-pressed={language === item.value}
           onClick={() => setLanguage(item.value)}
           className={`rounded-full px-2.5 py-1 font-semibold transition-colors ${
             language === item.value

@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { email, password, role } = await req.json();
+    const { email, password, role, organization_id, invite_metadata } = await req.json();
     if (!email || !password) {
       return new Response(JSON.stringify({ error: "Email and password are required" }), {
         status: 400,
@@ -49,28 +49,43 @@ Deno.serve(async (req) => {
     }
 
     const assignedRole = role || "admin";
+    if (!["admin", "operator"].includes(assignedRole)) {
+      return new Response(JSON.stringify({ error: "Role must be admin or operator" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const { data, error } = await supabase.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { role: assignedRole },
+      user_metadata: {
+        invited_role: assignedRole,
+        organization_id: organization_id || null,
+        ...(invite_metadata && typeof invite_metadata === "object" ? invite_metadata : {}),
+      },
     });
     if (error) throw error;
 
     if (data.user) {
       await supabase.from("user_roles").insert({
         user_id: data.user.id,
+        organization_id: organization_id || null,
         role: assignedRole,
       });
     }
 
-    return new Response(JSON.stringify({ success: true, email }), {
+    return new Response(JSON.stringify({
+      success: true,
+      user_id: data.user?.id,
+      role: assignedRole,
+    }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Create user error:", error);
+    console.error("Create team user error");
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

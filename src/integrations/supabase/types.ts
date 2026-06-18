@@ -515,9 +515,11 @@ export type Database = {
         Row: {
           created_at: string
           dosage: string | null
+          frequency: string | null
           id: string
           medication_name: string
           purpose: string | null
+          reminders_enabled: boolean
           schedule_times: string[] | null
           updated_at: string
           vyva_user_id: string
@@ -525,9 +527,11 @@ export type Database = {
         Insert: {
           created_at?: string
           dosage?: string | null
+          frequency?: string | null
           id?: string
           medication_name: string
           purpose?: string | null
+          reminders_enabled?: boolean
           schedule_times?: string[] | null
           updated_at?: string
           vyva_user_id: string
@@ -535,9 +539,11 @@ export type Database = {
         Update: {
           created_at?: string
           dosage?: string | null
+          frequency?: string | null
           id?: string
           medication_name?: string
           purpose?: string | null
+          reminders_enabled?: boolean
           schedule_times?: string[] | null
           updated_at?: string
           vyva_user_id?: string
@@ -695,7 +701,7 @@ export type Database = {
       is_admin_user: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
-      app_role: "admin" | "operator" | "coordinator"
+      app_role: "admin" | "operator"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -823,7 +829,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["admin", "operator", "coordinator"],
+      app_role: ["admin", "operator"],
     },
   },
 } as const

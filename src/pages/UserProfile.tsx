@@ -1,130 +1,356 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowLeft,
+  Brain,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  FileText,
+  HeartPulse,
+  MessageCircle,
+  Pencil,
+  Phone,
+  PhoneCall,
+  Pill,
+  Plus,
+  ShieldCheck,
+  Trash2,
+  UserRound,
+  Users,
+  Wifi,
+  WifiOff,
+  type LucideIcon,
+} from "lucide-react";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Progress } from "@/components/ui/progress";
-import {
-  ArrowLeft, User, MapPin, ShieldCheck, HeartPulse, Pill, PhoneCall, Brain, Users, Activity, Clock,
-  Calendar, Globe, Phone, AlertTriangle, Battery, Wifi, WifiOff, Zap, Pencil, Plus, Trash2,
-} from "lucide-react";
-import {
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  LineChart, Line, PieChart, Pie, Cell, Legend,
-} from "recharts";
+import { Textarea } from "@/components/ui/textarea";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { useAdminRole } from "@/hooks/useAdminRole";
 import { toast } from "@/hooks/use-toast";
-import { EditUserDialog } from "@/components/user/EditUserDialog";
-import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
+import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
-import { EditServiceDialog } from "@/components/user/EditServiceDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
+import { EditHealthPlanDialog } from "@/components/user/EditHealthPlanDialog";
+import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
 import { EditSensorDialog } from "@/components/user/EditSensorDialog";
-import { BASE_URL } from "@/lib/apiClient";
+import { EditServiceDialog } from "@/components/user/EditServiceDialog";
+import { EditUserDialog } from "@/components/user/EditUserDialog";
+import { apiFetch } from "@/lib/apiClient";
+import { authBypassEnabled } from "@/lib/authMode";
+import {
+  getDemoProfileById,
+  isDemoUserId,
+  type OperationalChannel,
+  type OperationalAlert,
+  type OperationalCaregiver,
+  type OperationalCareProviderAssignment,
+  type OperationalMedication,
+  type OperationalProfileContext,
+  type OperationalProfileResponse,
+  type OperationalSensor,
+  type OperationalStatus,
+} from "@/lib/operationalDemoData";
+import { providerCoverageLabel, providerTypeKey } from "@/lib/careProviders";
+import { cn } from "@/lib/utils";
 
-function InfoRow({ label, value, icon }: { label: string; value: string | null | undefined; icon?: React.ReactNode }) {
-  return (
-    <div className="flex justify-between items-center py-2.5 border-b border-border/50 last:border-0">
-      <span className="flex items-center gap-2 text-sm text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="text-sm font-medium text-foreground">{value || "—"}</span>
-    </div>
+function interpolate(template: string, values: Record<string, string | number | undefined>) {
+  return Object.entries(values).reduce(
+    (value, [key, replacement]) => value.replaceAll(`{${key}}`, String(replacement ?? "")),
+    template,
   );
 }
 
-function SensorTypeLabel({ type }: { type: string }) {
-  const labels: Record<string, string> = {
-    heart_rate: "Heart Rate",
-    blood_pressure: "Blood Pressure",
-    fall_detector: "Fall Detector",
-    activity_monitor: "Activity Monitor",
-  };
-  return <>{labels[type] || type}</>;
+function getAge(dateOfBirth?: string | null) {
+  if (!dateOfBirth) return undefined;
+  const birth = new Date(dateOfBirth);
+  if (Number.isNaN(birth.getTime())) return undefined;
+  return Math.floor((Date.now() - birth.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
 }
 
-const CHART_COLORS = [
-  "hsl(252 85% 60%)",
-  "hsl(190 80% 50%)",
-  "hsl(45 100% 50%)",
-  "hsl(340 82% 62%)",
-  "hsl(155 70% 45%)",
-  "hsl(0 84% 60%)",
-];
+function getInitials(firstName?: string | null, lastName?: string | null) {
+  return `${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase() || "VP";
+}
+
+function safeArray<T>(value: T[] | undefined | null): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function providerFromCaregiver(caregiver: OperationalCaregiver): OperationalCareProviderAssignment {
+  return {
+    id: caregiver.assignment_id || caregiver.id,
+    assignment_id: caregiver.assignment_id || caregiver.id,
+    provider_type: "caregiver",
+    provider_id: caregiver.care_provider_contact_id || caregiver.id,
+    display_name: caregiver.caretaker_name,
+    phone: caregiver.caretaker_phone,
+    is_primary: caregiver.is_primary,
+    relationship_label: caregiver.relationship_label,
+    notes: caregiver.notes,
+    active: true,
+    created_at: caregiver.created_at,
+  };
+}
+
+function profileStatusClasses(status: OperationalStatus) {
+  switch (status) {
+    case "urgent":
+      return "bg-red-50 text-red-700 ring-red-200";
+    case "review":
+      return "bg-orange-50 text-orange-700 ring-orange-200";
+    case "stable":
+      return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+  }
+}
+
+function channelIcon(channel: OperationalChannel) {
+  if (channel === "whatsapp") return MessageCircle;
+  if (channel === "app") return CheckCircle2;
+  return PhoneCall;
+}
+
+function inferHealthPlanSignalStrength(signal?: { label?: string | null; detail?: string | null; strength?: string | null }) {
+  const normalizedStrength = String(signal?.strength || "").trim().toLowerCase();
+  if (["high", "medium", "low"].includes(normalizedStrength)) return normalizedStrength as "high" | "medium" | "low";
+  const text = `${signal?.label || ""} ${signal?.detail || ""}`.toLowerCase();
+  if (/(high|critical|urgent|active alert|offline|unconfirmed|missed|limited)/.test(text)) return "high";
+  if (/(forecast|enabled|profile context|medication|sensor)/.test(text)) return "medium";
+  return "low";
+}
+
+function healthPlanSignalBadgeClasses(strength?: "high" | "medium" | "low" | null) {
+  if (strength === "high") return "border-red-200 bg-red-50 text-red-700";
+  if (strength === "medium") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function channelKey(channel: OperationalChannel) {
+  if (channel === "whatsapp") return "profile.channel.whatsApp";
+  if (channel === "app") return "profile.channel.app";
+  return "profile.channel.phone";
+}
+
+function sensorTypeKey(type?: string | null) {
+  switch (type) {
+    case "heart_rate":
+      return "profile.sensor.heartRate";
+    case "blood_pressure":
+      return "profile.sensor.bloodPressure";
+    case "fall_detector":
+      return "profile.sensor.fallDetector";
+    case "activity_monitor":
+      return "profile.sensor.activityMonitor";
+    default:
+      return "profile.sensor.device";
+  }
+}
+
+function recordString(record: Record<string, unknown> | undefined | null, keys: string[]) {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return null;
+}
+
+function recordDate(record: Record<string, unknown> | undefined | null, keys: string[]) {
+  const value = recordString(record, keys);
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : value;
+}
+
+function isServicePaused(service: Record<string, unknown> | undefined | null) {
+  if (!service) return false;
+  if (service.is_paused === true) return true;
+  const pausedUntil = recordString(service, ["paused_until", "pausedUntil"]);
+  return Boolean(pausedUntil && new Date(pausedUntil).getTime() > Date.now());
+}
+
+function livingContextKey(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "alone") return "usersList.livingAlone";
+  if (normalized === "partner") return "usersList.livingWithPartner";
+  if (normalized === "family") return "usersList.livingWithFamily";
+  return null;
+}
+
+async function fetchUserProfile(id: string): Promise<OperationalProfileResponse> {
+  if (isDemoUserId(id)) return getDemoProfileById(id);
+
+  const orgName = encodeURIComponent("Red Cross");
+
+  try {
+    const response = await apiFetch<OperationalProfileResponse>(
+      `/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(id)}&organization_name=${orgName}`,
+    );
+
+    if (authBypassEnabled && !response?.user) return getDemoProfileById(id);
+    return response;
+  } catch (error) {
+    if (authBypassEnabled) return getDemoProfileById(id);
+    throw error;
+  }
+}
 
 export default function UserProfile() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
+  const { isAdmin } = useAdminRole();
+  const copy = (key: string, values: Record<string, string | number | undefined> = {}) => interpolate(t(key), values);
 
-  // Dialog states
   const [editUserOpen, setEditUserOpen] = useState(false);
   const [editHealthOpen, setEditHealthOpen] = useState(false);
   const [editMedOpen, setEditMedOpen] = useState(false);
-  const [editMedTarget, setEditMedTarget] = useState<any>(null);
+  const [editMedTarget, setEditMedTarget] = useState<OperationalMedication | null>(null);
   const [editCaregiverOpen, setEditCaregiverOpen] = useState(false);
-  const [editCaregiverTarget, setEditCaregiverTarget] = useState<any>(null);
+  const [editCaregiverTarget, setEditCaregiverTarget] = useState<OperationalCaregiver | null>(null);
+  const [assignProviderOpen, setAssignProviderOpen] = useState(false);
   const [editCheckinOpen, setEditCheckinOpen] = useState(false);
   const [editBrainOpen, setEditBrainOpen] = useState(false);
   const [editSensorOpen, setEditSensorOpen] = useState(false);
-  const [editSensorTarget, setEditSensorTarget] = useState<any>(null);
+  const [editSensorTarget, setEditSensorTarget] = useState<OperationalSensor | null>(null);
+  const [editHealthPlanOpen, setEditHealthPlanOpen] = useState(false);
+  const [addNoteOpen, setAddNoteOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNote, setSavingNote] = useState(false);
+  const [generatingHealthPlan, setGeneratingHealthPlan] = useState(false);
+  const [healthPlanError, setHealthPlanError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
-    queryFn: async () => {
-      const orgName = encodeURIComponent("Red Cross"); // safely encode spaces
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/user-info?user_id=${id}&organization_name=${orgName}`);
-
-      if (!res.ok) {
-        throw new Error("Failed to fetch user profile");
-      }
-
-      return res.json();
-    },
-    enabled: !!id,
+    queryFn: () => fetchUserProfile(id!),
+    enabled: Boolean(id),
+    retry: false,
   });
+
+  const handleOperationalAction = (descriptionKey: string) => {
+    toast({
+      title: t("profile.actionQueued"),
+      description: t(descriptionKey),
+    });
+  };
+
   const handleDeleteMedication = async (medId: string) => {
+    if (data?.isPreviewDemo) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/medications/${medId}`, {
+      await apiFetch(`/api/v1/user-dashboard/medications/${medId}`, {
         method: "DELETE",
       });
 
-      if (!res.ok) throw new Error("Failed");
-
-      toast({ title: "Medication deleted" });
-
+      toast({ title: t("profile.medicationDeleted") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
-    } catch (err) {
-      toast({ title: "Error deleting", variant: "destructive" });
+    } catch (error) {
+      toast({ title: t("profile.deleteFailed"), variant: "destructive" });
     }
   };
 
-  const handleDeleteCaregiver = async (caregiverId: string) => {
+  const handleUnassignCareProvider = async (assignmentId: string) => {
+    if (data?.isPreviewDemo) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/caregivers/${caregiverId}`, {
+      await apiFetch(`/api/v1/user-dashboard/care-provider-assignments/${assignmentId}`, {
         method: "DELETE",
       });
 
-      if (!res.ok) throw new Error("Failed");
-
-      toast({ title: "Caregiver removed" });
-
+      toast({ title: t("careProviders.unassigned") });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
-    } catch (err) {
-      toast({ title: "Error deleting", variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["gis-data"] });
+      queryClient.invalidateQueries({ queryKey: ["care-providers"] });
+    } catch (error) {
+      toast({ title: t("profile.deleteFailed"), variant: "destructive" });
+    }
+  };
+
+  const handleGenerateHealthPlan = async (regenerate = false) => {
+    if (!id || !data?.user) return;
+    if (data.isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+    if (regenerate && !window.confirm(t("profile.healthPlanRegenerateConfirm"))) return;
+
+    setGeneratingHealthPlan(true);
+    setHealthPlanError(null);
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan/generate`, {
+        method: "POST",
+      });
+      toast({ title: regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("profile.healthPlanGenerationFailed");
+      setHealthPlanError(message);
+      toast({
+        title: t("profile.healthPlanGenerationFailed"),
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setGeneratingHealthPlan(false);
+    }
+  };
+
+  const handleMarkHealthPlanReviewed = async () => {
+    if (!id || !data?.user || !healthPlan) return;
+    if (data.isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan`, {
+        method: "PUT",
+        body: JSON.stringify({
+          language: healthPlan.language || user.language,
+          review_status: "reviewed",
+          summary_text: healthPlan.summary_text,
+          goals_json: healthPlan.goals_json || [],
+          daily_support_json: healthPlan.daily_support_json || [],
+          monitoring_json: healthPlan.monitoring_json || [],
+          escalation_json: healthPlan.escalation_json || [],
+          caregiver_guidance_json: healthPlan.caregiver_guidance_json || [],
+        }),
+      });
+      toast({ title: t("profile.healthPlanMarkedReviewed") });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    } catch (error) {
+      toast({
+        title: t("profile.healthPlanMarkReviewedFailed"),
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 
   if (isLoading) {
     return (
-      <div className="space-y-6">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-40 rounded-xl" />
-        <div className="grid gap-4 md:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-48 rounded-xl" />)}
+      <div className="space-y-5">
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-72 rounded-2xl" />
+        <div className="grid gap-5 lg:grid-cols-[320px_1fr]">
+          <Skeleton className="h-80 rounded-2xl" />
+          <Skeleton className="h-80 rounded-2xl" />
         </div>
       </div>
     );
@@ -132,681 +358,1424 @@ export default function UserProfile() {
 
   if (!data?.user) {
     return (
-      <div className="text-center py-12">
-        <p className="text-muted-foreground">User not found.</p>
-        <Button variant="link" onClick={() => navigate("/users")}>Back to Users</Button>
+      <div className="rounded-2xl border border-border bg-white px-6 py-16 text-center shadow-sm">
+        <UserRound className="mx-auto mb-3 h-10 w-10 text-muted-foreground/60" />
+        <p className="font-semibold text-foreground">{t("profile.notFound")}</p>
+        <Button variant="link" onClick={() => navigate("/users")}>
+          {t("profile.backToPeople")}
+        </Button>
       </div>
     );
   }
 
-  const { user, consent, health, medications, checkins, brainCoach, caregivers, sensors, alerts, readings } = data;
-
-  // Compute health score (simple heuristic)
-  const activeAlerts = alerts.filter((a: any) => !a.resolved_at);
-  const criticalAlerts = activeAlerts.filter((a: any) => a.severity === "critical").length;
-  const warningAlerts = activeAlerts.filter((a: any) => a.severity === "warning").length;
-  const conditionsCount = health?.health_conditions?.length || 0;
-
-  let healthScore = 100;
-  healthScore -= criticalAlerts * 20;
-  healthScore -= warningAlerts * 10;
-  healthScore -= conditionsCount * 5;
-  healthScore -= (health?.mobility_needs?.length || 0) * 5;
-  healthScore = Math.max(0, Math.min(100, healthScore));
-
-  const healthScoreColor = healthScore >= 80 ? "text-vyva-green" : healthScore >= 50 ? "text-accent" : "text-destructive";
-  const healthScoreLabel = healthScore >= 80 ? "Good" : healthScore >= 50 ? "Moderate" : "At Risk";
-
-  // Compute age
-  const age = user.date_of_birth
-    ? Math.floor((Date.now() - new Date(user.date_of_birth).getTime()) / (365.25 * 24 * 60 * 60 * 1000))
-    : null;
-
-  // Alerts by severity for pie chart
-  const alertSeverityData = [
-    { name: "Critical", value: alerts.filter((a: any) => a.severity === "critical").length, fill: "hsl(0 84% 60%)" },
-    { name: "Warning", value: alerts.filter((a: any) => a.severity === "warning").length, fill: "hsl(45 100% 50%)" },
-    { name: "Info", value: alerts.filter((a: any) => a.severity === "info").length, fill: "hsl(190 80% 50%)" },
-  ].filter(d => d.value > 0);
-
-  // Alerts trend for this user (last 7 days)
-  const alertsTrend = (() => {
-    const days: Record<string, { date: string; count: number }> = {};
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().split("T")[0];
-      days[key] = { date: d.toLocaleDateString("en", { weekday: "short" }), count: 0 };
+  const { user } = data;
+  const health = data.health ?? null;
+  const medications = safeArray(data.medications);
+  const caregivers = safeArray(data.caregivers);
+  const careProviders = safeArray(data.careProviders).length
+    ? safeArray(data.careProviders)
+    : caregivers.map(providerFromCaregiver);
+  const emergencyContacts = careProviders.filter((provider) => provider.provider_type === "caregiver");
+  const redCrossStaffProviders = careProviders.filter((provider) => provider.provider_type === "field_staff");
+  const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
+  const primaryProfessional = careProviders.find((provider) => provider.provider_type === "field_staff" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "field_staff") ?? null;
+  const additionalEmergencyContacts = emergencyContacts.filter((provider) => provider.id !== primaryCaregiver?.id);
+  const sensors = safeArray(data.sensors);
+  const alerts = safeArray(data.alerts);
+  const checkins = data.checkins ?? null;
+  const brainCoach = data.brainCoach ?? null;
+  const medicationActivity = data.medicationActivity ?? null;
+  const healthPlan = data.healthPlan ?? null;
+  const isPreviewDemo = Boolean(data.isPreviewDemo);
+  const openAddNoteDialog = () => {
+    setNoteDraft("");
+    setAddNoteOpen(true);
+  };
+  const handleSaveProfileNote = async () => {
+    const note = noteDraft.trim();
+    if (!note) {
+      toast({ title: t("profile.noteRequired"), variant: "destructive" });
+      return;
     }
-    alerts.forEach((a: any) => {
-      const key = a.created_at?.split("T")[0];
-      if (days[key]) days[key].count++;
+    if (isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
+    setSavingNote(true);
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${user.id}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      });
+      toast({ title: t("profile.noteSaved") });
+      setAddNoteOpen(false);
+      setNoteDraft("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] }),
+        queryClient.invalidateQueries({ queryKey: ["gis-data"] }),
+      ]);
+    } catch {
+      toast({ title: t("profile.noteSaveFailed"), variant: "destructive" });
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || t("profile.unknownPerson");
+  const firstName = String(user.first_name ?? fullName.split(" ")[0] ?? t("profile.unknownPerson"));
+  const activeAlerts = alerts.filter((alert) => !alert.resolved_at);
+  const criticalAlerts = activeAlerts.filter((alert) => alert.severity === "critical").length;
+  const warningAlerts = activeAlerts.filter((alert) => alert.severity === "warning").length;
+  const healthConditions = safeArray<string>(health?.health_conditions);
+  const mobilityNeeds = safeArray<string>(health?.mobility_needs);
+  const context: OperationalProfileContext = {
+    age: getAge(user.date_of_birth),
+    assignedTo: null,
+    familyConsentKey: data.consent?.consent_given ? "profile.familyConsentActive" : "profile.familyConsentUnknown",
+    preferredChannel: "phone",
+    lastContactKey: "profile.lastContactUnknown",
+    livingContextKey: livingContextKey(user.living_context) ?? "profile.livingContextUnknown",
+    nextActionKey: "usersList.nextAction.review",
+    reasonKey: criticalAlerts ? "queue.reason.default" : "profile.reasonReview",
+    riskStatus: criticalAlerts ? "urgent" : warningAlerts ? "review" : "stable",
+    summaryKey: "profile.summaryDefault",
+    recentSignalKeys: activeAlerts.length ? activeAlerts.slice(0, 3).map((alert) => alert.message || "queue.reason.default") : ["profile.signalNoRecentAlerts"],
+    recommendedQuestionKeys: ["profile.questionWellbeing", "profile.questionSupport", "profile.questionNextContact"],
+    suggestedOpeningKey: "profile.suggestedOpeningDefault",
+    ...data.operationalContext,
+  };
+
+  const age = context.age ?? getAge(user.date_of_birth);
+  const ChannelIcon = channelIcon(context.preferredChannel);
+  const address = [user.street, user.house_number, user.post_code, user.city].filter(Boolean).join(" ");
+  const assignedProviderLabel = context.assignedTo ?? primaryProfessional?.display_name ?? primaryCaregiver?.display_name ?? null;
+  const healthScore = Math.max(0, Math.min(100, 100 - criticalAlerts * 20 - warningAlerts * 10 - healthConditions.length * 4));
+  const services = [
+    { key: "profile.service.checkins", active: Boolean(checkins?.enabled), icon: PhoneCall },
+    { key: "profile.service.brainCoach", active: Boolean(brainCoach?.enabled), icon: Brain },
+    { key: "profile.service.medications", active: medications.length > 0, icon: Pill },
+    { key: "profile.service.caregivers", active: careProviders.length > 0, icon: Users },
+    { key: "profile.service.sensors", active: sensors.length > 0, icon: Activity },
+    { key: "profile.service.consent", active: Boolean(data.consent?.consent_given), icon: ShieldCheck },
+  ];
+  const servicesActive = services.filter((service) => service.active).length;
+
+  const formatDateTime = (date?: string | null) => {
+    if (!date) return "";
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) return "";
+    return parsed.toLocaleString();
+  };
+
+  const formatOutcomeLabel = (value?: string | null) => {
+    if (!value) return t("checkin.outcomeUnknown");
+    const normalized = String(value).trim().toLowerCase().replace(/\s+/g, "_");
+    const key = `checkin.outcome.${normalized}`;
+    const label = t(key);
+    if (label !== key) return label;
+    return normalized
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const scheduledTodayAt = (value?: string | null) => {
+    if (!value) return null;
+    const [hour, minute] = value.split(":").map((part) => Number(part));
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    const date = new Date();
+    date.setHours(hour, minute, 0, 0);
+    return date;
+  };
+
+  const scheduledStatusFor = (date: Date) =>
+    date.getTime() <= Date.now() ? t("checkin.outcomeMissedToday") : t("checkin.outcomeScheduledToday");
+
+  const medicationScheduleTimes = (medication: OperationalMedication) =>
+    Array.isArray(medication.schedule_times)
+      ? medication.schedule_times.filter((time) => typeof time === "string" && /^\d{2}:\d{2}$/.test(time))
+      : [];
+
+  const latestMedicationReminderCandidate = () => {
+    const candidates = medications
+      .filter((medication) => medication.reminders_enabled !== false)
+      .flatMap((medication) =>
+        medicationScheduleTimes(medication).map((time) => ({
+          medication,
+          time,
+          date: scheduledTodayAt(time),
+        })),
+      )
+      .filter((candidate): candidate is { medication: OperationalMedication; time: string; date: Date } => Boolean(candidate.date));
+
+    const due = candidates
+      .filter((candidate) => candidate.date.getTime() <= Date.now())
+      .sort((a, b) => b.date.getTime() - a.date.getTime())[0];
+    if (due) return due;
+
+    return candidates.sort((a, b) => a.date.getTime() - b.date.getTime())[0] || null;
+  };
+
+  const scheduledContactFallback = () => {
+    const preferredTime = recordString(checkins, ["preferred_time", "preferredTime"]);
+    const scheduledAt = scheduledTodayAt(preferredTime);
+    const isEnabled = Boolean(checkins?.enabled ?? checkins?.is_active);
+    if (!scheduledAt || !isEnabled) return t(context.lastContactKey ?? "profile.lastContactUnknown");
+    const label = scheduledAt.getTime() <= Date.now()
+      ? t("checkin.outcomeMissedToday")
+      : t("checkin.outcomeScheduledToday");
+    const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+    return `${label} - ${time}`;
+  };
+
+  const scheduledLastContactAt =
+    context.lastContactAt ??
+    recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
+  const scheduledLastContactStatus =
+    context.lastContactStatus ??
+    recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
+  const lastContactValue = scheduledLastContactAt
+    ? [formatDateTime(scheduledLastContactAt), scheduledLastContactStatus ? formatOutcomeLabel(scheduledLastContactStatus) : null].filter(Boolean).join(" - ")
+    : scheduledContactFallback();
+
+  const outcomeTone = (value?: string | null) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (["missed", "failed", "escalated"].includes(normalized)) return "red";
+    if (["confirmed", "completed", "taken"].includes(normalized)) return "teal";
+    return "orange";
+  };
+
+  const eventTimeline = (() => {
+    const events: { date?: string | null; label: string; detail?: string; tone: string; icon: LucideIcon }[] = [];
+    if (user.created_at) events.push({ date: user.created_at, label: t("profile.timeline.onboarded"), detail: t("profile.timeline.onboardedDetail"), tone: "primary", icon: UserRound });
+    if (checkins) {
+      const lastDate = recordDate(checkins, ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
+      if (lastDate) {
+        const outcome = recordString(checkins, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
+        events.push({
+          date: lastDate,
+          label: t("profile.timeline.lastCheckin"),
+          detail: formatOutcomeLabel(outcome),
+          tone: outcomeTone(outcome),
+          icon: CheckCircle2,
+        });
+      } else if (Boolean(checkins.enabled) && checkins.preferred_time) {
+        const scheduledAt = scheduledTodayAt(checkins.preferred_time);
+        if (scheduledAt) {
+          const isMissed = scheduledAt.getTime() <= Date.now();
+          events.push({
+            date: scheduledAt.toISOString(),
+            label: t("profile.timeline.lastCheckin"),
+            detail: `${scheduledStatusFor(scheduledAt)} - ${checkins.preferred_time}`,
+            tone: isMissed ? "red" : "orange",
+            icon: PhoneCall,
+          });
+        }
+      }
+    }
+    if (brainCoach) {
+      const lastDate = recordDate(brainCoach, ["last_session_at", "lastSessionAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"]);
+      if (lastDate) {
+        const outcome = recordString(brainCoach, ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"]);
+        events.push({
+          date: lastDate,
+          label: t("profile.service.brainCoach"),
+          detail: formatOutcomeLabel(outcome),
+          tone: outcomeTone(outcome),
+          icon: Brain,
+        });
+      } else if (Boolean(brainCoach.enabled) && brainCoach.preferred_time) {
+        const scheduledAt = scheduledTodayAt(brainCoach.preferred_time);
+        if (scheduledAt) {
+          const isMissed = scheduledAt.getTime() <= Date.now();
+          events.push({
+            date: scheduledAt.toISOString(),
+            label: t("profile.timeline.brainCoachSession"),
+            detail: `${scheduledStatusFor(scheduledAt)} - ${brainCoach.preferred_time}`,
+            tone: isMissed ? "red" : "orange",
+            icon: Brain,
+          });
+        }
+      }
+    }
+    if (medicationActivity) {
+      const lastDate = recordDate(medicationActivity, ["occurred_at", "occurredAt", "reported_at", "reportedAt", "created_at", "scheduled_date", "scheduledDate"]);
+      const medicationName = recordString(medicationActivity, ["medication_name", "medicationName"]);
+      const status = recordString(medicationActivity, ["status", "last_status", "lastStatus"]);
+      if (lastDate) {
+        events.push({
+          date: lastDate,
+          label: t("profile.service.medications"),
+          detail: [medicationName, formatOutcomeLabel(status)].filter(Boolean).join(" - "),
+          tone: outcomeTone(status),
+          icon: Pill,
+        });
+      }
+    } else {
+      const reminder = latestMedicationReminderCandidate();
+      if (reminder) {
+        const isDue = reminder.date.getTime() <= Date.now();
+        events.push({
+          date: reminder.date.toISOString(),
+          label: t("profile.timeline.medicationReminder"),
+          detail: [reminder.medication.medication_name, isDue ? t("checkin.outcome.unconfirmed") : t("checkin.outcome.pending"), reminder.time].filter(Boolean).join(" - "),
+          tone: isDue ? "orange" : "primary",
+          icon: Pill,
+        });
+      }
+    }
+    if (careProviders.length) {
+      events.push({
+        date: careProviders.map((provider) => recordDate(provider, ["updated_at", "created_at"])).filter(Boolean).sort().at(-1) || user.created_at,
+        label: copy("profile.timeline.careCoverage", { count: careProviders.length }),
+        detail: [primaryCaregiver?.display_name, primaryProfessional?.display_name].filter(Boolean).join(" · ") || t("careProviders.coverage"),
+        tone: "primary",
+        icon: Users,
+      });
+    }
+    if (data.consent) {
+      events.push({
+        date: recordDate(data.consent, ["updated_at", "created_at"]) || user.created_at,
+        label: t(data.consent.consent_given ? "profile.timeline.consentActive" : "profile.timeline.consentMissing"),
+        detail: t("profile.timeline.consentDetail"),
+        tone: data.consent.consent_given ? "teal" : "orange",
+        icon: ShieldCheck,
+      });
+    }
+    if (healthConditions.length || mobilityNeeds.length) {
+      events.push({
+        date: recordDate(health, ["updated_at", "created_at"]) || user.created_at,
+        label: t("profile.timeline.healthProfile"),
+        detail: copy("profile.timeline.healthProfileDetail", { conditions: healthConditions.length, mobility: mobilityNeeds.length }),
+        tone: "pink",
+        icon: HeartPulse,
+      });
+    }
+    alerts.forEach((alert) => {
+      if (alert.created_at) events.push({ date: alert.created_at, label: alert.message || t("profile.timeline.alert"), detail: alert.resolved_at ? t("profile.timeline.alertResolved") : t("profile.timeline.alertActive"), tone: alert.severity === "critical" ? "red" : "orange", icon: AlertTriangle });
     });
-    return Object.values(days);
+
+    return events
+      .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+      .slice(0, 8);
   })();
 
-  const daysOnboarded = Math.floor((Date.now() - new Date(user.created_at).getTime()) / (24 * 60 * 60 * 1000));
-
-  const services = [
-    { name: "Check-ins", active: checkins?.enabled, icon: PhoneCall },
-    { name: "Brain Coach", active: brainCoach?.enabled, icon: Brain },
-    { name: "Medications", active: medications.length > 0, icon: Pill },
-    { name: "Caregivers", active: caregivers.length > 0, icon: Users },
-    { name: "Sensors", active: sensors.length > 0, icon: Activity },
-    { name: "Consent", active: consent?.consent_given, icon: ShieldCheck },
-  ];
-  const servicesActive = services.filter(s => s.active).length;
-  const servicesPercent = Math.round((servicesActive / services.length) * 100);
-
-  const EditBtn = ({ onClick }: { onClick: () => void }) => (
-    <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={onClick}>
-      <Pencil className="h-3.5 w-3.5" />
-    </Button>
+  const showAdminControls = isAdmin && !authBypassEnabled && !isPreviewDemo;
+  const canEditProfile = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_care_plan ?? isAdmin);
+  const canAssignProviders = !authBypassEnabled && !isPreviewDemo;
+  const canEditMedications = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_medications ?? isAdmin);
+  const canEditCheckins = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_checkins ?? isAdmin);
+  const canEditBrainCoach = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_brain_coach ?? isAdmin);
+  const canManageHealthPlan = canEditProfile;
+  const healthPlanSectionCount = healthPlan
+    ? [
+        safeArray(healthPlan.goals_json).length,
+        safeArray(healthPlan.daily_support_json).length,
+        safeArray(healthPlan.monitoring_json).length,
+        safeArray(healthPlan.escalation_json).length,
+        safeArray(healthPlan.caregiver_guidance_json).length,
+      ].reduce((total, value) => total + value, 0)
+    : 0;
+  const healthPlanSignalCount = safeArray(healthPlan?.source_signals_json).length;
+  const healthPlanIsReviewed = healthPlan?.review_status === "reviewed";
+  const healthPlanReviewedBy = healthPlan?.reviewed_by_email || healthPlan?.reviewed_by_user_id || null;
+  const healthPlanSignals = safeArray(healthPlan?.source_signals_json);
+  const healthPlanSignalLookup = new Map(
+    healthPlanSignals
+      .map((signal) => [signal.id || signal.label || "", signal] as const)
+      .filter(([key]) => Boolean(key)),
   );
+  const healthPlanUsesFallback = healthPlan?.generator_provider === "fallback";
+  const healthPlanHighPrioritySignals = healthPlanSignals.filter((signal) => inferHealthPlanSignalStrength(signal) === "high").length;
+  const healthPlanEvidenceLinkedCount = healthPlan
+    ? [
+        ...safeArray(healthPlan.goals_json),
+        ...safeArray(healthPlan.daily_support_json),
+        ...safeArray(healthPlan.monitoring_json),
+        ...safeArray(healthPlan.escalation_json),
+        ...safeArray(healthPlan.caregiver_guidance_json),
+      ].filter((item) => safeArray(item.source_signal_ids).length > 0).length
+    : 0;
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/users")}>
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <div className="flex items-center gap-4 flex-1">
-          {user.photo_url ? (
-            <img src={user.photo_url} alt="" className="h-14 w-14 rounded-full object-cover border-2 border-primary/20" />
-          ) : (
-            <div className="h-14 w-14 rounded-full bg-primary/10 flex items-center justify-center">
-              <User className="h-7 w-7 text-primary" />
-            </div>
-          )}
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h1 className="font-display text-2xl font-bold text-foreground">
-                {user.first_name} {user.last_name}
-              </h1>
-              {activeAlerts.length > 0 && (
-                <Badge className="bg-destructive text-destructive-foreground text-xs gap-1">
-                  <AlertTriangle className="h-3 w-3" />
-                  {activeAlerts.length} Active Alert{activeAlerts.length > 1 ? "s" : ""}
-                </Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-3 text-sm text-muted-foreground mt-0.5">
-              {user.city && <span className="flex items-center gap-1"><MapPin className="h-3.5 w-3.5" /> {user.city}</span>}
-              {user.phone && <span className="flex items-center gap-1"><Phone className="h-3.5 w-3.5" /> {user.phone}</span>}
-              {age && <span className="flex items-center gap-1"><Calendar className="h-3.5 w-3.5" /> {age} years old</span>}
-              {user.language && <span className="flex items-center gap-1"><Globe className="h-3.5 w-3.5" /> {user.language.toUpperCase()}</span>}
-            </div>
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full" onClick={() => navigate("/users")}>
+            <ArrowLeft className="h-5 w-5" />
+          </Button>
+          <div>
+            <h1 className="font-display text-2xl font-bold text-foreground">{t("profile.title")}</h1>
+            <p className="text-sm font-medium text-muted-foreground">
+              {copy("profile.detailFor", { name: fullName })}
+            </p>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {isPreviewDemo && (
+            <Badge className="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+              {t("profile.previewData")}
+            </Badge>
+          )}
+          {canEditProfile && (
+            <Button variant="outline" className="h-10 rounded-full border-primary/20 text-primary hover:bg-primary/10" onClick={() => setEditUserOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              {t("profile.editProfile")}
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Quick Stats Banner */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card>
-          <CardContent className="pt-5 pb-4 text-center">
-            <p className={`text-4xl font-display font-bold ${healthScoreColor}`}>{healthScore}</p>
-            <p className="text-xs text-muted-foreground mt-1">Health Score</p>
-            <Badge className={`mt-2 text-xs ${healthScore >= 80 ? "bg-vyva-green/20 text-vyva-green" : healthScore >= 50 ? "bg-accent/20 text-accent" : "bg-destructive/10 text-destructive"}`}>
-              {healthScoreLabel}
-            </Badge>
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardContent className="p-5 lg:p-7">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-col gap-4 md:flex-row md:items-start">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-primary text-lg font-bold text-white shadow-sm">
+                  {getInitials(user.first_name, user.last_name)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <h2 className="text-2xl font-bold tracking-tight text-foreground">{fullName}</h2>
+                    <span className={cn("rounded-full px-3 py-1 text-sm font-bold ring-1", profileStatusClasses(context.riskStatus))}>
+                      {t(`profile.status.${context.riskStatus}`)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-base font-medium text-muted-foreground">
+                    {[age ? copy("profile.ageYears", { age }) : null, context.livingContextKey ? t(context.livingContextKey) : null, user.city].filter(Boolean).join(" · ")}
+                  </p>
+                  <div className="mt-5 inline-flex max-w-full items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{t(context.reasonKey)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm font-semibold text-muted-foreground xl:justify-end">
+              <MetaItem icon={ChannelIcon} label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
+              <MetaItem icon={Phone} label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-border pt-5">
+            <div className="flex flex-wrap gap-2">
+              <ActionButton tone="primary" icon={PhoneCall} label={t("profile.callGatewayRequired")} onClick={() => handleOperationalAction("profile.action.callGatewayRequired")} />
+              <ActionButton icon={MessageCircle} label={t("profile.whatsAppGatewayRequired")} onClick={() => handleOperationalAction("profile.action.whatsAppGatewayRequired")} />
+              <ActionButton icon={Users} label={t("profile.careProviderGatewayRequired")} onClick={() => handleOperationalAction("profile.action.careProviderGatewayRequired")} />
+              <ActionButton icon={Pencil} label={t("profile.addNote")} onClick={openAddNoteDialog} />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardHeader className="flex flex-row items-center gap-2 pb-2">
+          <Users className="h-5 w-5 text-primary" />
+          <CardTitle className="text-base font-bold">{t("profile.keyData")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <InfoTile label={t("profile.age")} value={age ? copy("profile.ageYears", { age }) : null} />
+            <InfoTile label={t("profile.livesAlone")} value={context.livingContextKey ? t(context.livingContextKey) : null} />
+            <InfoTile label={t("profile.language")} value={user.language ? String(user.language).toUpperCase() : null} />
+            <InfoTile label={t("profile.preferredChannel")} value={t(channelKey(context.preferredChannel))} />
+            <InfoTile label={t("profile.phoneNumber")} value={user.phone || t("profile.noPhone")} />
+            <InfoTile label={t("profile.address")} value={address || null} />
+            <InfoTile label={t("profile.lastContact")} value={lastContactValue} />
+            <InfoTile label={t("profile.familyConsent")} value={t(context.familyConsentKey ?? "profile.familyConsentUnknown")} />
+          </div>
+          {user.emergency_notes && (
+            <div className="mt-4 rounded-xl border border-border/70 bg-muted/25 px-4 py-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.careNotes")}</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm font-semibold leading-6 text-foreground">{user.emergency_notes}</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <Card className="rounded-2xl border-border bg-white shadow-sm">
+          <CardHeader className="flex flex-row items-center gap-2 pb-2">
+            <HeartPulse className="h-5 w-5 text-vyva-pink" />
+            <CardTitle className="text-base font-bold">{t("profile.healthCare")}</CardTitle>
+            {showAdminControls && (
+              <AdminIconButton label={t("profile.editHealth")} onClick={() => setEditHealthOpen(true)} />
+            )}
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div>
+              <div className="mb-2 flex items-center justify-between text-sm">
+                <span className="font-semibold text-muted-foreground">{t("profile.healthScore")}</span>
+                <span className="font-bold text-foreground">{healthScore}</span>
+              </div>
+              <Progress value={healthScore} className="h-2" />
+            </div>
+            <ChipList
+              emptyLabel={t("profile.noHealthConditions")}
+              items={[...healthConditions, ...mobilityNeeds]}
+              tone="pink"
+            />
+            <div className="grid gap-2 sm:grid-cols-2">
+              {services.map((service) => {
+                const Icon = service.icon;
+                return (
+                  <div key={service.key} className="flex items-center justify-between rounded-xl border border-border bg-muted/35 px-3 py-2">
+                    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+                      <Icon className="h-4 w-4 text-primary" />
+                      {t(service.key)}
+                    </span>
+                    <Badge variant={service.active ? "default" : "secondary"} className="rounded-full text-[11px]">
+                      {service.active ? t("profile.active") : t("profile.inactive")}
+                    </Badge>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs font-semibold text-muted-foreground">
+              {copy("profile.servicesActive", { active: servicesActive, total: services.length })}
+            </p>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardContent className="pt-5 pb-4">
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-sm font-medium text-foreground">Services Active</p>
-              <p className="text-sm font-bold text-primary">{servicesActive}/{services.length}</p>
+        <Card className="rounded-2xl border-border bg-white shadow-sm">
+          <CardHeader className="flex flex-row items-center gap-2 pb-2">
+            <Pill className="h-5 w-5 text-orange-500" />
+            <CardTitle className="text-base font-bold">{t("profile.medicationCheckins")}</CardTitle>
+            <div className="ml-auto flex gap-1">
+              <Button size="sm" className="h-9 rounded-full px-3 text-xs font-bold shadow-sm" onClick={() => navigate(`/users/${id}/medications`)}>
+                <Calendar className="mr-1.5 h-3.5 w-3.5" />
+                {t("profile.viewAdherence")}
+              </Button>
+              {canEditMedications && (
+                <AdminIconButton
+                  label={t("profile.addMedication")}
+                  icon={Plus}
+                  onClick={() => {
+                    setEditMedTarget(null);
+                    setEditMedOpen(true);
+                  }}
+                />
+              )}
             </div>
-            <Progress value={servicesPercent} className="h-2 mb-3" />
-            <div className="flex flex-wrap gap-1.5">
-              {services.map(s => (
-                <Badge key={s.name} variant={s.active ? "default" : "secondary"} className="text-[10px] gap-1">
-                  <s.icon className="h-2.5 w-2.5" />
-                  {s.name}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {medications.length === 0 ? (
+              <EmptyLine icon={Pill} label={t("profile.noMedications")} />
+            ) : (
+              <div className="space-y-2">
+                {medications.map((med) => (
+                  <div key={med.id} className="rounded-xl border border-border bg-muted/25 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-foreground">{med.medication_name}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {[med.dosage, med.purpose].filter(Boolean).join(" · ") || t("profile.noExtraDetails")}
+                        </p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          <Badge variant={med.reminders_enabled ?? true ? "default" : "secondary"} className="rounded-full text-[11px]">
+                            {(med.reminders_enabled ?? true) ? t("profile.medicationRemindersOn") : t("profile.medicationRemindersOff")}
+                          </Badge>
+                        </div>
+                        {Array.isArray(med.schedule_times) && med.schedule_times.length > 0 && (
+                          <p className={cn("mt-1 text-xs font-semibold", (med.reminders_enabled ?? true) ? "text-primary" : "text-muted-foreground")}>
+                            {med.schedule_times.join(", ")}
+                          </p>
+                        )}
+                        {med.frequency && (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {t("profile.medicationFrequency")}: {med.frequency}
+                          </p>
+                        )}
+                      </div>
+                      {canEditMedications && (
+                        <div className="flex gap-1">
+                          <AdminIconButton label={t("profile.editMedication")} onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }} />
+                          <AdminIconButton label={t("profile.deleteMedication")} icon={Trash2} danger onClick={() => handleDeleteMedication(med.id)} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ServiceSummary
+                title={t("profile.service.checkins")}
+                enabled={Boolean(checkins?.enabled)}
+                frequency={checkins?.frequency}
+                preferredTime={checkins?.preferred_time}
+                pausedUntil={checkins?.paused_until}
+                pauseSource={checkins?.pause_source}
+                isPaused={Boolean(checkins?.is_paused)}
+                onEdit={canEditCheckins ? () => setEditCheckinOpen(true) : undefined}
+              />
+              <ServiceSummary
+                title={t("profile.service.brainCoach")}
+                enabled={Boolean(brainCoach?.enabled)}
+                frequency={brainCoach?.frequency}
+                preferredTime={brainCoach?.preferred_time}
+                pausedUntil={brainCoach?.paused_until}
+                pauseSource={brainCoach?.pause_source}
+                isPaused={Boolean(brainCoach?.is_paused)}
+                onEdit={canEditBrainCoach ? () => setEditBrainOpen(true) : undefined}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-border bg-white shadow-sm">
+          <CardHeader className="flex flex-row items-center gap-2 pb-2">
+            <Users className="h-5 w-5 text-primary" />
+            <CardTitle className="text-base font-bold">{t("careProviders.title")}</CardTitle>
+            {canAssignProviders && (
+              <AdminIconButton
+                label={t("careProviders.assign")}
+                icon={Plus}
+                onClick={() => setAssignProviderOpen(true)}
+              />
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ProviderHighlight label={t("careProviders.primaryCaregiver")} provider={primaryCaregiver} emptyLabel={t("careProviders.noPrimaryCaregiver")} />
+              <ProviderHighlight label={t("careProviders.primaryProfessional")} provider={primaryProfessional} emptyLabel={t("careProviders.noPrimaryProfessional")} />
+            </div>
+            {careProviders.length === 0 ? (
+              <EmptyLine icon={Users} label={t("careProviders.noProviders")} />
+            ) : (
+              <div className="space-y-4">
+                {additionalEmergencyContacts.length > 0 && (
+                  <ProviderGroup
+                    title={t("careProviders.informalShort")}
+                    providers={additionalEmergencyContacts}
+                    emptyLabel={t("careProviders.noAdditionalEmergencyContacts")}
+                    canAssignProviders={canAssignProviders}
+                    showAdminControls={showAdminControls}
+                    onEditCaregiver={(provider) => {
+                      setEditCaregiverTarget({
+                        id: provider.id,
+                        assignment_id: provider.id,
+                        care_provider_contact_id: provider.provider_id,
+                        caretaker_name: provider.display_name,
+                        caretaker_phone: provider.phone,
+                        is_primary: provider.is_primary,
+                        relationship_label: provider.relationship_label,
+                        notes: provider.notes,
+                      });
+                      setEditCaregiverOpen(true);
+                    }}
+                    onUnassign={handleUnassignCareProvider}
+                  />
+                )}
+                {redCrossStaffProviders.length > 0 && (
+                  <ProviderGroup
+                    title={t("careProviders.professionalShort")}
+                    providers={redCrossStaffProviders}
+                    emptyLabel={t("careProviders.noPrimaryProfessional")}
+                    canAssignProviders={canAssignProviders}
+                    showAdminControls={showAdminControls}
+                    onUnassign={handleUnassignCareProvider}
+                  />
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-2xl border-border bg-white shadow-sm">
+          <CardHeader className="flex flex-row items-center gap-2 pb-2">
+            <Activity className="h-5 w-5 text-vyva-teal" />
+            <CardTitle className="text-base font-bold">{t("profile.sensorsAlerts")}</CardTitle>
+            {showAdminControls && (
+              <AdminIconButton
+                label={t("profile.addSensor")}
+                icon={Plus}
+                onClick={() => {
+                  setEditSensorTarget(null);
+                  setEditSensorOpen(true);
+                }}
+              />
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {sensors.length === 0 ? (
+              <EmptyLine icon={Activity} label={t("profile.noSensors")} />
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {sensors.map((sensor) => {
+                  const online = sensor.status === "online";
+                  return (
+                    <div key={sensor.id} className="rounded-xl border border-border bg-muted/25 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="flex items-center gap-2 font-semibold text-foreground">
+                            {online ? <Wifi className="h-4 w-4 text-emerald-600" /> : <WifiOff className="h-4 w-4 text-muted-foreground" />}
+                            {sensor.device_name || sensor.device_id}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold text-muted-foreground">{t(sensorTypeKey(sensor.sensor_type))}</p>
+                        </div>
+                        {showAdminControls && (
+                          <AdminIconButton label={t("profile.editSensor")} onClick={() => { setEditSensorTarget(sensor); setEditSensorOpen(true); }} />
+                        )}
+                      </div>
+                      {sensor.battery_level !== null && sensor.battery_level !== undefined && (
+                        <div className="mt-3">
+                          <div className="mb-1 flex justify-between text-xs font-semibold text-muted-foreground">
+                            <span>{t("profile.battery")}</span>
+                            <span>{sensor.battery_level}%</span>
+                          </div>
+                          <Progress value={sensor.battery_level} className="h-1.5" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="rounded-xl border border-border bg-muted/25 p-3">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="font-semibold text-foreground">{t("profile.activeAlerts")}</p>
+                <Badge variant={activeAlerts.length ? "destructive" : "secondary"} className="rounded-full">
+                  {activeAlerts.length}
                 </Badge>
-              ))}
+              </div>
+              {activeAlerts.length === 0 ? (
+                <p className="text-sm text-muted-foreground">{t("profile.noActiveAlerts")}</p>
+              ) : (
+                <div className="space-y-2">
+                  {activeAlerts.slice(0, 4).map((alert) => (
+                    <div key={alert.id} className="flex gap-2 rounded-lg bg-white px-3 py-2 text-sm">
+                      <AlertTriangle className={cn("mt-0.5 h-4 w-4 shrink-0", alert.severity === "critical" ? "text-red-600" : "text-orange-500")} />
+                      <span className="font-medium text-foreground">{alert.message || t("queue.reason.default")}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-5 pb-4 text-center">
-            <div className="flex justify-center gap-4">
-              <div>
-                <p className="text-2xl font-display font-bold text-foreground">{sensors.length}</p>
-                <p className="text-[10px] text-muted-foreground">Devices</p>
-              </div>
-              <div>
-                <p className="text-2xl font-display font-bold text-vyva-green">{sensors.filter((s: any) => s.status === "online").length}</p>
-                <p className="text-[10px] text-muted-foreground">Online</p>
-              </div>
-              <div>
-                <p className="text-2xl font-display font-bold text-destructive">{sensors.filter((s: any) => s.battery_level != null && s.battery_level < 20).length}</p>
-                <p className="text-[10px] text-muted-foreground">Low Bat</p>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2">Sensor Overview</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-5 pb-4 text-center">
-            <p className="text-2xl font-display font-bold text-foreground">{daysOnboarded}</p>
-            <p className="text-xs text-muted-foreground mt-1">Days Since Onboarding</p>
-            <p className="text-[10px] text-muted-foreground mt-1">{new Date(user.created_at).toLocaleDateString()}</p>
           </CardContent>
         </Card>
       </div>
 
-      <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="health">Health & Meds</TabsTrigger>
-          <TabsTrigger value="sensors">Sensors ({sensors.length})</TabsTrigger>
-          <TabsTrigger value="alerts">Alerts ({alerts.length})</TabsTrigger>
-          <TabsTrigger value="timeline">Timeline</TabsTrigger>
-        </TabsList>
-
-        {/* OVERVIEW TAB */}
-        <TabsContent value="overview">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <User className="h-5 w-5 text-vyva-purple" />
-                <CardTitle className="font-display text-base">Personal Info</CardTitle>
-                <EditBtn onClick={() => setEditUserOpen(true)} />
-              </CardHeader>
-              <CardContent>
-                <InfoRow label="First Name" value={user.first_name} />
-                <InfoRow label="Last Name" value={user.last_name} />
-                <InfoRow label="Phone" value={user.phone} icon={<Phone className="h-3.5 w-3.5" />} />
-                <InfoRow label="Date of Birth" value={user.date_of_birth ? `${user.date_of_birth} (${age} yrs)` : null} icon={<Calendar className="h-3.5 w-3.5" />} />
-                <InfoRow label="Gender" value={user.gender} />
-                <InfoRow label="Language" value={user.language?.toUpperCase()} icon={<Globe className="h-3.5 w-3.5" />} />
-                <InfoRow label="Timezone" value={user.timezone} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <MapPin className="h-5 w-5 text-vyva-teal" />
-                <CardTitle className="font-display text-base">Address</CardTitle>
-                <EditBtn onClick={() => setEditUserOpen(true)} />
-              </CardHeader>
-              <CardContent>
-                <InfoRow label="Street" value={user.street} />
-                <InfoRow label="House Number" value={user.house_number} />
-                <InfoRow label="Post Code" value={user.post_code} />
-                <InfoRow label="City" value={user.city} />
-                {user.street && user.city && (
-                  <div className="mt-3 rounded-lg bg-muted/50 p-3 text-center">
-                    <p className="text-xs text-muted-foreground">
-                      {user.street} {user.house_number}, {user.post_code} {user.city}
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <ShieldCheck className="h-5 w-5 text-vyva-green" />
-                <CardTitle className="font-display text-base">Consent</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <InfoRow label="User Consent" value="✅ Given" />
-                <InfoRow label="Caretaker Consent" value="✅ Given" />
-                {consent && (
-                  <p className="text-[10px] text-muted-foreground mt-2">Recorded {new Date(consent.created_at).toLocaleDateString()}</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <Users className="h-5 w-5 text-vyva-green" />
-                <CardTitle className="font-display text-base">Caregivers ({caregivers.length})</CardTitle>
-                <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={() => { setEditCaregiverTarget(null); setEditCaregiverOpen(true); }}>
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {caregivers.length === 0 ? (
-                  <div className="text-center py-4">
-                    <Users className="mx-auto h-8 w-8 text-muted-foreground/50 mb-1" />
-                    <p className="text-sm text-muted-foreground">No caregivers linked</p>
-                  </div>
-                ) : (
-                  caregivers.map((c: any) => (
-                    <div key={c.id} className="rounded-lg bg-muted/50 p-3 mb-2 last:mb-0 flex items-center justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-foreground">{c.caretaker_name || "Unknown"}</p>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                          <Phone className="h-3 w-3" /> {c.caretaker_phone || "No phone"}
-                        </p>
-                      </div>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditCaregiverTarget(c); setEditCaregiverOpen(true); }}>
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => handleDeleteCaregiver(c.id)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
-
-            {user.emergency_notes && (
-              <Card className="md:col-span-2 border-destructive/30">
-                <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                  <AlertTriangle className="h-5 w-5 text-destructive" />
-                  <CardTitle className="font-display text-base text-destructive">Emergency Notes</CardTitle>
-                  <EditBtn onClick={() => setEditUserOpen(true)} />
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-foreground whitespace-pre-wrap">{user.emergency_notes}</p>
-                </CardContent>
-              </Card>
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardHeader className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              <CardTitle className="text-base font-bold">{t("profile.healthPlanTitle")}</CardTitle>
+            </div>
+            <p className="text-sm text-muted-foreground">{t("profile.healthPlanDescription")}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {healthPlan && (
+              <Button
+                variant="outline"
+                className="h-9 rounded-full px-3 text-xs font-bold"
+                disabled={!canManageHealthPlan || generatingHealthPlan}
+                onClick={() => setEditHealthPlanOpen(true)}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t("profile.edit")}
+              </Button>
+            )}
+            {healthPlan && canManageHealthPlan && !healthPlanIsReviewed && (
+              <Button
+                variant="outline"
+                className="h-9 rounded-full border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-700 hover:bg-emerald-100 hover:text-emerald-700"
+                disabled={generatingHealthPlan}
+                onClick={() => void handleMarkHealthPlanReviewed()}
+              >
+                <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+                {t("profile.healthPlanMarkReviewed")}
+              </Button>
+            )}
+            {canManageHealthPlan && (
+              <Button
+                className="h-9 rounded-full px-3 text-xs font-bold shadow-sm"
+                disabled={generatingHealthPlan}
+                onClick={() => void handleGenerateHealthPlan(Boolean(healthPlan))}
+              >
+                <Brain className={cn("mr-1.5 h-3.5 w-3.5", generatingHealthPlan && "animate-spin")} />
+                {healthPlan ? t("profile.healthPlanRegenerate") : t("profile.healthPlanGenerate")}
+              </Button>
             )}
           </div>
-        </TabsContent>
-
-        {/* HEALTH TAB */}
-        <TabsContent value="health">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <HeartPulse className="h-5 w-5 text-vyva-pink" />
-                <CardTitle className="font-display text-base">Health Conditions</CardTitle>
-                <EditBtn onClick={() => setEditHealthOpen(true)} />
-              </CardHeader>
-              <CardContent>
-                {health?.health_conditions?.length ? (
-                  <div className="space-y-2">
-                    {health.health_conditions.map((c: string, i: number) => (
-                      <div key={i} className="flex items-center gap-2 rounded-lg bg-vyva-pink/5 border border-vyva-pink/10 p-2.5">
-                        <HeartPulse className="h-4 w-4 text-vyva-pink shrink-0" />
-                        <span className="text-sm font-medium text-foreground">{c}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">No conditions recorded</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <Activity className="h-5 w-5 text-vyva-teal" />
-                <CardTitle className="font-display text-base">Mobility Needs</CardTitle>
-                <EditBtn onClick={() => setEditHealthOpen(true)} />
-              </CardHeader>
-              <CardContent>
-                {health?.mobility_needs?.length ? (
-                  <div className="space-y-2">
-                    {health.mobility_needs.map((m: string, i: number) => (
-                      <div key={i} className="flex items-center gap-2 rounded-lg bg-vyva-teal/5 border border-vyva-teal/10 p-2.5">
-                        <Activity className="h-4 w-4 text-vyva-teal shrink-0" />
-                        <span className="text-sm font-medium text-foreground">{m}</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-4">No mobility needs recorded</p>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card className="md:col-span-2">
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <Pill className="h-5 w-5 text-accent" />
-                <CardTitle className="font-display text-base">Medications ({medications.length})</CardTitle>
-                <div className="ml-auto flex gap-1">
-                  <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => navigate(`/users/${id}/medications`)}>
-                    <Pill className="h-3 w-3" /> View Adherence
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditMedTarget(null); setEditMedOpen(true); }}>
-                    <Plus className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {medications.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">No medications recorded</p>
-                ) : (
-                  <div className="grid gap-3 md:grid-cols-2">
-                    {medications.map((med: any) => (
-                      <div key={med.id} className="rounded-lg border border-border/50 p-4">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="font-semibold text-sm text-foreground">{med.medication_name}</p>
-                            {med.purpose && <p className="text-xs text-muted-foreground mt-0.5">{med.purpose}</p>}
-                          </div>
-                          <div className="flex gap-1">
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }}>
-                              <Pencil className="h-3 w-3" />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive" onClick={() => handleDeleteMedication(med.id)}>
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {med.dosage && (
-                            <Badge variant="secondary" className="text-[10px]">💊 {med.dosage}</Badge>
-                          )}
-                          {med.schedule_times?.map((t: string, i: number) => (
-                            <Badge key={i} variant="outline" className="text-[10px]">🕐 {t}</Badge>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <PhoneCall className="h-5 w-5 text-vyva-teal" />
-                <CardTitle className="font-display text-base">Check-in Settings</CardTitle>
-                {checkins && <EditBtn onClick={() => setEditCheckinOpen(true)} />}
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2 mb-3">
-                  <Badge variant={checkins?.enabled ? "default" : "secondary"}>
-                    {checkins?.enabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                </div>
-                <InfoRow label="Frequency" value={checkins?.frequency} />
-                <InfoRow label="Preferred Time" value={checkins?.preferred_time} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="flex flex-row items-center gap-2 pb-3">
-                <Brain className="h-5 w-5 text-vyva-purple" />
-                <CardTitle className="font-display text-base">Brain Coach</CardTitle>
-                {brainCoach && <EditBtn onClick={() => setEditBrainOpen(true)} />}
-              </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2 mb-3">
-                  <Badge variant={brainCoach?.enabled ? "default" : "secondary"}>
-                    {brainCoach?.enabled ? "Enabled" : "Disabled"}
-                  </Badge>
-                </div>
-                <InfoRow label="Frequency" value={brainCoach?.frequency} />
-                <InfoRow label="Preferred Time" value={brainCoach?.preferred_time} />
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="sensors">
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <Button size="sm" onClick={() => { setEditSensorTarget(null); setEditSensorOpen(true); }}>
-                <Plus className="h-4 w-4 mr-1" /> Add Sensor
-              </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {healthPlanError && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">{t("profile.healthPlanGenerationFailed")}</p>
+              <p className="mt-1">{healthPlanError}</p>
             </div>
-            {sensors.length === 0 ? (
-              <Card>
-                <CardContent className="py-12 text-center">
-                  <Activity className="mx-auto h-12 w-12 text-muted-foreground/50 mb-2" />
-                  <p className="text-lg font-medium text-foreground">No sensors assigned</p>
-                  <p className="text-sm text-muted-foreground">Click "Add Sensor" to configure a device for this user.</p>
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {sensors.map((sensor: any) => (
-                  <Card key={sensor.id} className={sensor.status === "online" ? "border-vyva-green/30" : "border-border"}>
-                    <CardContent className="pt-5">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          {sensor.status === "online" ? (
-                            <Wifi className="h-4 w-4 text-vyva-green" />
-                          ) : (
-                            <WifiOff className="h-4 w-4 text-muted-foreground" />
-                          )}
-                          <div>
-                            <p className="font-medium text-sm">{sensor.device_name || sensor.device_id}</p>
-                            <p className="text-xs text-muted-foreground"><SensorTypeLabel type={sensor.sensor_type} /></p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Badge variant={sensor.status === "online" ? "default" : "secondary"} className="text-xs">
-                            {sensor.status}
+          )}
+
+          {!healthPlan ? (
+            <div className="grid gap-5 rounded-[24px] border border-dashed border-border/80 bg-[linear-gradient(180deg,rgba(245,243,255,0.7),rgba(255,255,255,0.96))] p-6 lg:grid-cols-[minmax(0,1.7fr)_280px]">
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="rounded-full bg-primary/10 px-3 py-1 text-primary hover:bg-primary/10">
+                    {t("profile.healthPlanDraftBadge")}
+                  </Badge>
+                  <Badge variant="secondary" className="rounded-full px-3 py-1">
+                    {t("profile.healthPlanReviewRequired")}
+                  </Badge>
+                </div>
+                <p className="max-w-4xl text-sm leading-7 text-muted-foreground">{t("profile.healthPlanEmpty")}</p>
+                <p className="max-w-3xl text-sm leading-6 text-foreground/80">{t("profile.healthPlanReadyToShare")}</p>
+              </div>
+              <div className="rounded-[20px] border border-white/80 bg-white/85 p-5 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReviewTitle")}</p>
+                <div className="mt-4 space-y-3">
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-[24px] border border-primary/12 bg-[linear-gradient(180deg,rgba(246,243,255,0.82),rgba(255,255,255,1))]">
+              <div className="px-6 py-6">
+                <div className="flex flex-col gap-5">
+                  <div className="min-w-0 space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {healthPlanIsReviewed ? (
+                        <Badge className="rounded-full bg-emerald-600 px-3 py-1 text-white hover:bg-emerald-600">
+                          {t("profile.healthPlanReviewedBadge")}
+                        </Badge>
+                      ) : (
+                        <>
+                          <Badge className="rounded-full bg-primary px-3 py-1 text-white hover:bg-primary">
+                            {t("profile.healthPlanDraftBadge")}
                           </Badge>
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditSensorTarget(sensor); setEditSensorOpen(true); }}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
+                          <Badge variant="secondary" className="rounded-full px-3 py-1">
+                            {t("profile.healthPlanReviewRequired")}
+                          </Badge>
+                        </>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSummary")}</p>
+                      <p className="mt-3 max-w-5xl text-[15px] font-medium leading-8 text-foreground">{healthPlan.summary_text || "-"}</p>
+                    </div>
+                    <p className="text-sm leading-6 text-foreground/75">
+                      {healthPlanIsReviewed ? t("profile.healthPlanReviewedSummary") : t("profile.healthPlanReadyToShare")}
+                    </p>
+                    <div className="flex flex-wrap gap-2.5">
+                      <HealthPlanMetaChip label={t("profile.healthPlanLastGenerated")} value={healthPlan.generated_at ? formatDateTime(healthPlan.generated_at) : "-"} />
+                      <HealthPlanMetaChip label={t("profile.language")} value={(healthPlan.language || user.language || "-").toString().toUpperCase()} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanGoals")} value={String(healthPlanSectionCount)} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanGenerationMode")} value={healthPlanUsesFallback ? t("profile.healthPlanModeFallback") : t("profile.healthPlanModeAI")} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanEvidenceLinked")} value={String(healthPlanEvidenceLinkedCount)} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanHighPrioritySignals")} value={String(healthPlanHighPrioritySignals)} />
+                    </div>
+                    {healthPlanUsesFallback && (
+                      <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <p className="font-semibold">{t("profile.healthPlanModeFallback")}</p>
+                        <p className="mt-1">{t("profile.healthPlanFallbackSummary")}</p>
+                      </div>
+                    )}
+                    {healthPlanIsReviewed && (healthPlan.reviewed_at || healthPlanReviewedBy) && (
+                      <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
+                        {healthPlan.reviewed_at && (
+                          <span>
+                            {t("profile.healthPlanReviewedAt")}: <span className="font-medium text-foreground">{formatDateTime(healthPlan.reviewed_at)}</span>
+                          </span>
+                        )}
+                        {healthPlanReviewedBy && (
+                          <span>
+                            {t("profile.healthPlanReviewedBy")}: <span className="font-medium text-foreground">{healthPlanReviewedBy}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 border-t border-primary/10 bg-white/80 p-6 xl:grid-cols-[minmax(0,1.85fr)_320px]">
+                <div className="min-w-0 space-y-4">
+                  <Tabs defaultValue="support" className="space-y-5">
+                    <TabsList className="h-auto rounded-full bg-slate-100/90 p-1">
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="support">
+                        {t("profile.healthPlanGoals")}
+                      </TabsTrigger>
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="monitoring">
+                        {t("profile.healthPlanMonitoring")}
+                      </TabsTrigger>
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="caregiver">
+                        {t("profile.healthPlanCaregiverGuidance")}
+                      </TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="support" className="mt-0">
+                      <div className="grid gap-5 lg:grid-cols-2">
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanGoals")}
+                          items={healthPlan.goals_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanDailySupport")}
+                          items={healthPlan.daily_support_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="monitoring" className="mt-0">
+                      <div className="grid gap-5 lg:grid-cols-2">
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanMonitoring")}
+                          items={healthPlan.monitoring_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanEscalation")}
+                          items={healthPlan.escalation_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="caregiver" className="mt-0">
+                      <HealthPlanTextSection
+                        title={t("profile.healthPlanCaregiverGuidance")}
+                        items={healthPlan.caregiver_guidance_json}
+                        signalLookup={healthPlanSignalLookup}
+                        evidenceLabel={t("profile.healthPlanEvidence")}
+                      />
+                    </TabsContent>
+                  </Tabs>
+                </div>
+
+                <aside className="overflow-hidden rounded-[22px] border border-border/80 bg-white/88 shadow-sm">
+                  <div className="p-5">
+                    <div className="flex items-start gap-3">
+                      <span className={cn(
+                        "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm",
+                        healthPlanIsReviewed ? "text-emerald-600" : "text-primary",
+                      )}>
+                        <ShieldCheck className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          {healthPlanIsReviewed ? t("profile.healthPlanReviewReceipt") : t("profile.healthPlanReviewTitle")}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                          {healthPlanIsReviewed ? t("profile.healthPlanReviewedSummary") : t("profile.healthPlanReviewDescription")}
+                        </p>
+                      </div>
+                    </div>
+                    {healthPlanIsReviewed ? (
+                      <div className="mt-4 space-y-4">
+                        {(healthPlan.reviewed_at || healthPlanReviewedBy) && (
+                          <div className="rounded-[18px] border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
+                            {healthPlan.reviewed_at && (
+                              <p>{t("profile.healthPlanReviewedAt")}: {formatDateTime(healthPlan.reviewed_at)}</p>
+                            )}
+                            {healthPlanReviewedBy && (
+                              <p className={cn(healthPlan.reviewed_at && "mt-1.5")}>
+                                {t("profile.healthPlanReviewedBy")}: {healthPlanReviewedBy}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        <div className="space-y-3">
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
                         </div>
                       </div>
-                      {sensor.battery_level != null && (
-                        <div className="mb-2">
-                          <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="flex items-center gap-1 text-muted-foreground">
-                              <Battery className="h-3 w-3" /> Battery
-                            </span>
-                            <span className={sensor.battery_level < 20 ? "text-destructive font-medium" : "text-foreground"}>
-                              {sensor.battery_level}%
-                            </span>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="border-t border-border/80 px-5 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSourceSignals")}</p>
+                        {healthPlan.generator_provider && (
+                          <p className="mt-1 text-xs font-medium text-muted-foreground">
+                            {healthPlan.generator_provider}
+                            {healthPlan.generator_model ? ` · ${healthPlan.generator_model}` : ""}
+                          </p>
+                        )}
+                      </div>
+                      <Badge variant="secondary" className="rounded-full px-3 py-1">{healthPlanSignalCount}</Badge>
+                    </div>
+                  </div>
+                  <div className="max-h-[520px] overflow-y-auto px-5 pb-3">
+                    {Array.isArray(healthPlan.source_signals_json) && healthPlan.source_signals_json.length > 0 ? (
+                      healthPlan.source_signals_json.map((signal, index) => (
+                        <div
+                          key={signal.id || `${signal.label}-${index}`}
+                          className={cn("py-3", index > 0 && "border-t border-border/70")}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold leading-6 text-foreground">{signal.label}</p>
+                            <Badge
+                              variant="outline"
+                              className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanSignalBadgeClasses(inferHealthPlanSignalStrength(signal)))}
+                            >
+                              {t(`profile.healthPlanSignal${inferHealthPlanSignalStrength(signal).charAt(0).toUpperCase()}${inferHealthPlanSignalStrength(signal).slice(1)}`)}
+                            </Badge>
                           </div>
-                          <Progress
-                            value={sensor.battery_level}
-                            className={`h-1.5 ${sensor.battery_level < 20 ? "[&>div]:bg-destructive" : sensor.battery_level < 50 ? "[&>div]:bg-accent" : "[&>div]:bg-vyva-green"}`}
-                          />
+                          {signal.detail && <p className="mt-1 text-xs leading-5 text-muted-foreground">{signal.detail}</p>}
                         </div>
+                      ))
+                    ) : (
+                      <p className="py-3 text-sm text-muted-foreground">{t("profile.healthPlanNoSourceSignals")}</p>
+                    )}
+                  </div>
+                </aside>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardHeader className="flex flex-row items-center gap-2 pb-2">
+          <FileText className="h-5 w-5 text-primary" />
+          <CardTitle className="text-base font-bold">{t("profile.activityTimeline")}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {eventTimeline.length === 0 ? (
+            <EmptyLine icon={Clock} label={t("profile.noTimeline")} />
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {eventTimeline.map((event, index) => {
+                const EventIcon = event.icon;
+                return (
+                  <div key={`${event.label}-${event.date || index}`} className="flex gap-3 rounded-xl border border-border bg-muted/25 p-3">
+                    <span
+                      className={cn(
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+                        event.tone === "red" && "bg-red-50 text-red-600",
+                        event.tone === "orange" && "bg-orange-50 text-orange-600",
+                        event.tone === "teal" && "bg-emerald-50 text-emerald-600",
+                        event.tone === "pink" && "bg-vyva-pink/10 text-vyva-pink",
+                        event.tone === "muted" && "bg-muted text-muted-foreground",
+                        event.tone === "primary" && "bg-primary/10 text-primary",
                       )}
-                      <InfoRow label="Device ID" value={sensor.device_id} />
-                      <InfoRow label="Integration" value={(sensor.integration_method || "manual").toUpperCase()} />
-                      <InfoRow label="Last Reading" value={sensor.last_reading_at ? new Date(sensor.last_reading_at).toLocaleString() : null} />
-                      {sensor.notes && (
-                        <p className="text-[10px] text-muted-foreground mt-2 italic">{sensor.notes}</p>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
+                    >
+                      <EventIcon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground">{event.label}</p>
+                      {event.detail && <p className="mt-1 text-sm leading-5 text-muted-foreground">{event.detail}</p>}
+                      {event.date && <p className="mt-1 text-xs font-medium text-muted-foreground">{formatDateTime(event.date)}</p>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {editUserOpen && <EditUserDialog open={editUserOpen} onOpenChange={setEditUserOpen} user={user} profileData={data} />}
+      {editHealthOpen && health && <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />}
+      {editMedOpen && <EditMedicationDialog open={editMedOpen} onOpenChange={setEditMedOpen} vyvaUserId={user.id} medication={editMedTarget} />}
+      {editCaregiverOpen && <EditCaregiverDialog open={editCaregiverOpen} onOpenChange={setEditCaregiverOpen} vyvaUserId={user.id} caregiver={editCaregiverTarget} />}
+      {assignProviderOpen && (
+        <AssignCareProviderDialog
+          open={assignProviderOpen}
+          onOpenChange={setAssignProviderOpen}
+          userId={user.id}
+          userName={fullName}
+        />
+      )}
+      {editCheckinOpen && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
+      {editBrainOpen && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
+      {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
+      {editHealthPlanOpen && healthPlan && (
+        <EditHealthPlanDialog
+          open={editHealthPlanOpen}
+          onOpenChange={setEditHealthPlanOpen}
+          vyvaUserId={user.id}
+          plan={healthPlan}
+        />
+      )}
+      <Dialog open={addNoteOpen} onOpenChange={(open) => !savingNote && setAddNoteOpen(open)}>
+        <DialogContent className="max-w-lg rounded-2xl border-border bg-white">
+          <DialogHeader>
+            <DialogTitle>{t("profile.addNoteTitle")}</DialogTitle>
+            <DialogDescription>{t("profile.addNoteDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="profile-note">{t("profile.note")}</Label>
+            <Textarea
+              id="profile-note"
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              placeholder={t("profile.notePlaceholder")}
+              className="min-h-32 rounded-xl"
+            />
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" className="rounded-full" disabled={savingNote} onClick={() => setAddNoteOpen(false)}>
+              {t("userForm.cancel")}
+            </Button>
+            <Button type="button" className="rounded-full" disabled={savingNote} onClick={handleSaveProfileNote}>
+              {savingNote ? t("userForm.saving") : t("userForm.save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function HealthPlanTextSection({
+  title,
+  items,
+  variant = "list",
+  signalLookup,
+  evidenceLabel,
+}: {
+  title: string;
+  items?: Array<{ id?: string; text?: string | null; source_signal_ids?: string[] }> | null;
+  variant?: "list" | "summary";
+  signalLookup?: Map<string, { id?: string; label?: string | null; detail?: string | null; strength?: string | null }>;
+  evidenceLabel?: string;
+}) {
+  const content = safeArray(items).filter((item) => item?.text);
+  return (
+    <div className="rounded-[18px] border border-border/70 bg-white/72 px-5 py-5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+      {content.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">-</p>
+      ) : variant === "summary" ? (
+        <p className="mt-3 text-sm font-medium leading-7 text-foreground">{content[0].text}</p>
+      ) : (
+        <ul className="mt-4 space-y-3">
+          {content.map((item, index) => (
+            <li key={item.id || `${title}-${index}`} className="flex gap-2.5 text-sm leading-7 text-foreground">
+              <span className="mt-[0.85rem] h-1.5 w-1.5 shrink-0 rounded-full bg-primary/80" />
+              <div className="min-w-0">
+                <span>{item.text}</span>
+                {signalLookup && safeArray(item.source_signal_ids).length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {evidenceLabel && (
+                      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{evidenceLabel}</span>
+                    )}
+                    {safeArray(item.source_signal_ids)
+                      .map((signalId) => signalLookup.get(signalId))
+                      .filter(Boolean)
+                      .slice(0, 3)
+                      .map((signal, signalIndex) => {
+                        const strength = inferHealthPlanSignalStrength(signal);
+                        return (
+                          <Badge
+                            key={signal?.id || `${title}-${index}-${signalIndex}`}
+                            variant="outline"
+                            className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanSignalBadgeClasses(strength))}
+                          >
+                            {signal?.label || "-"}
+                          </Badge>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function HealthPlanMetaChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-full border border-primary/10 bg-white/88 px-3.5 py-2 shadow-sm">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function HealthPlanChecklistItem({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2.5 text-sm leading-6 text-foreground">
+      <span className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+      </span>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function MetaItem({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon className="h-4 w-4 shrink-0 text-primary" />
+      <span className="min-w-0 truncate text-muted-foreground">
+        {label}: <span className="text-foreground">{value}</span>
+      </span>
+    </div>
+  );
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  tone = "secondary",
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  tone?: "primary" | "secondary" | "danger";
+}) {
+  return (
+    <Button
+      type="button"
+      variant={tone === "primary" ? "default" : "outline"}
+      className={cn(
+        "h-11 rounded-xl px-4 text-sm font-bold",
+        tone === "secondary" && "border-primary/20 bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary",
+        tone === "danger" && "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-700",
+      )}
+      onClick={onClick}
+    >
+      <Icon className="mr-2 h-4 w-4" />
+      {label}
+    </Button>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-border/70 py-3 last:border-0">
+      <span className="text-sm font-medium text-muted-foreground">{label}</span>
+      <span className="max-w-[180px] text-right text-sm font-bold text-foreground">{value || "—"}</span>
+    </div>
+  );
+}
+
+function InfoTile({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-muted/25 px-4 py-3">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+      <p className="mt-2 text-sm font-bold leading-5 text-foreground">{value || "-"}</p>
+    </div>
+  );
+}
+
+function AdminIconButton({
+  label,
+  onClick,
+  icon: Icon = Pencil,
+  danger = false,
+}: {
+  label: string;
+  onClick: () => void;
+  icon?: LucideIcon;
+  danger?: boolean;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className={cn("ml-auto h-8 w-8 rounded-full", danger ? "text-red-600 hover:bg-red-50 hover:text-red-700" : "text-muted-foreground hover:bg-primary/10 hover:text-primary")}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
+      <Icon className="h-4 w-4" />
+    </Button>
+  );
+}
+
+function ChipList({ items, emptyLabel, tone }: { items: string[]; emptyLabel: string; tone: "pink" | "primary" }) {
+  if (items.length === 0) return <p className="text-sm text-muted-foreground">{emptyLabel}</p>;
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {items.map((item) => (
+        <Badge
+          key={item}
+          className={cn(
+            "rounded-full px-3 py-1 text-xs font-semibold",
+            tone === "pink" ? "bg-vyva-pink/10 text-vyva-pink" : "bg-primary/10 text-primary",
+          )}
+        >
+          {item}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
+function EmptyLine({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-4 text-sm font-medium text-muted-foreground">
+      <Icon className="h-4 w-4" />
+      {label}
+    </div>
+  );
+}
+
+function ProviderHighlight({
+  emptyLabel,
+  label,
+  provider,
+}: {
+  emptyLabel: string;
+  label: string;
+  provider?: OperationalCareProviderAssignment | null;
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/25 p-3">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
+      {provider ? (
+        <div className="mt-2">
+          <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+          <p className="mt-0.5 text-xs font-semibold text-muted-foreground">{provider.phone || t("profile.noPhone")}</p>
+        </div>
+      ) : (
+        <p className="mt-2 text-sm font-medium text-muted-foreground">{emptyLabel}</p>
+      )}
+    </div>
+  );
+}
+
+function ProviderGroup({
+  title,
+  providers,
+  emptyLabel,
+  canAssignProviders,
+  showAdminControls,
+  onEditCaregiver,
+  onUnassign,
+}: {
+  title: string;
+  providers: OperationalCareProviderAssignment[];
+  emptyLabel: string;
+  canAssignProviders: boolean;
+  showAdminControls: boolean;
+  onEditCaregiver?: (provider: OperationalCareProviderAssignment) => void;
+  onUnassign: (assignmentId: string) => void;
+}) {
+  const { t } = useLanguage();
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{title}</p>
+      {providers.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-muted/20 px-3 py-4 text-sm font-medium text-muted-foreground">
+          {emptyLabel}
+        </div>
+      ) : (
+        providers.map((provider) => (
+          <div key={provider.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-muted/25 p-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-semibold text-foreground">{provider.display_name || t("careProviders.unknown")}</p>
+                <Badge variant={provider.is_primary ? "default" : "secondary"} className="rounded-full text-[11px]">
+                  {provider.is_primary ? t("careProviders.primary") : t(providerTypeKey(provider.provider_type))}
+                </Badge>
+              </div>
+              <p className="mt-0.5 flex items-center gap-1 text-sm text-muted-foreground">
+                <Phone className="h-3.5 w-3.5" />
+                {provider.phone || t("profile.noPhone")}
+              </p>
+              {providerCoverageLabel(provider) && (
+                <p className="mt-1 text-xs font-semibold text-muted-foreground">{providerCoverageLabel(provider)}</p>
+              )}
+            </div>
+            {canAssignProviders && (
+              <div className="flex gap-1">
+                {showAdminControls && provider.provider_type === "caregiver" && onEditCaregiver && (
+                  <AdminIconButton
+                    label={t("profile.editCaregiver")}
+                    onClick={() => onEditCaregiver(provider)}
+                  />
+                )}
+                <AdminIconButton label={t("careProviders.unassign")} icon={Trash2} danger onClick={() => onUnassign(provider.id)} />
               </div>
             )}
           </div>
-        </TabsContent>
-
-        {/* ALERTS TAB */}
-        <TabsContent value="alerts">
-          <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="font-display text-base">Alerts (Last 7 Days)</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {alertsTrend.some(d => d.count > 0) ? (
-                    <ResponsiveContainer width="100%" height={200}>
-                      <LineChart data={alertsTrend}>
-                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                        <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                        <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                        <Tooltip contentStyle={{ borderRadius: "0.5rem", border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} />
-                        <Line type="monotone" dataKey="count" stroke="hsl(0 84% 60%)" strokeWidth={2} dot={{ fill: "hsl(0 84% 60%)" }} name="Alerts" />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">No alerts recently</div>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="font-display text-base">Severity Breakdown</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {alertSeverityData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={200}>
-                      <PieChart>
-                        <Pie data={alertSeverityData} cx="50%" cy="50%" innerRadius={45} outerRadius={70} paddingAngle={4} dataKey="value">
-                          {alertSeverityData.map((entry, i) => (
-                            <Cell key={i} fill={entry.fill} />
-                          ))}
-                        </Pie>
-                        <Tooltip contentStyle={{ borderRadius: "0.5rem", border: "1px solid hsl(var(--border))", background: "hsl(var(--card))" }} />
-                        <Legend />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <div className="flex items-center justify-center h-[200px] text-muted-foreground text-sm">No alerts recorded</div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="font-display text-base">All Alerts ({alerts.length})</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {alerts.length === 0 ? (
-                  <div className="text-center py-6">
-                    <ShieldCheck className="mx-auto h-10 w-10 text-vyva-green mb-2" />
-                    <p className="text-muted-foreground">No alerts — all clear!</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {alerts.map((alert: any) => (
-                      <div key={alert.id} className="flex items-center justify-between rounded-lg border border-border/50 p-3">
-                        <div className="flex items-center gap-3">
-                          <Badge className={alert.severity === "critical" ? "bg-destructive text-destructive-foreground" : alert.severity === "warning" ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"}>
-                            {alert.severity}
-                          </Badge>
-                          <div>
-                            <p className="text-sm font-medium">{alert.alert_type.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}</p>
-                            {alert.message && <p className="text-xs text-muted-foreground">{alert.message}</p>}
-                            {alert.vyva_user_sensors?.device_name && (
-                              <p className="text-xs text-muted-foreground">{alert.vyva_user_sensors.device_name} · <SensorTypeLabel type={alert.vyva_user_sensors.sensor_type} /></p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-xs text-muted-foreground">{new Date(alert.created_at).toLocaleString()}</p>
-                          {alert.resolved_at ? (
-                            <Badge variant="secondary" className="text-[10px] mt-0.5">Resolved</Badge>
-                          ) : (
-                            <Badge variant="destructive" className="text-[10px] mt-0.5">Active</Badge>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        {/* TIMELINE TAB */}
-        <TabsContent value="timeline">
-          <Card>
-            <CardHeader className="flex flex-row items-center gap-2 pb-3">
-              <Clock className="h-5 w-5 text-vyva-purple" />
-              <CardTitle className="font-display text-base">Activity Timeline</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {(() => {
-                const events: { date: string; label: string; type: string }[] = [];
-                events.push({ date: user.created_at, label: "User onboarded", type: "onboarding" });
-                if (consent) events.push({ date: consent.created_at, label: "Consent recorded", type: "consent" });
-                if (checkins) events.push({ date: checkins.created_at, label: `Check-in ${checkins.enabled ? "enabled" : "configured"}`, type: "checkin" });
-                if (brainCoach) events.push({ date: brainCoach.created_at, label: `Brain coach ${brainCoach.enabled ? "enabled" : "configured"}`, type: "brain" });
-                medications.forEach((med: any) => {
-                  events.push({ date: med.created_at, label: `Medication added: ${med.medication_name}`, type: "medication" });
-                });
-                sensors.forEach((s: any) => {
-                  events.push({ date: s.created_at, label: `Sensor assigned: ${s.device_name || s.device_id}`, type: "sensor" });
-                });
-                alerts.forEach((a: any) => {
-                  events.push({ date: a.created_at, label: `Alert: ${a.alert_type.replace(/_/g, " ")}`, type: a.severity === "critical" ? "critical" : "alert" });
-                });
-                events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-                if (events.length === 0) {
-                  return <p className="text-sm text-muted-foreground text-center py-4">No activity recorded</p>;
-                }
-
-                const typeColors: Record<string, string> = {
-                  onboarding: "bg-vyva-purple",
-                  consent: "bg-vyva-green",
-                  checkin: "bg-vyva-teal",
-                  brain: "bg-primary",
-                  medication: "bg-accent",
-                  sensor: "bg-secondary",
-                  alert: "bg-accent",
-                  critical: "bg-destructive",
-                };
-
-                const typeIcons: Record<string, React.ReactNode> = {
-                  onboarding: <User className="h-3 w-3" />,
-                  consent: <ShieldCheck className="h-3 w-3" />,
-                  checkin: <PhoneCall className="h-3 w-3" />,
-                  brain: <Brain className="h-3 w-3" />,
-                  medication: <Pill className="h-3 w-3" />,
-                  sensor: <Activity className="h-3 w-3" />,
-                  alert: <AlertTriangle className="h-3 w-3" />,
-                  critical: <Zap className="h-3 w-3" />,
-                };
-
-                return (
-                  <div className="space-y-0 max-h-[500px] overflow-y-auto">
-                    {events.map((event, i) => (
-                      <div key={i} className="flex gap-4 py-3">
-                        <div className="flex flex-col items-center">
-                          <div className={`h-6 w-6 rounded-full ${typeColors[event.type] || "bg-muted-foreground"} flex items-center justify-center text-white`}>
-                            {typeIcons[event.type]}
-                          </div>
-                          {i < events.length - 1 && <div className="w-px flex-1 bg-border mt-1" />}
-                        </div>
-                        <div className="flex-1 pb-2">
-                          <p className="text-sm font-medium text-foreground">{event.label}</p>
-                          <p className="text-xs text-muted-foreground">{new Date(event.date).toLocaleString()}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      {/* Edit Dialogs */}
-      {editUserOpen && (
-        <EditUserDialog open={editUserOpen} onOpenChange={setEditUserOpen} user={user} />
+        ))
       )}
-      {editHealthOpen && health && (
-        <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />
+    </div>
+  );
+}
+
+function ServiceSummary({
+  enabled,
+  frequency,
+  isPaused,
+  onEdit,
+  pauseSource,
+  pausedUntil,
+  preferredTime,
+  title,
+}: {
+  enabled: boolean;
+  frequency?: string | null;
+  isPaused?: boolean;
+  onEdit?: () => void;
+  pauseSource?: string | null;
+  pausedUntil?: string | null;
+  preferredTime?: string | null;
+  title: string;
+}) {
+  const { t } = useLanguage();
+  const paused = Boolean(isPaused || (pausedUntil && new Date(pausedUntil).getTime() > Date.now()));
+  const until = pausedUntil
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(pausedUntil))
+    : null;
+  const sourceKey = pauseSource ? `routineCalls.pauseSource.${pauseSource}` : "";
+  const sourceLabel = sourceKey ? t(sourceKey) : "";
+  const source = sourceLabel && sourceLabel !== sourceKey ? sourceLabel : "";
+  const explanation = until
+    ? t("routineCalls.pauseExplanation").replace("{date}", until)
+    : t("routineCalls.pauseExplanationOpen");
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/25 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-semibold text-foreground">{title}</p>
+        <Badge variant={paused ? "secondary" : enabled ? "default" : "secondary"} className="rounded-full text-[11px]">
+          {paused ? t("routineCalls.pausedLabel") : enabled ? t("profile.active") : t("profile.inactive")}
+        </Badge>
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">
+        {frequency || t("profile.frequencyUnknown")} · {preferredTime || t("profile.timeUnknown")}
+      </p>
+      {paused && (
+        <p className="mt-2 text-xs font-medium text-amber-700">
+          {source ? `${source} · ${explanation}` : explanation}
+        </p>
       )}
-      {editMedOpen && (
-        <EditMedicationDialog open={editMedOpen} onOpenChange={setEditMedOpen} vyvaUserId={user.id} medication={editMedTarget} />
-      )}
-      {editCaregiverOpen && (
-        <EditCaregiverDialog open={editCaregiverOpen} onOpenChange={setEditCaregiverOpen} vyvaUserId={user.id} caregiver={editCaregiverTarget} />
-      )}
-      {editCheckinOpen && checkins && (
-        <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" table="vyva_user_checkins" />
-      )}
-      {editBrainOpen && brainCoach && (
-        <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" table="vyva_user_brain_coach" />
-      )}
-      {editSensorOpen && (
-        <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />
+      {onEdit && (
+        <Button variant="ghost" size="sm" className="mt-2 h-8 rounded-full px-3 text-xs text-primary hover:bg-primary/10 hover:text-primary" onClick={onEdit}>
+          <Pencil className="mr-1.5 h-3.5 w-3.5" />
+          {t("profile.edit")}
+        </Button>
       )}
     </div>
   );

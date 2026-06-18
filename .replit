@@ -1,0 +1,15 @@
+modules = ["nodejs-20"]
+hidden = [".config", "node_modules", "dist"]
+
+run = "npm run dev"
+
+[nix]
+channel = "stable-24_05"
+
+[deployment]
+deploymentTarget = "autoscale"
+build = ["sh", "-c", "npm ci && npm run build"]
+run = ["sh", "-c", "npm run start"]
+
+[agent]
+expertMode = true

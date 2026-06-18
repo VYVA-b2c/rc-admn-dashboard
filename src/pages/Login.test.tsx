@@ -1,0 +1,131 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import Login from "@/pages/Login";
+import { toast } from "sonner";
+
+const authMocks = vi.hoisted(() => ({
+  signInWithMagicLink: vi.fn(),
+}));
+
+vi.mock("@/assets/drk-logo.svg", () => ({
+  default: "drk-logo.svg",
+}));
+
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({
+    session: null,
+    signInWithMagicLink: authMocks.signInWithMagicLink,
+  }),
+}));
+
+vi.mock("@/contexts/LanguageContext", () => ({
+  useLanguage: () => ({
+    language: "en",
+    t: (key: string) =>
+      ({
+        "common.poweredByVyva": "Powered by VYVA",
+        "login.adminAccessHint": "Platform admins and approved console team members only.",
+        "login.adminEmail": "Admin email",
+        "login.adminSignIn": "Admin sign in",
+        "login.enterCredentials": "Enter your credentials to access the dashboard.",
+        "login.enterEmailForMagicLink": "Enter your email and we will send you a secure sign-in link.",
+        "login.enterYourEmail": "Please enter your email address",
+        "login.magicLinkSent": "Magic link sent",
+        "login.magicLinkAlreadyRequestedDesc": "A recent link may already be on its way. Check your inbox before requesting another one.",
+        "login.magicLinkSentDesc": "Check your inbox and use the secure link to sign in.",
+        "login.tooManyAttempts": "Try again in one minute",
+        "login.tooManyAttemptsDesc": "No new email was sent. Please wait one minute before requesting another sign-in link.",
+        "login.sendMagicLink": "Send magic link",
+        "login.sendingMagicLink": "Sending magic link...",
+        "login.subtitle": "VYVA x Red Cross operations console",
+      })[key] || key,
+  }),
+}));
+
+vi.mock("@/lib/authMode", () => ({
+  authBypassEnabled: false,
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+function renderLogin() {
+  return render(
+    <MemoryRouter>
+      <Login />
+    </MemoryRouter>,
+  );
+}
+
+describe("Login", () => {
+  beforeEach(() => {
+    authMocks.signInWithMagicLink.mockReset();
+    authMocks.signInWithMagicLink.mockResolvedValue({ error: null });
+    vi.clearAllMocks();
+  });
+
+  it("shows email-only magic-link sign-in without OAuth or password controls", () => {
+    renderLogin();
+
+    expect(screen.getByLabelText(/admin email/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /send magic link/i })).toBeTruthy();
+    expect(screen.queryByText(/continue with google/i)).toBeNull();
+    expect(screen.queryByText(/continue with microsoft/i)).toBeNull();
+    expect(screen.queryByLabelText(/password/i)).toBeNull();
+    expect(screen.queryByLabelText(/language selector/i)).toBeNull();
+  });
+
+  it("requests a magic link for the entered admin email", async () => {
+    renderLogin();
+
+    fireEvent.change(screen.getByLabelText(/admin email/i), {
+      target: { value: "karim.assad@mokadigital.net" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(authMocks.signInWithMagicLink).toHaveBeenCalledWith("karim.assad@mokadigital.net", "/");
+    });
+  });
+
+  it("shows a clear wait message when the provider delays a magic link", async () => {
+    authMocks.signInWithMagicLink.mockResolvedValue({ error: null, delayed: true });
+    renderLogin();
+
+    fireEvent.change(screen.getByLabelText(/admin email/i), {
+      target: { value: "karim.assad@mokadigital.net" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Try again in one minute", {
+        description: "No new email was sent. Please wait one minute before requesting another sign-in link.",
+      });
+    });
+  });
+
+  it("does not pretend an email was sent when the provider asks the user to wait", async () => {
+    authMocks.signInWithMagicLink.mockResolvedValue({
+      error: new Error("For security purposes, please wait before requesting another link."),
+    });
+    renderLogin();
+
+    fireEvent.change(screen.getByLabelText(/admin email/i), {
+      target: { value: "karim.assad@mokadigital.net" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send magic link/i }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Try again in one minute", {
+        description: "No new email was sent. Please wait one minute before requesting another sign-in link.",
+      });
+    });
+    expect(toast.success).not.toHaveBeenCalledWith("Magic link sent", expect.anything());
+  });
+});

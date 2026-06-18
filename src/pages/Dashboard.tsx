@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { useLocation } from "react-router-dom";
 import {
   AlertTriangle,
   Building2,
@@ -24,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { GISMap } from "@/components/dashboard/GISMap";
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getRiskBand } from "@/lib/riskScore";
+import { deriveRiskQueueRows } from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 import { useGISData, type ActiveAlert, type GISUser } from "@/hooks/useGISData";
 
@@ -196,6 +197,7 @@ function actionLabelKey(action: QueueTask["action"]) {
 export default function Dashboard() {
   const { data, isLoading } = useGISData();
   const { language, t } = useLanguage();
+  const location = useLocation();
   const [interventionUser, setInterventionUser] = useState<GISUser | null>(null);
   const [interventionOpen, setInterventionOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -249,6 +251,16 @@ export default function Dashboard() {
       });
   }, [alerts, users, t]);
 
+  const operationalRows = useMemo(() => deriveRiskQueueRows(users), [users]);
+  const urgentUserIds = useMemo(
+    () => new Set(operationalRows.filter((row) => row.status === "urgent").map((row) => row.id)),
+    [operationalRows],
+  );
+  const reviewUserIds = useMemo(
+    () => new Set(operationalRows.filter((row) => row.status === "review").map((row) => row.id)),
+    [operationalRows],
+  );
+
   const filteredTasks = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     return queueTasks.filter((task) => {
@@ -278,23 +290,27 @@ export default function Dashboard() {
         `${user.first_name} ${user.last_name}`.toLowerCase().includes(q) ||
         (user.city?.toLowerCase().includes(q) ?? false);
       if (!matchesSearch) return false;
-      if (activeFilter === "urgent") return user.criticalAlerts > 0 || getRiskBand(user.riskScore) === "high";
-      if (activeFilter === "review") return user.activeAlerts > 0 && user.criticalAlerts === 0;
+      if (activeFilter === "urgent") return urgentUserIds.has(user.id);
+      if (activeFilter === "review") return reviewUserIds.has(user.id);
       if (activeFilter === "medication") return user.missedMeds7d > 0;
       return true;
     });
-  }, [activeFilter, searchQuery, users]);
+  }, [activeFilter, reviewUserIds, searchQuery, urgentUserIds, users]);
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
     setInterventionOpen(true);
   }, []);
 
-  const urgentCount = data?.criticalAlertCount ?? filteredTasks.filter((task) => task.status === "urgent").length;
-  const reviewCount = Math.max((data?.activeAlertCount ?? 0) - urgentCount, 0);
+  const urgentCount = operationalRows.filter((row) => row.status === "urgent").length;
+  const reviewCount = operationalRows.filter((row) => row.status === "review").length;
   const missedMeds = users.reduce((sum, user) => sum + (user.missedMeds7d ?? 0), 0);
   const noResponseCount = alerts.filter((alert) => ["missed_checkin", "inactivity_detected"].includes(alert.alert_type)).length;
-  const checkinPercent = data?.totalUsers ? Math.round(((data.checkinsEnabled ?? 0) / data.totalUsers) * 100) : 0;
+  const weeklyCheckinsCompleted = data?.checkinsCompletedWeekly ?? 0;
+  const weeklyCheckinsExpected = data?.checkinsExpectedWeekly ?? 0;
+  const checkinPercent = weeklyCheckinsExpected
+    ? Math.round((weeklyCheckinsCompleted / weeklyCheckinsExpected) * 100)
+    : 0;
 
   const filterOptions: { id: DashboardFilter; label: string }[] = [
     { id: "urgent", label: t("dashboard.filter.urgent") },
@@ -307,6 +323,16 @@ export default function Dashboard() {
   ];
 
   const hasActiveFilters = activeFilter !== "all" || searchQuery.trim();
+
+  useEffect(() => {
+    window.requestAnimationFrame(() => {
+      if (location.pathname === "/risk-queue") {
+        document.getElementById("risk-queue")?.scrollIntoView({ block: "start" });
+      } else if (location.pathname === "/") {
+        window.scrollTo({ top: 0 });
+      }
+    });
+  }, [location.pathname]);
 
   return (
     <div className="mx-auto max-w-[1520px] space-y-5">
@@ -351,7 +377,7 @@ export default function Dashboard() {
         <MetricCard
           label={t("metric.checkins")}
           value={isLoading ? "—" : `${checkinPercent}%`}
-          detail={`${data?.checkinsEnabled ?? 0} / ${data?.totalUsers ?? 0}`}
+          detail={`${weeklyCheckinsCompleted} / ${weeklyCheckinsExpected}`}
           tone="green"
           icon={<Phone className="h-5 w-5" />}
         />
@@ -396,7 +422,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      <Card className="overflow-hidden border-border bg-white shadow-sm">
+      <Card id="risk-queue" className="scroll-mt-5 overflow-hidden border-border bg-white shadow-sm">
         <CardContent className="p-0">
           <div className="relative">
             <div className="absolute left-4 top-4 z-[5] flex max-w-[calc(100%-2rem)] flex-wrap gap-2">
@@ -517,7 +543,11 @@ export default function Dashboard() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 rounded-xl text-muted-foreground"
-                          onClick={(event) => event.stopPropagation()}
+                          aria-label={`${t("queue.action.review")} ${task.person}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (task.user) handleUserClick(task.user);
+                          }}
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>

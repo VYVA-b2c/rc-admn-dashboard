@@ -1,20 +1,57 @@
 import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
 import { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase, supabaseConfigured } from "@/integrations/supabase/client";
+import { AUTH_SESSION_EXPIRED_EVENT, BASE_URL } from "@/lib/apiClient";
+import { clearBackendSession, getBackendSession, setBackendSession } from "@/lib/backendSession";
 
 interface AuthContextType {
   session: Session | null;
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signInWithMagicLink: (email: string) => Promise<{ error: Error | null }>;
-  signInWithOAuth: (provider: "google" | "azure") => Promise<{ error: Error | null }>;
+  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null; delayed?: boolean }>;
+  signInWithConsoleToken: (token: string) => Promise<{ error: Error | null; next?: string }>;
+  signInWithOAuth: (provider: "google" | "azure", redirectPath?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error: Error | null }>;
   updatePassword: (password: string) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+
+function safeRedirectPath(path = "/") {
+  if (!path.startsWith("/") || path.startsWith("//")) return "/";
+  return path;
+}
+
+function authRedirectUrl(path?: string) {
+  return `${window.location.origin}${safeRedirectPath(path)}`;
+}
+
+function hasPendingAuthCallback() {
+  if (typeof window === "undefined") return false;
+
+  const url = new URL(window.location.href);
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+
+  return (
+    url.searchParams.has("code") ||
+    url.searchParams.has("token_hash") ||
+    url.searchParams.has("type") ||
+    hashParams.has("access_token") ||
+    hashParams.has("refresh_token") ||
+    hashParams.has("type")
+  );
+}
+
+async function clearLocalSession() {
+  clearBackendSession();
+  try {
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {
+    // Ignore cleanup failures during auth recovery.
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
@@ -31,48 +68,183 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(s?.user ?? null);
     };
 
+    const finalizeSignedOutState = async () => {
+      await clearLocalSession();
+      applySession(null);
+      setLoading(false);
+    };
+
+    const validateSession = async (candidate: Session | null) => {
+      if (!candidate?.access_token) return null;
+      const { data, error } = await supabase.auth.getUser(candidate.access_token);
+      if (error || !data.user) return null;
+      return {
+        ...candidate,
+        user: data.user,
+      } satisfies Session;
+    };
+
+    const restoreBackendSession = async () => {
+      const backendSession = getBackendSession();
+      if (!backendSession?.access_token) return false;
+
+      const response = await fetch(`${BASE_URL}/api/v1/me`, {
+        headers: {
+          Authorization: `Bearer ${backendSession.access_token}`,
+          "ngrok-skip-browser-warning": "true",
+        },
+      }).catch(() => null);
+
+      if (!response?.ok) {
+        clearBackendSession();
+        return false;
+      }
+
+      applySession(backendSession);
+      setLoading(false);
+      return true;
+    };
+
+    if (!supabaseConfigured) {
+      void restoreBackendSession().then((restored) => {
+        if (!restored) {
+          applySession(null);
+          setLoading(false);
+        }
+      });
+      return;
+    }
+
     // Listen first, then restore
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
-      console.log("[Auth] onAuthStateChange:", event);
+      if (event === "TOKEN_REFRESH_FAILED") {
+        void finalizeSignedOutState();
+        return;
+      }
       applySession(s);
       setLoading(false);
     });
 
-    supabase.auth.getSession().then(({ data: { session: s }, error }) => {
-      if (error) {
-        console.warn("[Auth] getSession error:", error.message);
-        applySession(null);
-      } else {
-        console.log("[Auth] getSession restored:", s ? "has session" : "no session");
-        applySession(s);
-      }
-      setLoading(false);
-    });
+    const restoreSession = async () => {
+      if (await restoreBackendSession()) return;
 
-    return () => subscription.unsubscribe();
+      const pendingCallback = hasPendingAuthCallback();
+      const attempts = pendingCallback ? 8 : 1;
+
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const { data: { session: s }, error } = await supabase.auth.getSession();
+
+        if (error) {
+          await finalizeSignedOutState();
+          return;
+        }
+
+        if (s) {
+          const validatedSession = await validateSession(s);
+          if (validatedSession) {
+            applySession(validatedSession);
+            setLoading(false);
+            return;
+          }
+
+          const { data: refreshed } = await supabase.auth.refreshSession();
+          const refreshedSession = await validateSession(refreshed.session ?? null);
+          if (refreshedSession) {
+            applySession(refreshedSession);
+            setLoading(false);
+            return;
+          }
+        }
+
+        if (!pendingCallback) break;
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+      }
+
+      await finalizeSignedOutState();
+    };
+
+    const handleSessionExpired = () => {
+      clearBackendSession();
+      applySession(null);
+      setLoading(false);
+    };
+
+    if (typeof window !== "undefined") {
+      window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+    }
+
+    void restoreSession();
+
+    return () => {
+      subscription.unsubscribe();
+      if (typeof window !== "undefined") {
+        window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, handleSessionExpired);
+      }
+    };
   }, []);
 
   const signIn = async (email: string, password: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error as Error | null };
   };
 
-  const signInWithMagicLink = async (email: string) => {
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-        shouldCreateUser: false,
-      },
-    });
-    return { error: error as Error | null };
+  const signInWithMagicLink = async (email: string, redirectPath?: string) => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/auth/magic-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          redirectPath: safeRedirectPath(redirectPath),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        return { error: new Error(body?.error || "Sign-in email could not be sent.") };
+      }
+      const body = await response.json().catch(() => null);
+      return { error: null, delayed: Boolean(body?.delayed) };
+    } catch {
+      return { error: new Error("Sign-in email could not be sent.") };
+    }
   };
 
-  const signInWithOAuth = async (provider: "google" | "azure") => {
+  const signInWithConsoleToken = async (token: string) => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/auth/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || !body?.session?.access_token) {
+        return { error: new Error(body?.error || "Sign-in link is invalid or expired.") };
+      }
+
+      const backendSession = {
+        access_token: body.session.access_token,
+        token_type: body.session.token_type || "bearer",
+        expires_at: body.session.expires_at,
+        expires_in: body.session.expires_at ? Math.max(0, body.session.expires_at - Math.floor(Date.now() / 1000)) : 0,
+        refresh_token: "",
+        user: body.session.user,
+      } as Session;
+      setBackendSession(backendSession);
+      setSession(backendSession);
+      setUser(backendSession.user);
+      return { error: null, next: safeRedirectPath(body.next) };
+    } catch {
+      return { error: new Error("Sign-in link could not be verified.") };
+    }
+  };
+
+  const signInWithOAuth = async (provider: "google" | "azure", redirectPath?: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: authRedirectUrl(redirectPath),
         scopes: provider === "azure" ? "email openid profile" : undefined,
       },
     });
@@ -80,12 +252,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut({ scope: "local" });
+    clearBackendSession();
+    if (supabaseConfigured) await supabase.auth.signOut({ scope: "local" });
     setSession(null);
     setUser(null);
   };
 
   const resetPassword = async (email: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
     });
@@ -93,6 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const updatePassword = async (password: string) => {
+    if (!supabaseConfigured) return { error: new Error("Authentication provider is not configured.") };
     const { error } = await supabase.auth.updateUser({ password });
     return { error: error as Error | null };
   };
@@ -105,6 +280,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         signIn,
         signInWithMagicLink,
+        signInWithConsoleToken,
         signInWithOAuth,
         signOut,
         resetPassword,

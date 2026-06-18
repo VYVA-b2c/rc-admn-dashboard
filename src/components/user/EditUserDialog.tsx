@@ -1,155 +1,846 @@
-import { useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { HeartPulse, MapPin, PhoneCall, Pill, Plus, ShieldCheck, UserRound, X, type LucideIcon } from "lucide-react";
+
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BASE_URL } from "@/lib/apiClient";
-import { useQueryClient } from "@tanstack/react-query";
+import { useLanguage } from "@/contexts/LanguageContext";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiClient";
+import type { OperationalProfileResponse, OperationalProfileUser } from "@/lib/operationalDemoData";
+import {
+  buildUserIntakePayload,
+  defaultServiceIntake,
+  emptyCaregiverIntake,
+  emptyMedicationIntake,
+  hasMedicationDetail,
+  intakeCadenceOptions,
+  isValidIntakePhone,
+  isValidIntakeTime,
+  splitIntakeList,
+  type CaregiverIntake,
+  type MedicationIntake,
+  type ServiceIntake,
+} from "@/lib/userIntake";
+import { cn } from "@/lib/utils";
+
+type SavedUserResponse = {
+  user: OperationalProfileUser;
+};
 
 interface EditUserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  user: any;
+  onSaved?: (user: OperationalProfileUser) => void;
+  profileData?: OperationalProfileResponse | null;
+  user?: Partial<OperationalProfileUser> | null;
 }
 
-export function EditUserDialog({ open, onOpenChange, user }: EditUserDialogProps) {
+function dateInputValue(value?: string | null) {
+  if (!value) return "";
+  return String(value).slice(0, 10);
+}
+
+function userFormState(user?: Partial<OperationalProfileUser> | null, defaultLanguage = "de") {
+  return {
+    city: String(user?.city ?? ""),
+    date_of_birth: dateInputValue(user?.date_of_birth),
+    emergency_notes: String(user?.emergency_notes ?? ""),
+    first_name: String(user?.first_name ?? ""),
+    gender: String(user?.gender ?? ""),
+    house_number: String(user?.house_number ?? ""),
+    language: String(user?.language ?? defaultLanguage),
+    last_name: String(user?.last_name ?? ""),
+    living_context: String(user?.living_context ?? ""),
+    phone: String(user?.phone ?? ""),
+    post_code: String(user?.post_code ?? ""),
+    street: String(user?.street ?? ""),
+  };
+}
+
+function medicationFormState(profileData?: OperationalProfileResponse | null) {
+  const medications = profileData?.medications ?? [];
+  if (!medications.length) return [emptyMedicationIntake()];
+
+  return medications.map((medication) => ({
+    dosage: medication.dosage || "",
+    frequency: medication.frequency || "",
+    medication_name: medication.medication_name || "",
+    purpose: medication.purpose || "",
+    reminders_enabled: medication.reminders_enabled ?? true,
+    schedule_times: Array.isArray(medication.schedule_times) ? medication.schedule_times.join(", ") : "",
+  }));
+}
+
+function caregiverFormState(profileData?: OperationalProfileResponse | null) {
+  const caregivers = profileData?.caregivers ?? [];
+  if (!caregivers.length) return [emptyCaregiverIntake()];
+
+  return caregivers.slice(0, 1).map((caregiver) => ({
+    caretaker_name: caregiver.caretaker_name || "",
+    caretaker_phone: caregiver.caretaker_phone || "",
+  }));
+}
+
+export function EditUserDialog({ open, onOpenChange, onSaved, profileData, user }: EditUserDialogProps) {
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
+  const { data: currentContext } = useCurrentUserContext();
+  const isEditing = Boolean(user?.id);
+  const defaultLanguage = currentContext?.user?.organization?.defaultLanguage || "de";
+  const requiredLabel = t("userForm.required");
+
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    first_name: user.first_name || "",
-    last_name: user.last_name || "",
-    phone: user.phone || "",
-    date_of_birth: user.date_of_birth || "",
-    gender: user.gender || "",
-    language: user.language || "",
-    city: user.city || "",
-    street: user.street || "",
-    house_number: user.house_number || "",
-    post_code: user.post_code || "",
-    emergency_notes: user.emergency_notes || "",
-  });
+  const [form, setForm] = useState(() => userFormState(user, defaultLanguage));
+  const [healthConditions, setHealthConditions] = useState<string[]>([]);
+  const [mobilityNeeds, setMobilityNeeds] = useState<string[]>([]);
+  const [newCondition, setNewCondition] = useState("");
+  const [newMobilityNeed, setNewMobilityNeed] = useState("");
+  const [medications, setMedications] = useState<MedicationIntake[]>([emptyMedicationIntake()]);
+  const [caregivers, setCaregivers] = useState<CaregiverIntake[]>([emptyCaregiverIntake()]);
+  const [userConsent, setUserConsent] = useState(false);
+  const [caregiverConsent, setCaregiverConsent] = useState(false);
+  const [checkins, setCheckins] = useState<ServiceIntake>(defaultServiceIntake(null));
+  const [brainCoach, setBrainCoach] = useState<ServiceIntake>(defaultServiceIntake(null, "weekly"));
+
+  useEffect(() => {
+    if (!open) return;
+
+    setForm(userFormState(user, defaultLanguage));
+    setHealthConditions(profileData?.health?.health_conditions ?? []);
+    setMobilityNeeds(profileData?.health?.mobility_needs ?? []);
+    setNewCondition("");
+    setNewMobilityNeed("");
+    setMedications(medicationFormState(profileData));
+    setCaregivers(caregiverFormState(profileData));
+    setUserConsent(Boolean(profileData?.consent?.consent_given));
+    setCaregiverConsent(Boolean(profileData?.consent?.caretaker_consent));
+    setCheckins(defaultServiceIntake(profileData?.checkins ?? null, "weekly"));
+    setBrainCoach(defaultServiceIntake(profileData?.brainCoach ?? null, "weekly"));
+  }, [defaultLanguage, open, profileData, user]);
+
+  const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const updateMedication = (index: number, key: keyof MedicationIntake, value: string | boolean) =>
+    setMedications((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
+  const updateCaregiver = (index: number, key: keyof CaregiverIntake, value: string) =>
+    setCaregivers((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)));
+  const updateService = (service: "checkins" | "brainCoach", key: keyof ServiceIntake, value: string | boolean) => {
+    const setter = service === "checkins" ? setCheckins : setBrainCoach;
+    setter((current) => ({ ...current, [key]: value }));
+  };
+
+  const addTag = (value: string, items: string[], setItems: (items: string[]) => void, setValue: (value: string) => void) => {
+    const trimmed = value.trim();
+    if (!trimmed || items.includes(trimmed)) return;
+    setItems([...items, trimmed]);
+    setValue("");
+  };
+
+  const removeTag = (index: number, items: string[], setItems: (items: string[]) => void) => {
+    setItems(items.filter((_, itemIndex) => itemIndex !== index));
+  };
 
   const handleSave = async () => {
     if (!form.first_name.trim() || !form.last_name.trim()) {
-      toast({ title: "First and last name are required", variant: "destructive" });
+      toast({ title: t("userForm.validation.nameRequired"), variant: "destructive" });
       return;
     }
+
+    if (form.date_of_birth && !/^\d{4}-\d{2}-\d{2}$/.test(form.date_of_birth)) {
+      toast({ title: t("userForm.validation.date"), variant: "destructive" });
+      return;
+    }
+
+    if (!isValidIntakePhone(form.phone)) {
+      toast({ title: t("userForm.validation.phone"), variant: "destructive" });
+      return;
+    }
+
+    if (caregivers.some((caregiver) => caregiver.caretaker_phone.trim() && !isValidIntakePhone(caregiver.caretaker_phone))) {
+      toast({ title: t("userForm.validation.caregiverPhone"), variant: "destructive" });
+      return;
+    }
+
+    if (medications.some((medication) => hasMedicationDetail(medication) && !medication.medication_name.trim())) {
+      toast({ title: t("userForm.validation.medicationName"), variant: "destructive" });
+      return;
+    }
+
+    if (medications.some((medication) => splitIntakeList(medication.schedule_times).some((time) => !isValidIntakeTime(time)))) {
+      toast({ title: t("userForm.validation.medicationTimes"), variant: "destructive" });
+      return;
+    }
+
+    if ([checkins, brainCoach].some((service) => service.preferred_time && !isValidIntakeTime(service.preferred_time))) {
+      toast({ title: t("userForm.validation.preferredTime"), variant: "destructive" });
+      return;
+    }
+
     setSaving(true);
     try {
-      const res = await fetch(`${BASE_URL}/api/v1/user-dashboard/users/${user.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "ngrok-skip-browser-warning": "true" },
-        body: JSON.stringify({
-          first_name: form.first_name.trim(),
-          last_name: form.last_name.trim(),
-          phone: form.phone.trim() || null,
-          date_of_birth: form.date_of_birth || null,
-          gender: form.gender || null,
-          language: form.language || null,
-          city: form.city.trim() || null,
-          street: form.street.trim() || null,
-          house_number: form.house_number.trim() || null,
-          post_code: form.post_code.trim() || null,
-          emergency_notes: form.emergency_notes.trim() || null,
-        }),
+      const payload = buildUserIntakePayload({
+        identity: form,
+        brainCoach,
+        caregiverConsent,
+        caregiverSource: "manual",
+        caregivers,
+        checkins,
+        defaultLanguage,
+        healthConditions,
+        includeEmptyRelated: true,
+        medications,
+        mobilityNeeds,
+        userConsent,
       });
-      if (!res.ok) throw new Error(`Error ${res.status}: ${res.statusText}`);
-      toast({ title: "User updated" });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", String(user.id)] });
+
+      const response = await apiFetch<SavedUserResponse>(
+        isEditing ? `/api/v1/user-dashboard/users/${user!.id}` : "/api/v1/user-dashboard/users",
+        {
+          method: isEditing ? "PATCH" : "POST",
+          body: JSON.stringify(payload),
+        },
+      );
+
+      toast({ title: t(isEditing ? "userForm.careProfileSaved" : "userForm.careProfileCreated") });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["gis-data"] }),
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] }),
+        queryClient.invalidateQueries({ queryKey: ["checkin-monitoring"] }),
+      ]);
+      onSaved?.(response.user);
       onOpenChange(false);
-    } catch (err: any) {
-      toast({ title: "Error saving", description: err.message, variant: "destructive" });
+    } catch {
+      toast({
+        title: t("userForm.careProfileSaveFailed"),
+        variant: "destructive",
+      });
     } finally {
       setSaving(false);
     }
   };
 
-  const update = (key: string, value: string) => setForm(f => ({ ...f, [key]: value }));
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Edit Personal Info</DialogTitle>
+      <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden rounded-[1.75rem] border-border bg-[#f7f9ff] p-0 shadow-2xl">
+        <DialogHeader className="shrink-0 border-b border-border bg-white px-7 py-6 pr-12 text-left">
+          <Badge className="mb-2 w-fit rounded-full bg-primary/10 px-3 py-1 text-xs font-bold uppercase tracking-[0.14em] text-primary hover:bg-primary/10">
+            {t("userForm.careProfileBadge")}
+          </Badge>
+          <DialogTitle className="text-2xl font-bold tracking-tight text-foreground">
+            {t(isEditing ? "userForm.editTitle" : "userForm.addTitle")}
+          </DialogTitle>
+          <DialogDescription className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            {t(isEditing ? "userForm.editDescription" : "userForm.addDescription")}
+          </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>First Name *</Label>
-              <Input value={form.first_name} onChange={e => update("first_name", e.target.value)} />
+
+        <div className="grid min-h-0 flex-1 gap-5 overflow-y-auto px-7 py-5">
+          <Alert className="border-primary/20 bg-white text-foreground">
+            <ShieldCheck className="h-4 w-4 text-primary" />
+            <AlertTitle>{t("userForm.requiredFieldsTitle")}</AlertTitle>
+            <AlertDescription>{t("userForm.requiredFieldsDescription")}</AlertDescription>
+          </Alert>
+
+          <SectionPanel
+            description={t("userForm.personSectionDescription")}
+            icon={UserRound}
+            title={t("userForm.personSectionTitle")}
+          >
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label={t("userForm.firstName")} htmlFor="user-first-name" required requiredLabel={requiredLabel}>
+                <Input
+                  id="user-first-name"
+                  required
+                  value={form.first_name}
+                  onChange={(event) => update("first_name", event.target.value)}
+                />
+              </Field>
+              <Field label={t("userForm.lastName")} htmlFor="user-last-name" required requiredLabel={requiredLabel}>
+                <Input
+                  id="user-last-name"
+                  required
+                  value={form.last_name}
+                  onChange={(event) => update("last_name", event.target.value)}
+                />
+              </Field>
             </div>
-            <div className="space-y-1.5">
-              <Label>Last Name *</Label>
-              <Input value={form.last_name} onChange={e => update("last_name", e.target.value)} />
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field helper={t("userForm.phoneHelp")} label={t("userForm.phone")} htmlFor="user-phone">
+                <Input
+                  id="user-phone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                  placeholder={t("userForm.phonePlaceholder")}
+                  value={form.phone}
+                  onChange={(event) => update("phone", event.target.value)}
+                />
+              </Field>
+              <Field label={t("userForm.dateOfBirth")} htmlFor="user-date-of-birth">
+                <Input
+                  id="user-date-of-birth"
+                  type="date"
+                  value={form.date_of_birth}
+                  onChange={(event) => update("date_of_birth", event.target.value)}
+                />
+              </Field>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Phone</Label>
-              <Input value={form.phone} onChange={e => update("phone", e.target.value)} />
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field helper={t("userForm.genderHelp")} label={t("userForm.gender")}>
+                <Select
+                  value={form.gender || "unspecified"}
+                  onValueChange={(value) => update("gender", value === "unspecified" ? "" : value)}
+                >
+                  <SelectTrigger className={cn("h-12 rounded-xl bg-white px-4", form.gender ? "text-foreground" : "text-muted-foreground")}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+                    <SelectGroup>
+                      <CareSelectItem value="unspecified">{t("userForm.unspecified")}</CareSelectItem>
+                      <CareSelectItem value="female">{t("userForm.genderFemale")}</CareSelectItem>
+                      <CareSelectItem value="male">{t("userForm.genderMale")}</CareSelectItem>
+                      <CareSelectItem value="other">{t("userForm.genderOther")}</CareSelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
+              <Field label={t("userForm.language")}>
+                <Select value={form.language || "de"} onValueChange={(value) => update("language", value)}>
+                  <SelectTrigger className="h-12 rounded-xl bg-white px-4">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+                    <SelectGroup>
+                      <CareSelectItem value="en">{t("settings.language.en")}</CareSelectItem>
+                      <CareSelectItem value="de">{t("settings.language.de")}</CareSelectItem>
+                      <CareSelectItem value="es">{t("settings.language.es")}</CareSelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
-            <div className="space-y-1.5">
-              <Label>Date of Birth</Label>
-              <Input type="date" value={form.date_of_birth} onChange={e => update("date_of_birth", e.target.value)} />
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field helper={t("userForm.livingContextHelp")} label={t("userForm.livingContext")}>
+                <Select
+                  value={form.living_context || "unknown"}
+                  onValueChange={(value) => update("living_context", value === "unknown" ? "" : value)}
+                >
+                  <SelectTrigger
+                    className={cn("h-12 rounded-xl bg-white px-4", form.living_context ? "text-foreground" : "text-muted-foreground")}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+                    <SelectGroup>
+                      <CareSelectItem value="unknown">{t("profile.livingContextUnknown")}</CareSelectItem>
+                      <CareSelectItem value="alone">{t("usersList.livingAlone")}</CareSelectItem>
+                      <CareSelectItem value="partner">{t("usersList.livingWithPartner")}</CareSelectItem>
+                      <CareSelectItem value="family">{t("usersList.livingWithFamily")}</CareSelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </Field>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Gender</Label>
-              <Select value={form.gender} onValueChange={v => update("gender", v)}>
-                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="male">Male</SelectItem>
-                  <SelectItem value="female">Female</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
+          </SectionPanel>
+
+          <SectionPanel
+            description={t("userForm.addressSectionDescription")}
+            icon={MapPin}
+            title={t("userForm.addressSectionTitle")}
+          >
+            <div className="grid gap-3 sm:grid-cols-[1fr_120px]">
+              <Field label={t("userForm.street")} htmlFor="user-street">
+                <Input id="user-street" value={form.street} onChange={(event) => update("street", event.target.value)} />
+              </Field>
+              <Field label={t("userForm.houseNumber")} htmlFor="user-house-number">
+                <Input
+                  id="user-house-number"
+                  value={form.house_number}
+                  onChange={(event) => update("house_number", event.target.value)}
+                />
+              </Field>
             </div>
-            <div className="space-y-1.5">
-              <Label>Language</Label>
-              <Select value={form.language} onValueChange={v => update("language", v)}>
-                <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="de">DE</SelectItem>
-                  <SelectItem value="en">EN</SelectItem>
-                  <SelectItem value="nl">NL</SelectItem>
-                </SelectContent>
-              </Select>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label={t("userForm.postCode")} htmlFor="user-post-code">
+                <Input id="user-post-code" value={form.post_code} onChange={(event) => update("post_code", event.target.value)} />
+              </Field>
+              <Field label={t("userForm.city")} htmlFor="user-city">
+                <Input id="user-city" value={form.city} onChange={(event) => update("city", event.target.value)} />
+              </Field>
             </div>
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5 col-span-2">
-              <Label>Street</Label>
-              <Input value={form.street} onChange={e => update("street", e.target.value)} />
+          </SectionPanel>
+
+          <SectionPanel
+            description={t("userForm.medicalSectionDescription")}
+            icon={HeartPulse}
+            title={t("userForm.medicalSectionTitle")}
+            tone="pink"
+          >
+            <Alert>
+              <ShieldCheck />
+              <AlertDescription>{t("userForm.minimumNecessaryNotice")}</AlertDescription>
+            </Alert>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ChipEditor
+                addLabel={t("userForm.addCondition")}
+                helper={t("userForm.healthConditionsHelp")}
+                inputValue={newCondition}
+                items={healthConditions}
+                label={t("userForm.healthConditions")}
+                onAdd={() => addTag(newCondition, healthConditions, setHealthConditions, setNewCondition)}
+                onInputChange={setNewCondition}
+                onRemove={(index) => removeTag(index, healthConditions, setHealthConditions)}
+                placeholder={t("userForm.healthConditionsPlaceholder")}
+              />
+              <ChipEditor
+                addLabel={t("userForm.addMobilityNeed")}
+                helper={t("userForm.mobilityNeedsHelp")}
+                inputValue={newMobilityNeed}
+                items={mobilityNeeds}
+                label={t("userForm.mobilityNeeds")}
+                onAdd={() => addTag(newMobilityNeed, mobilityNeeds, setMobilityNeeds, setNewMobilityNeed)}
+                onInputChange={setNewMobilityNeed}
+                onRemove={(index) => removeTag(index, mobilityNeeds, setMobilityNeeds)}
+                placeholder={t("userForm.mobilityNeedsPlaceholder")}
+              />
             </div>
-            <div className="space-y-1.5">
-              <Label>House Nr</Label>
-              <Input value={form.house_number} onChange={e => update("house_number", e.target.value)} />
+            <Field helper={t("userForm.careSafetyNotesHelp")} label={t("userForm.careSafetyNotes")} htmlFor="user-emergency-notes">
+              <Textarea
+                id="user-emergency-notes"
+                value={form.emergency_notes}
+                onChange={(event) => update("emergency_notes", event.target.value)}
+                rows={3}
+              />
+            </Field>
+          </SectionPanel>
+
+          <SectionPanel
+            description={t("userForm.medicationSectionDescription")}
+            icon={Pill}
+            title={t("userForm.medicationSectionTitle")}
+            tone="orange"
+          >
+            <div className="space-y-3">
+              {medications.map((medication, index) => {
+                const medicationHasDetail = hasMedicationDetail(medication);
+
+                return (
+                  <div key={`medication-${index}`} className="rounded-2xl border border-border bg-white p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <p className="text-sm font-bold text-foreground">
+                        {t("userForm.medicationItem")} {index + 1}
+                      </p>
+                      {medications.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 rounded-full px-2 text-muted-foreground hover:text-destructive"
+                          onClick={() => setMedications((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                        >
+                          <X className="h-4 w-4" />
+                          <span className="sr-only">{t("userForm.removeMedication")}</span>
+                        </Button>
+                      )}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <Field
+                        label={t("userForm.medicationName")}
+                        htmlFor={`user-medication-name-${index}`}
+                        required={medicationHasDetail}
+                        requiredLabel={t("userForm.requiredWhenFilled")}
+                      >
+                        <Input
+                          id={`user-medication-name-${index}`}
+                          required={medicationHasDetail}
+                          value={medication.medication_name}
+                          onChange={(event) => updateMedication(index, "medication_name", event.target.value)}
+                        />
+                      </Field>
+                      <Field label={t("userForm.medicationDosage")} htmlFor={`user-medication-dosage-${index}`}>
+                        <Input
+                          id={`user-medication-dosage-${index}`}
+                          placeholder={t("userForm.medicationDosagePlaceholder")}
+                          value={medication.dosage}
+                          onChange={(event) => updateMedication(index, "dosage", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <Field label={t("userForm.medicationPurpose")} htmlFor={`user-medication-purpose-${index}`}>
+                        <Input
+                          id={`user-medication-purpose-${index}`}
+                          placeholder={t("userForm.medicationPurposePlaceholder")}
+                          value={medication.purpose}
+                          onChange={(event) => updateMedication(index, "purpose", event.target.value)}
+                        />
+                      </Field>
+                      <Field label={t("userForm.medicationFrequency")} htmlFor={`user-medication-frequency-${index}`}>
+                        <Input
+                          id={`user-medication-frequency-${index}`}
+                          placeholder={t("userForm.medicationFrequencyPlaceholder")}
+                          value={medication.frequency}
+                          onChange={(event) => updateMedication(index, "frequency", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-3">
+                      <Field
+                        helper={t("userForm.medicationTimesHelp")}
+                        label={t("userForm.medicationTimes")}
+                        htmlFor={`user-medication-times-${index}`}
+                      >
+                        <Input
+                          id={`user-medication-times-${index}`}
+                          placeholder={t("userForm.medicationTimesPlaceholder")}
+                          value={medication.schedule_times}
+                          onChange={(event) => updateMedication(index, "schedule_times", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                    <div className="mt-3">
+                      <SwitchRow
+                        checked={medication.reminders_enabled}
+                        description={t("userForm.medicationReminderToggleDescription")}
+                        label={t("userForm.medicationRemindersEnabled")}
+                        onCheckedChange={(value) => updateMedication(index, "reminders_enabled", value)}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Post Code</Label>
-              <Input value={form.post_code} onChange={e => update("post_code", e.target.value)} />
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 w-fit rounded-full border-primary/20 bg-primary/5 px-4 text-sm font-semibold text-primary hover:bg-primary/10 hover:text-primary"
+              onClick={() => setMedications((current) => [...current, emptyMedicationIntake()])}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              {t("userForm.addMedicationRow")}
+            </Button>
+          </SectionPanel>
+
+          <SectionPanel
+            description={t("userForm.consentSectionDescription")}
+            icon={ShieldCheck}
+            title={t("userForm.consentSectionTitle")}
+            tone="green"
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              <SwitchRow
+                checked={userConsent}
+                description={t("userForm.userConsentDescription")}
+                label={t("userForm.userConsent")}
+                onCheckedChange={setUserConsent}
+              />
+              <SwitchRow
+                checked={caregiverConsent}
+                description={t("userForm.caregiverConsentDescription")}
+                label={t("userForm.caregiverConsent")}
+                onCheckedChange={setCaregiverConsent}
+              />
             </div>
-            <div className="space-y-1.5">
-              <Label>City</Label>
-              <Input value={form.city} onChange={e => update("city", e.target.value)} />
+            <div className="rounded-2xl border border-border bg-white p-4">
+              <div className="mb-3">
+                <p className="text-sm font-bold text-foreground">{t("userForm.caregiverItem")}</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field label={t("userForm.caregiverName")} htmlFor="user-caregiver-name-0">
+                  <Input
+                    id="user-caregiver-name-0"
+                    value={caregivers[0]?.caretaker_name || ""}
+                    onChange={(event) => updateCaregiver(0, "caretaker_name", event.target.value)}
+                  />
+                </Field>
+                <Field helper={t("userForm.phoneHelp")} label={t("userForm.caregiverPhone")} htmlFor="user-caregiver-phone-0">
+                  <Input
+                    id="user-caregiver-phone-0"
+                    type="tel"
+                    inputMode="tel"
+                    autoComplete="tel"
+                    placeholder={t("userForm.phonePlaceholder")}
+                    value={caregivers[0]?.caretaker_phone || ""}
+                    onChange={(event) => updateCaregiver(0, "caretaker_phone", event.target.value)}
+                  />
+                </Field>
+              </div>
             </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Emergency Notes</Label>
-            <Textarea value={form.emergency_notes} onChange={e => update("emergency_notes", e.target.value)} rows={3} />
-          </div>
+          </SectionPanel>
+
+          <SectionPanel
+            description={t("userForm.followUpSectionDescription")}
+            icon={PhoneCall}
+            title={t("userForm.followUpSectionTitle")}
+          >
+            <div className="grid gap-4 lg:grid-cols-2">
+              <ServiceEditor
+                enabled={checkins.enabled}
+                frequency={checkins.frequency}
+                label={t("userForm.checkinTitle")}
+                onEnabledChange={(value) => updateService("checkins", "enabled", value)}
+                onFrequencyChange={(value) => updateService("checkins", "frequency", value)}
+                onTimeChange={(value) => updateService("checkins", "preferred_time", value)}
+                preferredTime={checkins.preferred_time}
+                t={t}
+              />
+              <ServiceEditor
+                enabled={brainCoach.enabled}
+                frequency={brainCoach.frequency}
+                label={t("userForm.brainCoachTitle")}
+                onEnabledChange={(value) => updateService("brainCoach", "enabled", value)}
+                onFrequencyChange={(value) => updateService("brainCoach", "frequency", value)}
+                onTimeChange={(value) => updateService("brainCoach", "preferred_time", value)}
+                preferredTime={brainCoach.preferred_time}
+                t={t}
+              />
+            </div>
+          </SectionPanel>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+
+        <DialogFooter className="shrink-0 gap-2 border-t border-border bg-white px-7 py-4 sm:justify-end">
+          <Button className="rounded-full px-5" variant="outline" onClick={() => onOpenChange(false)}>
+            {t("userForm.cancel")}
+          </Button>
+          <Button className="rounded-full px-5" onClick={handleSave} disabled={saving}>
+            {saving ? t("userForm.saving") : t(isEditing ? "userForm.saveCareProfile" : "userForm.createCareProfile")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Field({
+  children,
+  helper,
+  htmlFor,
+  label,
+  required = false,
+  requiredLabel,
+}: {
+  children: ReactNode;
+  helper?: string;
+  htmlFor?: string;
+  label: string;
+  required?: boolean;
+  requiredLabel?: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {required && requiredLabel ? (
+          <span
+            aria-hidden="true"
+            className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-primary"
+          >
+            {requiredLabel}
+          </span>
+        ) : null}
+      </div>
+      {children}
+      {helper && <p className="text-xs leading-relaxed text-muted-foreground">{helper}</p>}
+    </div>
+  );
+}
+
+function SectionPanel({
+  children,
+  description,
+  icon: Icon,
+  title,
+  tone = "primary",
+}: {
+  children: ReactNode;
+  description: string;
+  icon: LucideIcon;
+  title: string;
+  tone?: "primary" | "pink" | "orange" | "green";
+}) {
+  const toneClass = {
+    green: "bg-emerald-50 text-emerald-700",
+    orange: "bg-orange-50 text-orange-700",
+    pink: "bg-pink-50 text-pink-700",
+    primary: "bg-primary/10 text-primary",
+  }[tone];
+
+  return (
+    <section className="rounded-3xl border border-border bg-white p-5 shadow-sm">
+      <div className="mb-5 flex items-start gap-3">
+        <div className={cn("flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl", toneClass)}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div>
+          <h3 className="text-base font-bold text-foreground">{title}</h3>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
+
+function ChipEditor({
+  addLabel,
+  helper,
+  inputValue,
+  items,
+  label,
+  onAdd,
+  onInputChange,
+  onRemove,
+  placeholder,
+}: {
+  addLabel: string;
+  helper: string;
+  inputValue: string;
+  items: string[];
+  label: string;
+  onAdd: () => void;
+  onInputChange: (value: string) => void;
+  onRemove: (index: number) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="space-y-2">
+      <Label>{label}</Label>
+      <div className="min-h-11 rounded-2xl border border-border bg-muted/20 p-2">
+        {items.length ? (
+          <div className="flex flex-wrap gap-2">
+            {items.map((item, index) => (
+              <Badge key={`${item}-${index}`} variant="secondary" className="gap-1 rounded-full px-3 py-1 text-xs font-semibold">
+                {item}
+                <button type="button" className="text-muted-foreground hover:text-destructive" onClick={() => onRemove(index)}>
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        ) : (
+          <p className="px-2 py-1 text-xs text-muted-foreground">{helper}</p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Input
+          value={inputValue}
+          onChange={(event) => onInputChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              onAdd();
+            }
+          }}
+          placeholder={placeholder}
+        />
+        <Button type="button" variant="secondary" className="shrink-0 rounded-xl px-4" onClick={onAdd}>
+          {addLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function SwitchRow({
+  checked,
+  description,
+  label,
+  onCheckedChange,
+}: {
+  checked: boolean;
+  description: string;
+  label: string;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-muted/20 p-4">
+      <div>
+        <p className="text-sm font-bold text-foreground">{label}</p>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+      </div>
+      <Switch aria-label={label} checked={checked} onCheckedChange={onCheckedChange} />
+    </div>
+  );
+}
+
+function ServiceEditor({
+  enabled,
+  frequency,
+  label,
+  onEnabledChange,
+  onFrequencyChange,
+  onTimeChange,
+  preferredTime,
+  t,
+}: {
+  enabled: boolean;
+  frequency: string;
+  label: string;
+  onEnabledChange: (checked: boolean) => void;
+  onFrequencyChange: (value: string) => void;
+  onTimeChange: (value: string) => void;
+  preferredTime: string;
+  t: (key: string) => string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-white p-4">
+      <div className="mb-4 flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-bold text-foreground">{label}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{t("userForm.followUpCardDescription")}</p>
+        </div>
+        <Switch aria-label={label} checked={enabled} onCheckedChange={onEnabledChange} />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label={t("userForm.frequency")}>
+          <Select value={frequency || "weekly"} onValueChange={onFrequencyChange} disabled={!enabled}>
+            <SelectTrigger className="h-12 rounded-xl bg-white px-4">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-2xl border-border p-1 shadow-lg">
+              <SelectGroup>
+                {intakeCadenceOptions.map((option) => (
+                  <CareSelectItem key={option} value={option}>
+                    {t(`userForm.frequency.${option}`)}
+                  </CareSelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label={t("userForm.preferredTime")} htmlFor={`service-time-${label}`}>
+          <Input
+            id={`service-time-${label}`}
+            type="time"
+            value={preferredTime}
+            onChange={(event) => onTimeChange(event.target.value)}
+            disabled={!enabled}
+          />
+        </Field>
+      </div>
+    </div>
+  );
+}
+
+function CareSelectItem({ children, value }: { children: ReactNode; value: string }) {
+  return (
+    <SelectItem
+      value={value}
+      className="rounded-xl py-2.5 focus:bg-primary/10 focus:text-primary data-[state=checked]:bg-primary/10 data-[state=checked]:text-primary"
+    >
+      {children}
+    </SelectItem>
   );
 }

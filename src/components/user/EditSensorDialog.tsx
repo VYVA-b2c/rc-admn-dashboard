@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { apiFetch } from "@/lib/apiClient";
 import { Plus } from "lucide-react";
 
 const INTEGRATION_METHODS = [
@@ -129,22 +130,30 @@ export function EditSensorDialog({ open, onOpenChange, vyvaUserId, sensor }: Edi
       notes: notes || null,
     };
 
-    let error;
-    if (isEdit) {
-      ({ error } = await supabase.from("vyva_user_sensors").update(payload).eq("id", sensor.id));
-    } else {
-      payload.vyva_user_id = vyvaUserId;
-      ({ error } = await supabase.from("vyva_user_sensors").insert(payload));
-    }
-
-    setSaving(false);
-    if (error) {
-      toast({ title: "Error saving sensor", description: error.message, variant: "destructive" });
-    } else {
+    try {
+      if (isEdit) {
+        await apiFetch(`/api/v1/user-dashboard/sensors/${sensor.id}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch("/api/v1/user-dashboard/sensors", {
+          method: "POST",
+          body: JSON.stringify({ ...payload, vyva_user_id: vyvaUserId }),
+        });
+      }
       toast({ title: isEdit ? "Sensor updated" : "Sensor added" });
       queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", vyvaUserId] });
       queryClient.invalidateQueries({ queryKey: ["sensor-devices"] });
       onOpenChange(false);
+    } catch (error) {
+      toast({
+        title: "Error saving sensor",
+        description: error instanceof Error ? error.message : "The sensor could not be saved.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
     }
   };
 

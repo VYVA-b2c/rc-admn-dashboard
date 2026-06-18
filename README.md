@@ -60,6 +60,14 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
+## Admin Console Manual
+
+The admin user manual is managed under `docs/admin-manual/`.
+
+- Latest approved outputs live in `docs/admin-manual/current/`.
+- Dated snapshots live in `docs/admin-manual/versions/`.
+- Future feature updates should follow `docs/admin-manual/UPDATE_CHECKLIST.md`.
+
 ## How can I deploy this project?
 
 Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.

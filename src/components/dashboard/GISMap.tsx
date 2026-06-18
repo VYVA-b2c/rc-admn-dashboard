@@ -3,12 +3,19 @@ import L from "leaflet";
 import "leaflet.markercluster";
 import "leaflet.heat";
 import type { GISFieldStaff, GISOffice, GISUser } from "@/hooks/useGISData";
-import { SAXONY_CENTER, SAXONY_ZOOM } from "@/lib/saxonyCities";
+import { ACTIVE_ORGANIZATION_STORAGE_KEY } from "@/lib/apiClient";
 import { getRiskBand, getRiskColor, getRiskLabel } from "@/lib/riskScore";
 
 type GISMappableUser = GISUser & { coords: [number, number] };
 type GISMappableStaff = GISFieldStaff & { coords: [number, number] };
 type GISUserMarker = L.Marker & { _gisUser?: GISUser };
+type MapCountry = "Germany" | "Spain";
+type MapSubject = {
+  city?: string | null;
+  coords?: [number, number] | null;
+  country?: string | null;
+  phone?: string | null;
+};
 
 interface GISMapProps {
   users: GISUser[];
@@ -23,6 +30,20 @@ interface GISMapProps {
 
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
+const COUNTRY_VIEWPORTS: Record<MapCountry, { bounds: [[number, number], [number, number]]; center: [number, number]; zoom: number }> = {
+  Germany: {
+    bounds: [[47.2, 5.6], [55.1, 15.3]],
+    center: [51.16, 10.45],
+    zoom: 6,
+  },
+  Spain: {
+    bounds: [[35.8, -9.6], [43.9, 4.4]],
+    center: [40.42, -3.7],
+    zoom: 6,
+  },
+};
+const SPANISH_CITIES = ["madrid", "tarifa", "marbella", "zamora", "barcelona", "valencia", "sevilla", "malaga"];
+const GERMAN_CITIES = ["leipzig", "dresden", "chemnitz", "zwickau", "halle", "berlin", "munich", "hamburg"];
 
 function escapeHtml(value: string | null | undefined): string {
   return String(value ?? "")
@@ -31,6 +52,77 @@ function escapeHtml(value: string | null | undefined): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function normalizeCountry(value?: string | null): MapCountry | null {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (["es", "esp", "spain", "espana", "españa"].includes(text) || text.includes("spain") || text.includes("espa")) return "Spain";
+  if (["de", "deu", "germany", "deutschland"].includes(text) || text.includes("germany") || text.includes("deutsch")) return "Germany";
+  return null;
+}
+
+function countryFromPhone(phone?: string | null): MapCountry | null {
+  const normalized = String(phone ?? "").replace(/[^\d+]/g, "");
+  if (normalized.startsWith("+34") || normalized.startsWith("0034") || normalized.startsWith("34")) return "Spain";
+  if (normalized.startsWith("+49") || normalized.startsWith("0049") || normalized.startsWith("49")) return "Germany";
+  return null;
+}
+
+function countryFromCity(city?: string | null): MapCountry | null {
+  const text = String(city ?? "").trim().toLowerCase();
+  if (!text) return null;
+  if (SPANISH_CITIES.some((knownCity) => text.includes(knownCity))) return "Spain";
+  if (GERMAN_CITIES.some((knownCity) => text.includes(knownCity))) return "Germany";
+  return null;
+}
+
+function countryFromCoords(coords?: [number, number] | null): MapCountry | null {
+  if (!coords) return null;
+  const [lat, lng] = coords;
+  if (lat >= 35 && lat <= 44.5 && lng >= -10.5 && lng <= 5) return "Spain";
+  if (lat >= 47 && lat <= 55.5 && lng >= 5 && lng <= 16) return "Germany";
+  return null;
+}
+
+function countryFromActiveOrganization(): MapCountry | null {
+  if (typeof window === "undefined") return null;
+  const activeOrganization = window.localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY);
+  const text = String(activeOrganization ?? "").toLowerCase();
+  if (text.includes("zamora") || text.includes("spain") || text.includes("spanish")) return "Spain";
+  if (text.includes("leipzig") || text.includes("germany") || text.includes("german")) return "Germany";
+  return null;
+}
+
+function inferSubjectCountry(subject: MapSubject): MapCountry | null {
+  return (
+    normalizeCountry(subject.country) ||
+    countryFromPhone(subject.phone) ||
+    countryFromCity(subject.city) ||
+    countryFromCoords(subject.coords)
+  );
+}
+
+function chooseMapCountry(users: GISUser[]): MapCountry | null {
+  const activeOrganizationCountry = countryFromActiveOrganization();
+  const counts: Record<MapCountry, number> = { Germany: 0, Spain: 0 };
+
+  for (const user of users) {
+    const country = inferSubjectCountry(user);
+    if (country) counts[country] += 1;
+  }
+
+  if (activeOrganizationCountry && counts[activeOrganizationCountry] > 0) return activeOrganizationCountry;
+  if (counts.Spain > counts.Germany) return "Spain";
+  if (counts.Germany > counts.Spain) return "Germany";
+  if (counts.Spain > 0 && counts.Germany > 0) return activeOrganizationCountry || "Spain";
+  return activeOrganizationCountry || null;
+}
+
+function belongsToMapCountry(subject: MapSubject, country: MapCountry | null) {
+  if (!country) return true;
+  const subjectCountry = inferSubjectCountry(subject);
+  return subjectCountry ? subjectCountry === country : false;
 }
 
 function createUserIcon(user: GISUser): L.DivIcon {
@@ -213,10 +305,24 @@ export function GISMap({
     () => users.filter((user): user is GISMappableUser => user.coords !== null),
     [users],
   );
+  const mapCountry = useMemo(() => chooseMapCountry(users), [users]);
+  const mapViewport = mapCountry ? COUNTRY_VIEWPORTS[mapCountry] : COUNTRY_VIEWPORTS.Germany;
+  const visibleUsers = useMemo(
+    () => mappableUsers.filter((user) => belongsToMapCountry(user, mapCountry)),
+    [mappableUsers, mapCountry],
+  );
+  const visibleOffices = useMemo(
+    () => offices.filter((office) => belongsToMapCountry(office, mapCountry)),
+    [offices, mapCountry],
+  );
 
   const mappableStaff = useMemo(
     () => fieldStaff.filter((staff): staff is GISMappableStaff => staff.coords !== null),
     [fieldStaff],
+  );
+  const visibleStaff = useMemo(
+    () => mappableStaff.filter((staff) => belongsToMapCountry(staff, mapCountry)),
+    [mappableStaff, mapCountry],
   );
 
   useEffect(() => {
@@ -235,7 +341,7 @@ export function GISMap({
     const map = L.map(containerRef.current, {
       zoomControl: true,
       attributionControl: true,
-    }).setView(SAXONY_CENTER, SAXONY_ZOOM);
+    }).setView(COUNTRY_VIEWPORTS.Germany.center, COUNTRY_VIEWPORTS.Germany.zoom);
 
     L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 18 }).addTo(map);
 
@@ -293,7 +399,7 @@ export function GISMap({
     if (showUsers && heatmapMode) {
       if (map.hasLayer(cluster)) map.removeLayer(cluster);
 
-      const heatPoints: [number, number, number][] = mappableUsers.map((user) => [
+      const heatPoints: [number, number, number][] = visibleUsers.map((user) => [
         user.coords[0],
         user.coords[1],
         (user.activeAlerts ?? 0) + (user.criticalAlerts ?? 0) + 1,
@@ -316,11 +422,11 @@ export function GISMap({
         heatRef.current = heat;
       }
 
-      mappableUsers.forEach((user) => extend(user.coords));
+      visibleUsers.forEach((user) => extend(user.coords));
     } else if (showUsers) {
       if (!map.hasLayer(cluster)) map.addLayer(cluster);
 
-      for (const user of mappableUsers) {
+      for (const user of visibleUsers) {
         const marker = L.marker(user.coords, { icon: createUserIcon(user) }) as GISUserMarker;
         marker._gisUser = user;
         marker.bindPopup(buildUserPopupHtml(user), {
@@ -336,7 +442,7 @@ export function GISMap({
     }
 
     if (showOffices) {
-      for (const office of offices) {
+      for (const office of visibleOffices) {
         L.marker(office.coords, { icon: createOfficeIcon() })
           .bindPopup(buildOfficePopupHtml(office), {
             className: "gis-popup",
@@ -349,7 +455,7 @@ export function GISMap({
     }
 
     if (showFieldStaff) {
-      for (const staff of mappableStaff) {
+      for (const staff of visibleStaff) {
         L.marker(staff.coords, { icon: createStaffIcon(staff) })
           .bindPopup(buildStaffPopupHtml(staff), {
             className: "gis-popup",
@@ -361,12 +467,14 @@ export function GISMap({
       }
     }
 
-    if (bounds.isValid()) {
+    if (mapCountry) {
+      map.fitBounds(L.latLngBounds(mapViewport.bounds).pad(0.05), { maxZoom: mapViewport.zoom });
+    } else if (bounds.isValid()) {
       map.fitBounds(bounds.pad(0.2), { maxZoom: 10 });
     } else {
-      map.setView(SAXONY_CENTER, SAXONY_ZOOM);
+      map.setView(mapViewport.center, mapViewport.zoom);
     }
-  }, [mappableUsers, offices, mappableStaff, heatmapMode, showUsers, showOffices, showFieldStaff]);
+  }, [visibleUsers, visibleOffices, visibleStaff, heatmapMode, showUsers, showOffices, showFieldStaff, mapCountry, mapViewport]);
 
   return (
     <div

@@ -2,19 +2,19 @@ import {
   Activity,
   AlertTriangle,
   Bell,
+  Brain,
   CalendarCheck,
-  Heart,
   Home,
   LineChart,
   LogOut,
   Megaphone,
   Pill,
+  PhoneCall,
   Settings,
   UserPlus,
   Users,
-  Wrench,
 } from "lucide-react";
-import type { ComponentType } from "react";
+import { type ComponentType } from "react";
 import { useLocation } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -33,11 +33,15 @@ import {
 } from "@/components/ui/sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
+import { authBypassEnabled } from "@/lib/authMode";
+import { isProjectPlatformAdminEmail } from "@/lib/projectAdmin";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
   titleKey: string;
   url?: string;
+  activeUrls?: string[];
   icon: ComponentType<{ className?: string }>;
   badge?: string;
 };
@@ -48,25 +52,24 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
     items: [
       { titleKey: "sidebar.today", url: "/", icon: Home },
       { titleKey: "sidebar.people", url: "/users", icon: Users },
-      { titleKey: "sidebar.riskQueue", url: "/sensors", icon: AlertTriangle, badge: "18" },
-      { titleKey: "sidebar.alerts", url: "/sensors", icon: Bell },
+      { titleKey: "sidebar.riskQueue", url: "/risk-queue", icon: AlertTriangle },
+      { titleKey: "sidebar.alerts", url: "/alerts", activeUrls: ["/alerts", "/sensors"], icon: Bell },
     ],
   },
   {
     labelKey: "sidebar.group.followup",
     items: [
       { titleKey: "sidebar.checkins", url: "/checkin-monitoring", icon: CalendarCheck },
-      { titleKey: "sidebar.medication", icon: Pill },
-      { titleKey: "sidebar.wellbeing", icon: Heart },
-      { titleKey: "sidebar.symptoms", icon: Activity },
+      { titleKey: "sidebar.medication", url: "/medication", icon: Pill },
+      { titleKey: "sidebar.brainCoach", url: "/brain-coach", icon: Brain },
     ],
   },
   {
     labelKey: "sidebar.group.management",
     items: [
-      { titleKey: "sidebar.campaigns", icon: Megaphone },
-      { titleKey: "sidebar.services", url: "/emergency-contacts", icon: Wrench },
-      { titleKey: "sidebar.reports", icon: LineChart },
+      { titleKey: "sidebar.campaigns", url: "/campaigns", icon: Megaphone },
+      { titleKey: "sidebar.services", url: "/emergency-contacts", icon: PhoneCall },
+      { titleKey: "sidebar.reports", url: "/reports", icon: LineChart },
       { titleKey: "sidebar.teamAccess", url: "/invite", icon: UserPlus },
       { titleKey: "sidebar.settings", url: "/settings", icon: Settings },
     ],
@@ -97,11 +100,10 @@ function SidebarItem({ item, collapsed }: { item: NavItem; collapsed: boolean })
   const location = useLocation();
   const { t } = useLanguage();
   const Icon = item.icon;
-  const isActive = item.url === "/"
-    ? location.pathname === "/"
-    : item.url
-      ? location.pathname.startsWith(item.url)
-      : false;
+  const activeUrls = item.activeUrls ?? (item.url ? [item.url] : []);
+  const isActive = activeUrls.some((url) =>
+    url === "/" ? location.pathname === "/" : location.pathname === url || location.pathname.startsWith(`${url}/`),
+  );
 
   const baseClass =
     "flex h-10 items-center gap-3 rounded-xl px-3 text-sm font-medium transition-colors";
@@ -145,6 +147,17 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const { signOut, user } = useAuth();
   const { t } = useLanguage();
+  const { data: currentContext } = useCurrentUserContext();
+  const currentUser = currentContext?.user;
+  const accountEmail = currentUser?.email || user?.email;
+  const isProjectPlatformAdmin = isProjectPlatformAdminEmail(accountEmail);
+  const isPlatformAdmin = Boolean(currentUser?.isPlatformAdmin || isProjectPlatformAdmin);
+  const isAdmin = Boolean(currentUser?.isAdmin || isPlatformAdmin);
+  const roleLabel = isPlatformAdmin
+    ? t("settings.role.superAdmin")
+    : isAdmin
+      ? t("settings.role.admin")
+      : t("sidebar.operator");
 
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border bg-white text-foreground">
@@ -176,19 +189,21 @@ export function AppSidebar() {
       <SidebarFooter className="gap-3 border-t border-sidebar-border bg-white p-3">
         {!collapsed && user && (
           <div className="rounded-xl border border-border bg-muted/60 px-3 py-2">
-            <p className="truncate text-xs font-semibold text-foreground">{user.email}</p>
-            <p className="text-[11px] text-muted-foreground">{t("sidebar.operator")}</p>
+            <p className="truncate text-xs font-semibold text-foreground">{accountEmail}</p>
+            <p className="text-[11px] text-muted-foreground">{roleLabel}</p>
           </div>
         )}
-        <Button
-          variant="ghost"
-          size={collapsed ? "icon" : "sm"}
-          onClick={signOut}
-          className="w-full justify-start rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-        >
-          <LogOut className="h-4 w-4" />
-          {!collapsed && <span className="ml-2">{t("sidebar.signOut")}</span>}
-        </Button>
+        {!authBypassEnabled && (
+          <Button
+            variant="ghost"
+            size={collapsed ? "icon" : "sm"}
+            onClick={signOut}
+            className="w-full justify-start rounded-xl text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <LogOut className="h-4 w-4" />
+            {!collapsed && <span className="ml-2">{t("sidebar.signOut")}</span>}
+          </Button>
+        )}
       </SidebarFooter>
     </Sidebar>
   );
