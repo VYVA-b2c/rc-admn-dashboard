@@ -296,7 +296,11 @@ export default function Dashboard() {
   const reviewCount = Math.max((data?.activeAlertCount ?? 0) - urgentCount, 0);
   const missedMeds = users.reduce((sum, user) => sum + (user.missedMeds7d ?? 0), 0);
   const noResponseCount = alerts.filter((alert) => ["missed_checkin", "inactivity_detected"].includes(alert.alert_type)).length;
-  const checkinPercent = data?.totalUsers ? Math.round(((data.checkinsEnabled ?? 0) / data.totalUsers) * 100) : 0;
+  const weeklyCheckinsCompleted = data?.checkinsCompletedWeekly ?? 0;
+  const weeklyCheckinsExpected = data?.checkinsExpectedWeekly ?? 0;
+  const checkinPercent = weeklyCheckinsExpected
+    ? Math.round((weeklyCheckinsCompleted / weeklyCheckinsExpected) * 100)
+    : 0;
 
   const filterOptions: { id: DashboardFilter; label: string }[] = [
     { id: "urgent", label: t("dashboard.filter.urgent") },
@@ -363,7 +367,7 @@ export default function Dashboard() {
         <MetricCard
           label={t("metric.checkins")}
           value={isLoading ? "—" : `${checkinPercent}%`}
-          detail={`${data?.checkinsEnabled ?? 0} / ${data?.totalUsers ?? 0}`}
+          detail={`${weeklyCheckinsCompleted} / ${weeklyCheckinsExpected}`}
           tone="green"
           icon={<Phone className="h-5 w-5" />}
         />

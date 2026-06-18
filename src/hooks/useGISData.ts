@@ -71,6 +71,8 @@ export interface GISFieldStaff {
 type DashboardGISResponse = {
   totalUsers: number;
   checkinsEnabled: number;
+  checkinsCompletedWeekly?: number;
+  checkinsExpectedWeekly?: number;
   activeAlertCount: number;
   criticalAlertCount: number;
   totalSensors: number;
@@ -83,6 +85,8 @@ type DashboardGISResponse = {
 const emptyDashboardData: DashboardGISResponse = {
   totalUsers: 0,
   checkinsEnabled: 0,
+  checkinsCompletedWeekly: 0,
+  checkinsExpectedWeekly: 0,
   activeAlertCount: 0,
   criticalAlertCount: 0,
   totalSensors: 0,
@@ -143,6 +147,8 @@ export function useGISData() {
       return {
         totalUsers: res.totalUsers,
         checkinsEnabled: res.checkinsEnabled,
+        checkinsCompletedWeekly: res.checkinsCompletedWeekly ?? 0,
+        checkinsExpectedWeekly: res.checkinsExpectedWeekly ?? 0,
         activeAlertCount: res.activeAlertCount,
         criticalAlertCount: res.criticalAlertCount,
         totalSensors: res.totalSensors,

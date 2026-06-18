@@ -182,6 +182,41 @@ function parseFrequencyDays(value) {
   return 1;
 }
 
+function expectedWeeklyOccurrencesFromFrequency(value) {
+  const frequencyDays = Math.max(1, parseFrequencyDays(value));
+  return Math.max(1, Math.ceil(7 / frequencyDays));
+}
+
+function isTimestampInCurrentWeek(value) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  const end = new Date(start);
+  end.setDate(start.getDate() + 7);
+  return date >= start && date < end;
+}
+
+function isCompletedCheckinStatus(value) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return ["completed", "complete", "confirmed", "answered", "success", "successful", "reached", "done"].includes(normalized);
+}
+
+function weeklyCheckinExpectedForUser(user) {
+  const enabled = Boolean(firstValue(user?.checkinEnabled, user?.checkin_enabled, user?.checkins?.enabled, user?.checkins?.is_active));
+  if (!enabled) return 0;
+  return expectedWeeklyOccurrencesFromFrequency(firstValue(user?.checkinFrequency, user?.checkin_frequency, user?.checkins?.frequency_days, user?.checkins?.frequency));
+}
+
+function weeklyCheckinCompletedForUser(user) {
+  const status = firstValue(user?.checkinLastStatus, user?.checkin_last_status, user?.checkins?.last_outcome, user?.checkins?.lastOutcome);
+  const at = firstValue(user?.checkinLastReportedAt, user?.checkin_last_reported_at, user?.checkins?.last_checkin_at, user?.checkins?.lastCheckinAt);
+  return isCompletedCheckinStatus(status) && isTimestampInCurrentWeek(at) ? 1 : 0;
+}
+
 function formatDate(value) {
   return new Date(value).toISOString().slice(0, 10);
 }
@@ -260,10 +295,16 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
         vyva_user_id: alert.vyva_user_id == null ? alert.vyva_user_id : String(alert.vyva_user_id),
       }))
     : [];
+  const activeCheckins = Number(data?.checkinsEnabled ?? 0);
+  const computedWeeklyExpected =
+    gisUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0) || activeCheckins * 7;
+  const computedWeeklyCompleted = gisUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0);
 
   return {
     totalUsers: Number(data?.totalUsers ?? gisUsers.length),
-    checkinsEnabled: Number(data?.checkinsEnabled ?? 0),
+    checkinsEnabled: activeCheckins,
+    checkinsCompletedWeekly: Number(data?.checkinsCompletedWeekly ?? computedWeeklyCompleted),
+    checkinsExpectedWeekly: Number(data?.checkinsExpectedWeekly ?? computedWeeklyExpected),
     activeAlertCount: Number(data?.activeAlertCount ?? activeAlerts.length),
     criticalAlertCount: Number(data?.criticalAlertCount ?? activeAlerts.filter((alert) => alert.severity === "critical").length),
     totalSensors: Number(data?.totalSensors ?? 0),
@@ -3941,10 +3982,17 @@ async function loadDashboardUsers(context) {
   const gisUsers = users.rows.map(dashboardUser);
   const activeAlertCount = alerts.length;
   const criticalAlertCount = alerts.filter((alert) => alert.severity === "critical").length;
+  const checkinsExpectedWeekly = users.rows.reduce((sum, row) => {
+    if (!row.checkin_enabled) return sum;
+    return sum + expectedWeeklyOccurrencesFromFrequency(row.checkin_frequency);
+  }, 0);
+  const checkinsCompletedWeekly = users.rows.reduce((sum, row) => sum + weeklyCheckinCompletedForUser(row), 0);
 
   return {
     totalUsers: gisUsers.length,
     checkinsEnabled: Number(checkinRows.rows[0]?.count || 0),
+    checkinsCompletedWeekly,
+    checkinsExpectedWeekly,
     activeAlertCount,
     criticalAlertCount,
     totalSensors: Number(sensorRows[0]?.count || 0),
