@@ -1960,21 +1960,14 @@ function consoleMagicLinkCopy(language) {
       eyebrow: "Sicherer Zugang",
       heading: "Bei VYVA anmelden",
       intro:
-        "VYVA ist die Einsatzkonsole fuer koordinierte Betreuung, Check-ins, Medikationsnachverfolgung und Risikopriorisierung. Oeffnen Sie die Konsole ueber den sicheren Einmal-Link unten.",
+        "Oeffnen Sie die VYVA Operationskonsole mit diesem sicheren Einmal-Link.",
       button: "Bei VYVA anmelden",
-      platformTitle: "Was Sie in VYVA tun koennen",
-      platformItems: [
-        "Klienten nach Risiko und Kontaktbedarf priorisieren.",
-        "Check-up-Anrufe, Brain-Coach-Routinen und Medikationshinweise pruefen.",
-        "Red-Cross-Teams und Notfallkontakte koordiniert halten.",
-      ],
       manualTitle: "Benutzerhandbuch",
-      manualText: "Ein vollstaendiges Benutzerhandbuch wird hier verlinkt, sobald es bereitsteht.",
+      manualText: "Ein Benutzerhandbuch wird hier verlinkt, sobald es bereitsteht.",
       manualButton: "Handbuch oeffnen",
-      securityTitle: "Sicherheitshinweis",
-      securityText: "Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie ignorieren. Der Link ist nur fuer dieses Postfach bestimmt.",
+      securityText: "Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie einfach ignorieren.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
-      footer: "Automatische VYVA Login-E-Mail fuer autorisierte Konsolennutzer.",
+      footer: "VYVA x Rotes Kreuz Operationskonsole",
     };
   }
 
@@ -1984,21 +1977,14 @@ function consoleMagicLinkCopy(language) {
       eyebrow: "Acceso seguro",
       heading: "Iniciar sesion en VYVA",
       intro:
-        "VYVA es la consola operativa para coordinar atencion, check-ins, medicacion, asignaciones y priorizacion de riesgo. Abre la consola con el enlace seguro de un solo uso.",
+        "Abre la consola de operaciones VYVA con este enlace seguro de un solo uso.",
       button: "Abrir VYVA",
-      platformTitle: "Que puedes hacer en VYVA",
-      platformItems: [
-        "Priorizar clientes segun riesgo y necesidad de contacto.",
-        "Revisar llamadas de seguimiento, Brain Coach y medicacion.",
-        "Coordinar equipos de Cruz Roja y contactos de emergencia.",
-      ],
       manualTitle: "Manual de usuario",
-      manualText: "El manual completo se enlazara aqui en cuanto este disponible.",
+      manualText: "El manual de usuario se enlazara aqui en cuanto este disponible.",
       manualButton: "Abrir manual",
-      securityTitle: "Nota de seguridad",
-      securityText: "Si no solicitaste este correo, puedes ignorarlo. El enlace esta destinado solo a esta bandeja de entrada.",
+      securityText: "Si no solicitaste este correo, puedes ignorarlo.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
-      footer: "Correo automatico de acceso a VYVA para usuarios autorizados de la consola.",
+      footer: "VYVA x Cruz Roja consola de operaciones",
     };
   }
 
@@ -2007,21 +1993,14 @@ function consoleMagicLinkCopy(language) {
     eyebrow: "Secure access",
     heading: "Sign in to VYVA",
     intro:
-      "VYVA is the operations console for coordinating care, check-ins, medication follow-up, assignments, and risk prioritization. Open the console with the secure one-time link below.",
+      "Open the VYVA operations console with this secure one-time link.",
     button: "Open VYVA",
-    platformTitle: "What you can do in VYVA",
-    platformItems: [
-      "Prioritize clients by risk and contact need.",
-      "Review check-up calls, Brain Coach routines, and medication follow-up.",
-      "Coordinate Red Cross staff and emergency contacts.",
-    ],
     manualTitle: "User manual",
-    manualText: "A full user manual will be linked here once it is available.",
+    manualText: "The user manual will be linked here once it is available.",
     manualButton: "Open manual",
-    securityTitle: "Security note",
-    securityText: "If you did not request this email, you can safely ignore it. This link is intended only for this inbox.",
+    securityText: "If you did not request this email, you can safely ignore it.",
     fallback: "Button not working? Copy and paste this link into your browser:",
-    footer: "Automated VYVA sign-in email for authorized console users.",
+    footer: "VYVA x Red Cross operations console",
   };
 }
 
@@ -2039,22 +2018,14 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
     "",
     copy.securityText,
   ].filter(Boolean);
-  const itemList = copy.platformItems
-    .map((item) => `<li style="margin:0 0 8px;color:#5f667a;font-size:14px;line-height:1.55;">${escapeHtml(item)}</li>`)
-    .join("");
   const manualBlock = safeManualUrl
     ? `
             <tr>
-              <td style="padding:0 32px 28px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #dfe5ef;border-radius:16px;">
-                  <tr>
-                    <td style="padding:18px 20px;">
-                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">${escapeHtml(copy.manualTitle)}</p>
-                      <p style="margin:0 0 14px;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.manualText)}</p>
-                      <a href="${safeManualUrl}" style="display:inline-block;color:#6c4df6;text-decoration:none;font-size:14px;font-weight:700;">${escapeHtml(copy.manualButton)}</a>
-                    </td>
-                  </tr>
-                </table>
+              <td style="padding:0 38px 28px;">
+                <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280;">
+                  ${escapeHtml(copy.manualText)}
+                  <a href="${safeManualUrl}" style="color:#6c4df6;text-decoration:none;font-weight:700;">${escapeHtml(copy.manualButton)}</a>
+                </p>
               </td>
             </tr>`
     : "";
@@ -2070,66 +2041,55 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
     <title>${escapeHtml(copy.subject)}</title>
   </head>
   <body style="margin:0;background:#eef3fb;font-family:Arial,Helvetica,sans-serif;color:#17172f;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:32px 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:40px 14px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.10);">
             <tr>
-              <td style="padding:30px 32px 24px;border-bottom:1px solid #edf0f7;">
-                <span style="display:inline-block;width:44px;height:44px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:21px;font-weight:700;line-height:44px;text-align:center;margin-right:12px;">V</span>
-                <span style="font-size:22px;font-weight:700;color:#17172f;vertical-align:middle;">VYVA</span>
-                <span style="display:block;margin-top:7px;margin-left:58px;font-size:11px;letter-spacing:0.28em;text-transform:uppercase;color:#6b7280;">Red Cross console</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:34px 32px 8px;">
-                <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
-                <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">${escapeHtml(copy.heading)}</h1>
-                <p style="margin:0;font-size:16px;line-height:1.65;color:#5f667a;">${escapeHtml(copy.intro)}</p>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:26px 32px 30px;">
-                <a href="${safeActionLink}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:700;line-height:1;border-radius:14px;padding:17px 24px;box-shadow:0 10px 22px rgba(108,77,246,0.28);">${escapeHtml(copy.button)}</a>
-              </td>
-            </tr>
-            <tr>
-              <td style="padding:0 32px 28px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbfcff;border:1px solid #e3e8f4;border-radius:16px;">
+              <td style="padding:30px 38px 22px;border-bottom:1px solid #edf0f7;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                   <tr>
-                    <td style="padding:18px 20px;">
-                      <p style="margin:0 0 10px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#17172f;">${escapeHtml(copy.platformTitle)}</p>
-                      <ul style="margin:0;padding-left:18px;">${itemList}</ul>
+                    <td style="vertical-align:middle;">
+                      <span style="display:inline-block;width:42px;height:42px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:20px;font-weight:800;line-height:42px;text-align:center;margin-right:12px;">V</span>
+                      <span style="font-size:22px;font-weight:800;color:#17172f;vertical-align:middle;">VYVA</span>
                     </td>
+                    <td align="right" style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#7a8297;font-weight:700;">Red Cross</td>
                   </tr>
                 </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:38px 38px 10px;">
+                <p style="display:inline-block;margin:0 0 16px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
+                <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">${escapeHtml(copy.heading)}</h1>
+                <p style="margin:0;font-size:16px;line-height:1.62;color:#5f667a;">${escapeHtml(copy.intro)}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:26px 38px 30px;">
+                <a href="${safeActionLink}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:800;line-height:1;border-radius:14px;padding:17px 25px;box-shadow:0 10px 22px rgba(108,77,246,0.24);">${escapeHtml(copy.button)}</a>
               </td>
             </tr>
             ${manualBlock}
             <tr>
-              <td style="padding:0 32px 30px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5ff;border:1px solid #ded8ff;border-radius:16px;">
+              <td style="padding:0 38px 28px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbfcff;border:1px solid #e3e8f4;border-radius:16px;">
                   <tr>
-                    <td style="padding:18px 20px;">
-                      <p style="margin:0 0 8px;font-size:13px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#6c4df6;">${escapeHtml(copy.securityTitle)}</p>
-                      <p style="margin:0;font-size:14px;line-height:1.55;color:#5f667a;">${escapeHtml(copy.securityText)}</p>
+                    <td style="padding:16px 18px;">
+                      <p style="margin:0;font-size:14px;line-height:1.55;color:#6b7280;">${escapeHtml(copy.securityText)}</p>
                     </td>
                   </tr>
                 </table>
               </td>
             </tr>
             <tr>
-              <td style="padding:0 32px 34px;">
-                <p style="margin:0 0 8px;font-size:13px;line-height:1.55;color:#7a8297;">${escapeHtml(copy.fallback)}</p>
-                <p style="margin:0;font-size:12px;line-height:1.55;color:#6c4df6;word-break:break-all;">${safeActionLink}</p>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:#17172f;padding:18px 32px;">
-                <p style="margin:0;font-size:12px;line-height:1.6;color:#c8ccda;">${escapeHtml(copy.footer)}</p>
+              <td style="padding:0 38px 34px;">
+                <p style="margin:0 0 7px;font-size:12px;line-height:1.55;color:#8a91a6;">${escapeHtml(copy.fallback)}</p>
+                <p style="margin:0;font-size:11px;line-height:1.5;color:#6c4df6;word-break:break-all;">${safeActionLink}</p>
               </td>
             </tr>
           </table>
+          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">${escapeHtml(copy.footer)}</p>
         </td>
       </tr>
     </table>

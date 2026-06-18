@@ -3,27 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Ihre Einladung zur VYVA Konsole{{ else if eq .Data.language "es" }}Tu invitacion a la consola VYVA{{ else }}Your VYVA console invitation{{ end }}{{ else }}{{ if eq .Data.language "de" }}Ihr sicherer VYVA Anmeldelink{{ else if eq .Data.language "es" }}Tu enlace seguro de acceso a VYVA{{ else }}Your secure VYVA sign-in link{{ end }}{{ end }}</title>
+    <title>{{ if eq .Data.language "de" }}Ihr sicherer VYVA Login-Link{{ else if eq .Data.language "es" }}Tu enlace seguro de acceso a VYVA{{ else }}Your secure VYVA sign-in link{{ end }}</title>
   </head>
   <body style="margin:0;background:#eef3fb;font-family:Arial,Helvetica,sans-serif;color:#17172f;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
-      {{ if eq .Data.language "de" }}VYVA hilft Rotkreuz-Teams, Klienten, Anrufe, Risiken und Nachverfolgung sicher zu koordinieren.{{ else if eq .Data.language "es" }}VYVA ayuda a los equipos de Cruz Roja a coordinar clientes, llamadas, riesgos y seguimiento de forma segura.{{ else }}VYVA helps Red Cross teams coordinate clients, calls, risks, and follow-up securely.{{ end }}
+      {{ if eq .Data.language "de" }}Oeffnen Sie VYVA mit Ihrem sicheren Einmal-Link.{{ else if eq .Data.language "es" }}Abre VYVA con tu enlace seguro de un solo uso.{{ else }}Open VYVA with your secure one-time link.{{ end }}
     </div>
 
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:34px 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef3fb;margin:0;padding:40px 14px;">
       <tr>
         <td align="center">
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:660px;background:#ffffff;border:1px solid #dde3f0;border-radius:24px;overflow:hidden;box-shadow:0 22px 54px rgba(38,45,72,0.14);">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.10);">
             <tr>
-              <td style="background:#17172f;padding:26px 32px;">
+              <td style="padding:30px 38px 22px;border-bottom:1px solid #edf0f7;">
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
                   <tr>
                     <td style="vertical-align:middle;">
-                      <span style="display:inline-block;width:46px;height:46px;border-radius:16px;background:#6c4df6;color:#ffffff;font-size:21px;font-weight:800;line-height:46px;text-align:center;margin-right:12px;">V</span>
-                      <span style="font-size:22px;font-weight:800;color:#ffffff;vertical-align:middle;">VYVA</span>
+                      <span style="display:inline-block;width:42px;height:42px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:20px;font-weight:800;line-height:42px;text-align:center;margin-right:12px;">V</span>
+                      <span style="font-size:22px;font-weight:800;color:#17172f;vertical-align:middle;">VYVA</span>
                     </td>
-                    <td align="right" style="font-size:12px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;color:#c8ccda;">
-                      {{ if eq .Data.language "de" }}Rotes Kreuz Konsole{{ else if eq .Data.language "es" }}Consola Cruz Roja{{ else }}Red Cross Console{{ end }}
+                    <td align="right" style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#7a8297;font-weight:700;">
+                      {{ if eq .Data.language "de" }}Rotes Kreuz{{ else if eq .Data.language "es" }}Cruz Roja{{ else }}Red Cross{{ end }}
                     </td>
                   </tr>
                 </table>
@@ -31,99 +31,45 @@
             </tr>
 
             <tr>
-              <td style="padding:34px 36px 12px;">
-                <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.14em;text-transform:uppercase;">
-                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Teameinladung{{ else if eq .Data.language "es" }}Invitacion de equipo{{ else }}Team invite{{ end }}{{ else }}{{ if eq .Data.language "de" }}Sicherer Login{{ else if eq .Data.language "es" }}Acceso seguro{{ else }}Secure sign-in{{ end }}{{ end }}
+              <td style="padding:38px 38px 10px;">
+                <p style="display:inline-block;margin:0 0 16px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">
+                  {{ if eq .Data.language "de" }}Sicherer Zugang{{ else if eq .Data.language "es" }}Acceso seguro{{ else }}Secure access{{ end }}
                 </p>
-                <h1 style="margin:0 0 14px;font-size:31px;line-height:1.18;color:#17172f;">
-                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Willkommen bei VYVA{{ else if eq .Data.language "es" }}Bienvenido a VYVA{{ else }}Welcome to VYVA{{ end }}{{ else }}{{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Accede a VYVA{{ else }}Sign in to VYVA{{ end }}{{ end }}
+                <h1 style="margin:0 0 14px;font-size:30px;line-height:1.18;color:#17172f;">
+                  {{ if eq .Data.language "de" }}Bei VYVA anmelden{{ else if eq .Data.language "es" }}Iniciar sesion en VYVA{{ else }}Sign in to VYVA{{ end }}
                 </h1>
-                <p style="margin:0;font-size:16px;line-height:1.65;color:#5f667a;">
-                  {{ if eq .Data.invite_type "team_member" }}{{ if eq .Data.language "de" }}Sie wurden{{ if .Data.organization_name }} fuer {{ .Data.organization_name }}{{ end }} als {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}Teammitglied{{ end }} hinzugefuegt. Nutzen Sie den sicheren Link unten, um die Konsole zu oeffnen.{{ else if eq .Data.language "es" }}Te agregaron{{ if .Data.organization_name }} a {{ .Data.organization_name }}{{ end }} como {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}miembro del equipo{{ end }}. Usa el enlace seguro de abajo para abrir la consola.{{ else }}You were added{{ if .Data.organization_name }} to {{ .Data.organization_name }}{{ end }} as {{ if .Data.invited_role_label }}{{ .Data.invited_role_label }}{{ else }}a team member{{ end }}. Use the secure link below to open the console.{{ end }}{{ else }}{{ if eq .Data.language "de" }}Nutzen Sie diesen einmaligen Link, um die VYVA Operationskonsole sicher zu oeffnen.{{ else if eq .Data.language "es" }}Usa este enlace de un solo uso para abrir de forma segura la consola de operaciones VYVA.{{ else }}Use this one-time link to securely open the VYVA operations console.{{ end }}{{ end }}
+                <p style="margin:0;font-size:16px;line-height:1.62;color:#5f667a;">
+                  {{ if eq .Data.language "de" }}Oeffnen Sie die VYVA Operationskonsole mit diesem sicheren Einmal-Link.{{ else if eq .Data.language "es" }}Abre la consola de operaciones VYVA con este enlace seguro de un solo uso.{{ else }}Open the VYVA operations console with this secure one-time link.{{ end }}
                 </p>
               </td>
             </tr>
 
             <tr>
-              <td style="padding:10px 36px 0;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e7f2;border-radius:18px;">
-                  <tr>
-                    <td style="padding:22px 22px 8px;">
-                      <p style="margin:0 0 8px;font-size:13px;font-weight:800;letter-spacing:0.1em;text-transform:uppercase;color:#6c4df6;">
-                        {{ if eq .Data.language "de" }}Was ist VYVA?{{ else if eq .Data.language "es" }}Que es VYVA?{{ else }}What is VYVA?{{ end }}
-                      </p>
-                      <p style="margin:0;font-size:15px;line-height:1.65;color:#4e566c;">
-                        {{ if eq .Data.language "de" }}VYVA ist die Operationskonsole fuer Rotkreuz-Teams. Sie buendelt Klientenprofile, geplante Check-up-Anrufe, Brain-Coach-Routinen, Medikamentenhinweise, Risiko-Signale, Kampagnen und Team-Zuweisungen in einem sicheren Arbeitsbereich.{{ else if eq .Data.language "es" }}VYVA es la consola operativa para equipos de Cruz Roja. Reune perfiles de clientes, llamadas de check-up, rutinas de Brain Coach, medicacion, senales de riesgo, campanas y asignaciones de equipo en un espacio seguro.{{ else }}VYVA is the operations console for Red Cross teams. It brings client profiles, scheduled check-up calls, Brain Coach routines, medication signals, risk review, campaigns, and team assignments into one secure workspace.{{ end }}
-                      </p>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="padding:8px 22px 22px;">
-                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                        <tr>
-                          <td style="padding:10px 12px;background:#ffffff;border:1px solid #e6eaf4;border-radius:14px;font-size:13px;line-height:1.45;color:#5f667a;">
-                            <strong style="display:block;color:#17172f;margin-bottom:4px;">{{ if eq .Data.language "de" }}Priorisieren{{ else if eq .Data.language "es" }}Priorizar{{ else }}Prioritize{{ end }}</strong>
-                            {{ if eq .Data.language "de" }}Risiko und Nachverfolgung schneller erkennen.{{ else if eq .Data.language "es" }}Detecta riesgo y seguimiento pendiente.{{ else }}Spot risk and follow-up needs faster.{{ end }}
-                          </td>
-                          <td width="10"></td>
-                          <td style="padding:10px 12px;background:#ffffff;border:1px solid #e6eaf4;border-radius:14px;font-size:13px;line-height:1.45;color:#5f667a;">
-                            <strong style="display:block;color:#17172f;margin-bottom:4px;">{{ if eq .Data.language "de" }}Koordinieren{{ else if eq .Data.language "es" }}Coordinar{{ else }}Coordinate{{ end }}</strong>
-                            {{ if eq .Data.language "de" }}Teams, Kontakte und Zuweisungen an einem Ort.{{ else if eq .Data.language "es" }}Equipos, contactos y asignaciones en un lugar.{{ else }}Teams, contacts, and assignments in one place.{{ end }}
-                          </td>
-                          <td width="10"></td>
-                          <td style="padding:10px 12px;background:#ffffff;border:1px solid #e6eaf4;border-radius:14px;font-size:13px;line-height:1.45;color:#5f667a;">
-                            <strong style="display:block;color:#17172f;margin-bottom:4px;">{{ if eq .Data.language "de" }}Handeln{{ else if eq .Data.language "es" }}Actuar{{ else }}Act{{ end }}</strong>
-                            {{ if eq .Data.language "de" }}Anrufe, Kampagnen und Pflegeplaene steuern.{{ else if eq .Data.language "es" }}Gestiona llamadas, campanas y planes de cuidado.{{ else }}Manage calls, campaigns, and care plans.{{ end }}
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="padding:28px 36px 12px;">
-                <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:800;line-height:1;border-radius:15px;padding:18px 26px;box-shadow:0 12px 24px rgba(108,77,246,0.3);">
+              <td style="padding:26px 38px 30px;">
+                <a href="{{ .ConfirmationURL }}" style="display:inline-block;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:16px;font-weight:800;line-height:1;border-radius:14px;padding:17px 25px;box-shadow:0 10px 22px rgba(108,77,246,0.24);">
                   {{ if eq .Data.language "de" }}VYVA oeffnen{{ else if eq .Data.language "es" }}Abrir VYVA{{ else }}Open VYVA{{ end }}
                 </a>
-                <span style="display:inline-block;margin-left:12px;font-size:13px;color:#7a8297;">
-                  {{ if eq .Data.language "de" }}Link ist einmalig gueltig{{ else if eq .Data.language "es" }}Enlace de un solo uso{{ else }}One-time secure link{{ end }}
-                </span>
               </td>
             </tr>
 
             <tr>
-              <td style="padding:8px 36px 30px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fff9ed;border:1px solid #ffd99a;border-radius:16px;">
-                  <tr>
-                    <td style="padding:18px 20px;">
-                      <p style="margin:0 0 8px;font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#9a5b00;">
-                        {{ if eq .Data.language "de" }}Benutzerhandbuch{{ else if eq .Data.language "es" }}Manual de usuario{{ else }}User manual{{ end }}
-                      </p>
-                      <p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:#5f667a;">
-                        {{ if eq .Data.language "de" }}Ein kurzer Guide hilft neuen Teammitgliedern, die Konsole, Rollen, Klientenprofile und Kampagnen sicher zu nutzen. Der finale Link kann hier spaeter ersetzt werden.{{ else if eq .Data.language "es" }}Una guia breve ayudara a nuevos miembros del equipo a usar la consola, roles, perfiles de clientes y campanas de forma segura. El enlace final se puede sustituir aqui mas adelante.{{ else }}A short guide will help team members understand the console, roles, client profiles, and campaign workflows. The final manual link can be added here once it is provided.{{ end }}
-                      </p>
-                      <a href="{{ if .Data.manual_url }}{{ .Data.manual_url }}{{ else }}https://rcadmin.vyva.life/manual{{ end }}" style="display:inline-block;color:#6c4df6;text-decoration:none;font-size:14px;font-weight:800;">
-                        {{ if eq .Data.language "de" }}Benutzerhandbuch oeffnen{{ else if eq .Data.language "es" }}Abrir manual de usuario{{ else }}Open user manual{{ end }}
-                      </a>
-                    </td>
-                  </tr>
-                </table>
+              <td style="padding:0 38px 28px;">
+                <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280;">
+                  {{ if eq .Data.language "de" }}Ein Benutzerhandbuch wird hier verlinkt, sobald es bereitsteht.{{ else if eq .Data.language "es" }}El manual de usuario se enlazara aqui en cuanto este disponible.{{ else }}The user manual will be linked here once it is available.{{ end }}
+                  <a href="{{ if .Data.manual_url }}{{ .Data.manual_url }}{{ else }}https://rcadmin.vyva.life/manual{{ end }}" style="color:#6c4df6;text-decoration:none;font-weight:700;">
+                    {{ if eq .Data.language "de" }}Handbuch oeffnen{{ else if eq .Data.language "es" }}Abrir manual{{ else }}Open manual{{ end }}
+                  </a>
+                </p>
               </td>
             </tr>
 
             <tr>
-              <td style="padding:0 36px 30px;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f5ff;border:1px solid #ded8ff;border-radius:16px;">
+              <td style="padding:0 38px 28px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fbfcff;border:1px solid #e3e8f4;border-radius:16px;">
                   <tr>
-                    <td style="padding:18px 20px;">
-                      <p style="margin:0 0 8px;font-size:13px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:#6c4df6;">
-                        {{ if eq .Data.language "de" }}Sicherheitshinweis{{ else if eq .Data.language "es" }}Nota de seguridad{{ else }}Security note{{ end }}
-                      </p>
-                      <p style="margin:0;font-size:14px;line-height:1.55;color:#5f667a;">
-                        {{ if eq .Data.language "de" }}Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie ignorieren. Ohne Zugriff auf dieses Postfach kann sich niemand anmelden.{{ else if eq .Data.language "es" }}Si no solicitaste este correo, puedes ignorarlo. Nadie iniciara sesion sin acceso a esta bandeja de entrada.{{ else }}If you did not request this email, you can ignore it. No one will be signed in without access to this inbox.{{ end }}
+                    <td style="padding:16px 18px;">
+                      <p style="margin:0;font-size:14px;line-height:1.55;color:#6b7280;">
+                        {{ if eq .Data.language "de" }}Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie einfach ignorieren.{{ else if eq .Data.language "es" }}Si no solicitaste este correo, puedes ignorarlo.{{ else }}If you did not request this email, you can safely ignore it.{{ end }}
                       </p>
                     </td>
                   </tr>
@@ -132,27 +78,19 @@
             </tr>
 
             <tr>
-              <td style="padding:0 36px 34px;">
-                <p style="margin:0 0 8px;font-size:13px;line-height:1.55;color:#7a8297;">
+              <td style="padding:0 38px 34px;">
+                <p style="margin:0 0 7px;font-size:12px;line-height:1.55;color:#8a91a6;">
                   {{ if eq .Data.language "de" }}Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:{{ else if eq .Data.language "es" }}Si el boton no funciona, copia este enlace en tu navegador:{{ else }}Button not working? Copy and paste this link into your browser:{{ end }}
                 </p>
-                <p style="margin:0;font-size:12px;line-height:1.55;color:#6c4df6;word-break:break-all;">
+                <p style="margin:0;font-size:11px;line-height:1.5;color:#6c4df6;word-break:break-all;">
                   {{ .ConfirmationURL }}
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="background:#17172f;padding:18px 36px;">
-                <p style="margin:0;font-size:12px;line-height:1.6;color:#c8ccda;">
-                  {{ if eq .Data.language "de" }}VYVA x Rotes Kreuz Operationskonsole{{ else if eq .Data.language "es" }}VYVA x Cruz Roja consola de operaciones{{ else }}VYVA x Red Cross operations console{{ end }}
                 </p>
               </td>
             </tr>
           </table>
 
-          <p style="max-width:660px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">
-            {{ if eq .Data.language "de" }}Automatische Anmelde-E-Mail fuer autorisierte VYVA Konsolennutzer.{{ else if eq .Data.language "es" }}Correo automatico de acceso para usuarios autorizados de la consola VYVA.{{ else }}Automated sign-in email for authorized VYVA console users.{{ end }}
+          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">
+            {{ if eq .Data.language "de" }}VYVA x Rotes Kreuz Operationskonsole{{ else if eq .Data.language "es" }}VYVA x Cruz Roja consola de operaciones{{ else }}VYVA x Red Cross operations console{{ end }}
           </p>
         </td>
       </tr>
