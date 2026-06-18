@@ -1701,7 +1701,7 @@ export default function Campaigns() {
           </div>
         </div>
 
-        <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+        <div className="grid gap-5 p-5 2xl:grid-cols-[minmax(0,1fr)_minmax(520px,0.78fr)]">
           <div className="space-y-3">
             {campaignsQuery.isLoading ? (
               <LoadingCampaignsPanel label={t("login.loading")} />
@@ -2195,29 +2195,27 @@ export default function Campaigns() {
                     )}
                   </div>
 
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-                    <section className="rounded-2xl border border-border bg-slate-50 p-5">
-                      <div className="space-y-5">
-                        <div>
-                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.objective")}</p>
-                          <p className="mt-2 text-base font-semibold leading-7 text-foreground">
-                            {campaignDisplayObjective(selectedCampaign)}
+                  <div className="grid gap-4">
+                    <section className="space-y-4 rounded-2xl border border-border bg-slate-50 p-5">
+                      <div className="rounded-2xl bg-white p-4 shadow-sm">
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.objective")}</p>
+                        <p className="mt-2 text-base font-semibold leading-7 text-foreground">
+                          {campaignDisplayObjective(selectedCampaign)}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-2xl bg-white p-4 shadow-sm">
+                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.audience")}</p>
+                          <p className="mt-2 text-sm leading-6 text-foreground">
+                            {campaignDisplayAudience(selectedCampaign)}
                           </p>
                         </div>
-
-                        <div className="grid gap-5 md:grid-cols-2">
-                          <div>
-                            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.audience")}</p>
-                            <p className="mt-2 text-sm leading-6 text-foreground">
-                              {campaignDisplayAudience(selectedCampaign)}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.script")}</p>
-                            <p className="mt-2 text-sm leading-6 text-foreground">
-                              {campaignDisplayScript(selectedCampaign)}
-                            </p>
-                          </div>
+                        <div className="rounded-2xl bg-white p-4 shadow-sm">
+                          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.detail.script")}</p>
+                          <p className="mt-2 text-sm leading-6 text-foreground">
+                            {campaignDisplayScript(selectedCampaign)}
+                          </p>
                         </div>
                       </div>
                     </section>
@@ -2235,7 +2233,7 @@ export default function Campaigns() {
                       <div className="mt-5 grid gap-3 sm:grid-cols-3">
                         <CompactStat title={t("campaigns.row.eligible")} value={String(selectedCampaign.latestRun?.eligibleCount ?? 0)} />
                         <CompactStat title={t("campaigns.row.skipped")} value={String(selectedCampaign.latestRun?.skippedCount ?? 0)} />
-                        <CompactStat title={t("campaigns.detail.completed")} value={String(selectedCampaign.latestRun?.completedCount ?? 0)} />
+                        <CompactStat title={t("campaigns.call.completed")} value={String(selectedCampaign.latestRun?.completedCount ?? 0)} />
                       </div>
                     </section>
                   </div>
@@ -3275,17 +3273,17 @@ function LoadFailurePanel({
 
 function InfoPair({ title, value }: { title: string; value: string }) {
   return (
-    <div className="space-y-1">
-      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
-      <p className="text-sm font-semibold text-foreground">{value}</p>
+    <div className="min-w-0 space-y-1 rounded-xl bg-white/70 px-3 py-2">
+      <p className="break-words text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+      <p className="break-words text-sm font-semibold text-foreground">{value}</p>
     </div>
   );
 }
 
 function CompactStat({ title, value }: { title: string; value: string }) {
   return (
-    <div className="rounded-2xl bg-white px-4 py-3 shadow-sm">
-      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+    <div className="min-w-0 rounded-2xl bg-white px-4 py-3 shadow-sm">
+      <p className="break-words text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{title}</p>
       <p className="mt-2 text-xl font-bold text-foreground">{value}</p>
     </div>
   );
