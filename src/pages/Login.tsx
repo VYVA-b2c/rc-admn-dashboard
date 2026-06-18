@@ -85,7 +85,7 @@ export default function Login() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-4">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 p-4 sm:p-8 lg:justify-start lg:px-24 xl:px-32">
       <div
         aria-hidden="true"
         className="absolute inset-0 bg-cover bg-center"
@@ -94,7 +94,7 @@ export default function Login() {
       <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-br from-white/95 via-white/70 to-white/15" />
       <div aria-hidden="true" className="absolute inset-0 bg-slate-950/10" />
 
-      <div className="relative z-10 w-full max-w-md">
+      <div className="relative z-10 w-full max-w-md lg:ml-4 xl:ml-8">
         <div className="mb-8 text-center">
           <img src={drkLogo} alt="Red Cross" className="mx-auto mb-4 h-20 w-20 rounded-full shadow-lg" />
           <p className="mx-auto mt-1 max-w-xs px-2 text-sm leading-relaxed text-slate-700 sm:max-w-none sm:text-base">
