@@ -1094,8 +1094,62 @@ export default function Campaigns() {
     if (/(vaccine|vaccination|booster|flu shot|shot clinic|immuni[sz]ation|public health)/.test(normalized)) return "medication_reminder";
     if (/(scam|fraud|suspicious caller|phone scam|bank scam|identity theft|money request|phishing)/.test(normalized)) return "wellbeing_check";
     if (/(service|transport|pharmacy|update|hours|closure|appointment|referral)/.test(normalized)) return "service_update";
-    if (/(storm|weather|rain|flood|wind|thunder|lightning|snow|ice|cold|wildfire|fire|smoke|air quality|evacuat|announce|announcement|inform|remind|warn|warning|alert|campaign)/.test(normalized)) return "general_announcement";
+    if (/(mosquito|mosquitoes|mosquitos|insect bite|dengue|west nile|tick|storm|weather|rain|flood|wind|thunder|lightning|snow|ice|cold|wildfire|fire|smoke|air quality|evacuat|announce|announcement|inform|remind|warn|warning|alert|campaign)/.test(normalized)) return "general_announcement";
     return fallback;
+  };
+
+  const cleanAiGoal = (prompt: string) => {
+    return prompt
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/^(please\s+)?(develop|write|create|generate|draft|make|prepare)\s+(a\s+)?((call|phone)\s+)?(script|message|campaign|announcement|brief)\s+(to|for|about)\s+/i, "")
+      .replace(/^(please\s+)?(develop|write|create|generate|draft|make|prepare)\s+/i, "")
+      .replace(/^to\s+/i, "")
+      .replace(/\busers\b/gi, "clients")
+      .replace(/^alert clients against\s+/i, "warn clients about preventing ")
+      .replace(/^alert people against\s+/i, "warn people about preventing ")
+      .replace(/^alert clients about\s+/i, "warn clients about ")
+      .replace(/^alert people about\s+/i, "warn people about ")
+      .trim();
+  };
+
+  const localizedAiText = (values: { en: string; de: string; es: string }) => {
+    if (language === "de") return values.de;
+    if (language === "es") return values.es;
+    return values.en;
+  };
+
+  const aiTopicName = (prompt: string, city: string) => {
+    const cityLabel = city || t("campaigns.scope.allCities");
+    if (/(mosquito|mosquitoes|mosquitos|insect bite|dengue|west nile)/i.test(prompt)) {
+      return localizedAiText({
+        en: `Mosquito bite safety - ${cityLabel}`,
+        de: `Schutz vor Mueckenstichen - ${cityLabel}`,
+        es: `Prevencion de picaduras de mosquitos - ${cityLabel}`,
+      });
+    }
+    return null;
+  };
+
+  const aiPromptScript = (prompt: string) => {
+    const normalized = prompt.toLowerCase();
+    const goal = cleanAiGoal(prompt);
+
+    if (/(mosquito|mosquitoes|mosquitos|insect bite|dengue|west nile)/.test(normalized)) {
+      return localizedAiText({
+        en: "Hello, this is VYVA calling on behalf of the Red Cross. We are sharing a mosquito-bite safety reminder for your area. Please use insect repellent if you have it, wear long sleeves when possible, keep windows or doors screened, and remove standing water near your home. If you feel unwell after a bite or need help understanding the advice, we can arrange a follow-up with the Red Cross team.",
+        de: "Hallo, hier ist VYVA im Auftrag des Roten Kreuzes. Wir geben einen Hinweis zum Schutz vor Mueckenstichen in Ihrer Region weiter. Nutzen Sie nach Moeglichkeit Insektenschutz, tragen Sie draussen eher lange Kleidung, halten Sie Fenster oder Tueren geschuetzt und entfernen Sie stehendes Wasser in der Naehe Ihres Zuhauses. Wenn Sie sich nach einem Stich unwohl fuehlen oder Hilfe beim Verstehen der Hinweise brauchen, koennen wir eine Nachverfolgung durch das Rote Kreuz organisieren.",
+        es: "Hola, soy VYVA llamando en nombre de Cruz Roja. Queremos compartir un recordatorio para prevenir picaduras de mosquitos en su zona. Use repelente si dispone de el, lleve manga larga cuando sea posible, mantenga puertas o ventanas protegidas y retire agua estancada cerca de su casa. Si se encuentra mal despues de una picadura o necesita ayuda para entender estas recomendaciones, podemos organizar un seguimiento con el equipo de Cruz Roja.",
+      });
+    }
+
+    if (!goal) return "";
+
+    return localizedAiText({
+      en: `Hello, this is VYVA calling on behalf of the Red Cross. We are calling with a short update: ${goal}. Please listen carefully and let us know if you need help or have questions. If needed, we can arrange a follow-up with the Red Cross team.`,
+      de: `Hallo, hier ist VYVA im Auftrag des Roten Kreuzes. Wir melden uns mit einer kurzen Information: ${goal}. Bitte hoeren Sie aufmerksam zu und sagen Sie uns, ob Sie Hilfe brauchen oder Fragen haben. Bei Bedarf koennen wir eine Nachverfolgung durch das Rote Kreuz organisieren.`,
+      es: `Hola, soy VYVA llamando en nombre de Cruz Roja. Llamamos con una informacion breve: ${goal}. Escuche con atencion y diganos si necesita ayuda o tiene preguntas. Si hace falta, podemos organizar un seguimiento con el equipo de Cruz Roja.`,
+    });
   };
 
   const buildAiSuggestion = (draft: CampaignFormState): CampaignAiSuggestion => {
@@ -1103,19 +1157,18 @@ export default function Campaigns() {
     const city = draft.city.trim();
     const freeText = draft.aiPrompt.trim();
     const baseScript = aiTemplateScript(suggestedTemplate);
-    const scriptBridge = freeText
-      ? t("campaigns.ai.scriptBridge").replace("{goal}", freeText)
-      : "";
+    const customScript = freeText ? aiPromptScript(freeText) : "";
+    const cleanGoal = cleanAiGoal(freeText);
     const objective = freeText
-      ? `${aiTemplateObjective(suggestedTemplate, city)} ${freeText}`
+      ? `${aiTemplateObjective(suggestedTemplate, city)} ${cleanGoal || freeText}`
       : aiTemplateObjective(suggestedTemplate, city);
 
     return {
       templateKey: suggestedTemplate,
-      name: aiTemplateName(suggestedTemplate, city),
+      name: aiTopicName(freeText, city) ?? aiTemplateName(suggestedTemplate, city),
       audience: aiTemplateAudience(suggestedTemplate, city),
       objective,
-      callScript: scriptBridge ? `${baseScript}\n\n${scriptBridge}` : baseScript,
+      callScript: customScript || baseScript,
       focus: aiTemplateFocus(suggestedTemplate),
     };
   };
