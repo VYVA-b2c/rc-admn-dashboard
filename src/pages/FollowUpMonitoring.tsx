@@ -168,7 +168,11 @@ function toRow(user: OperationalQueueUser, kind: FollowUpKind): FollowUpRow {
       detail: missedMeds > 0 ? String(missedMeds) : "0",
       issueScore: missedMeds,
       name,
-      reasonKey: missedMeds > 0 ? "followup.medication.reason" : "followup.medication.noIssue",
+      reasonKey: missedMeds > 0
+        ? missedMeds === 1
+          ? "followup.medication.reason.one"
+          : "followup.medication.reason.many"
+        : "followup.medication.noIssue",
       score,
       status,
     };
@@ -269,7 +273,7 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
       return (
         row.name.toLowerCase().includes(query) ||
         row.city.toLowerCase().includes(query) ||
-        t(row.reasonKey).toLowerCase().includes(query) ||
+        t(row.reasonKey).replace("{count}", row.detail).toLowerCase().includes(query) ||
         (row.assignedTo ?? "").toLowerCase().includes(query)
       );
     });
@@ -420,7 +424,7 @@ export function FollowUpMonitoring({ kind }: { kind: FollowUpKind }) {
                         <TableCell className="text-muted-foreground">{row.city || t("usersList.cityUnknown")}</TableCell>
                         <TableCell>
                           <div>
-                            <p className="font-medium text-foreground">{t(row.reasonKey)}</p>
+                            <p className="font-medium text-foreground">{t(row.reasonKey).replace("{count}", row.detail)}</p>
                             <p className="text-xs text-muted-foreground">
                               {t("followup.table.riskScore").replace("{score}", String(row.score))}
                             </p>
