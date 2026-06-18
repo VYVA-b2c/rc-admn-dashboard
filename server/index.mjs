@@ -13,6 +13,9 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
 const schemaPath = path.join(rootDir, "server", "schema.sql");
+const publicManualPath = "/manuals/VYVA_Admin_Console_User_Manual.pdf";
+const publicManualFilePath = path.join(rootDir, "public", "manuals", "VYVA_Admin_Console_User_Manual.pdf");
+const currentManualFilePath = path.join(rootDir, "docs", "admin-manual", "current", "VYVA_Admin_Console_User_Manual.pdf");
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -49,7 +52,7 @@ const publicAppUrl =
   process.env.VITE_PUBLIC_APP_URL ||
   null;
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
-const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || "/guide/team-access";
+const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || publicManualPath;
 const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
 const userManualUrlOverride =
   process.env.USER_MANUAL_URL ||
@@ -2253,7 +2256,7 @@ function inviteRoleLabel(role, language) {
 }
 
 function teamInviteGuideUrl(origin) {
-  return absoluteAppUrl(teamInviteGuideUrlOverride || teamInviteGuidePath, origin);
+  return absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin);
 }
 
 function teamInviteRedirectUrl(origin) {
@@ -8045,6 +8048,17 @@ app.get("/api/health", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.get(publicManualPath, (_req, res, next) => {
+  const manualPath = fs.existsSync(publicManualFilePath) ? publicManualFilePath : currentManualFilePath;
+  if (!fs.existsSync(manualPath)) {
+    next();
+    return;
+  }
+  res.type("application/pdf");
+  res.setHeader("Cache-Control", "public, max-age=300");
+  res.sendFile(manualPath);
 });
 
 app.get("/api/v1/me", asyncRoute(async (req, res) => {
