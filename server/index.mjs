@@ -2374,8 +2374,6 @@ function escapeHtml(value) {
 function renderVyvaEmailHeader(language = "en") {
   const redCrossLabel =
     language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross";
-  const secureLabel =
-    language === "de" ? "Sicherer Zugang" : language === "es" ? "Acceso seguro" : "Secure access";
   const poweredByLabel = "Powered by VYVA";
 
   return `
@@ -2403,7 +2401,6 @@ function renderVyvaEmailHeader(language = "en") {
                             <div style="display:inline-block;text-align:right;">
                               <div style="font-size:11px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#8a91a6;">${escapeHtml(poweredByLabel)}</div>
                               <div style="padding-top:5px;font-size:21px;font-weight:900;letter-spacing:0.01em;color:#6c4df6;line-height:1;">VYVA</div>
-                              <div style="display:inline-block;margin-top:9px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:10px;font-weight:800;letter-spacing:0.10em;text-transform:uppercase;padding:7px 10px;">${escapeHtml(secureLabel)}</div>
                             </div>
                           </td>
                         </tr>
@@ -9789,6 +9786,134 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
 
     req.context = await resolveRequestContext(req);
     res.json({ sessions: await loadBrainCoachSessions(req.context) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+function normalizeBrainCoachReportPayload(payload, fallbackUserId) {
+  const body = payload?.data && typeof payload.data === "object" && !Array.isArray(payload.data) ? payload.data : payload;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+
+  const user = body.user ?? body.client ?? body.vyva_user ?? null;
+  const summary = body.summary ?? body.metrics ?? {};
+  const sessions = extractUpstreamList(body, ["sessions", "session_history", "data"]);
+  const performance = extractUpstreamList(body, ["performance", "score_trend", "trend"]);
+
+  return {
+    user: {
+      id: String(user?.id ?? fallbackUserId ?? ""),
+      name: user?.name ?? [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim() ?? null,
+      phone: user?.phone ?? user?.phone_number ?? null,
+      city: user?.city ?? null,
+    },
+    summary: {
+      averageScore: Number(summary.averageScore ?? summary.average_score ?? summary.avg_score ?? 0) || 0,
+      sessionsCompleted: Number(summary.sessionsCompleted ?? summary.sessions_completed ?? summary.completed_sessions ?? sessions.length ?? 0) || 0,
+      totalQuestions: Number(summary.totalQuestions ?? summary.total_questions ?? summary.questions_answered ?? 0) || 0,
+      streakDays: Number(summary.streakDays ?? summary.streak_days ?? summary.streak ?? 0) || 0,
+    },
+    performance: performance.map((item) => ({
+      date: item?.date ?? item?.created_at ?? item?.session_at ?? item?.completed_at ?? null,
+      score: item?.score ?? item?.average_score ?? item?.avg_score ?? null,
+    })),
+    sessions: sessions.map((item, index) => ({
+      id: item?.id ?? `brain-coach-session-${fallbackUserId}-${index}`,
+      date: item?.date ?? item?.created_at ?? item?.session_at ?? item?.completed_at ?? item?.last_session_at ?? null,
+      status: item?.status ?? item?.outcome ?? item?.last_outcome ?? null,
+      score: item?.score ?? item?.average_score ?? item?.avg_score ?? null,
+      questions: item?.questions ?? item?.question_count ?? item?.total_questions ?? null,
+      durationMinutes: item?.duration_minutes ?? item?.durationMinutes ?? null,
+    })),
+  };
+}
+
+function buildBrainCoachReportFromSession(session, userId) {
+  const lastDate =
+    session?.lastOutcomeAt ??
+    session?.last_outcome_at ??
+    session?.lastSessionAt ??
+    session?.last_session_at ??
+    session?.last_status_at ??
+    session?.lastCheckinAt ??
+    session?.last_checkin_at ??
+    null;
+  const lastStatus = session?.lastOutcome ?? session?.last_outcome ?? session?.last_status ?? null;
+  const hasSession = Boolean(lastDate || lastStatus);
+
+  return {
+    user: {
+      id: String(session?.user_id ?? userId ?? ""),
+      name: session?.userName ?? "Unknown",
+      phone: session?.userPhone ?? null,
+      city: session?.city ?? null,
+    },
+    summary: {
+      averageScore: 0,
+      sessionsCompleted: hasSession && ["completed", "confirmed", "success"].includes(String(lastStatus || "").toLowerCase()) ? 1 : 0,
+      totalQuestions: 0,
+      streakDays: 0,
+    },
+    performance: [],
+    sessions: hasSession
+      ? [{
+          id: `brain-coach-last-${String(session?.user_id ?? userId ?? "unknown")}`,
+          date: lastDate,
+          status: lastStatus ?? "pending",
+          score: null,
+          questions: null,
+          durationMinutes: null,
+        }]
+      : [],
+  };
+}
+
+app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, next) => {
+  try {
+    const userId = String(req.params.user_id || "");
+    const encodedUserId = encodeURIComponent(userId);
+    const candidatePaths = [
+      `/api/v1/brain-coach-dashboard/users/${encodedUserId}/report`,
+      `/api/v1/brain-coach-dashboard/users/${encodedUserId}/reports`,
+      `/api/v1/brain-coach/reports/${encodedUserId}`,
+      `/api/v1/cognitive-activity/${encodedUserId}`,
+    ];
+
+    for (const path of candidatePaths) {
+      const upstream = await requestVyvaBackend(path, { query: req.query });
+      if (upstream?.ok) {
+        const normalized = normalizeBrainCoachReportPayload(upstream.data, userId);
+        if (normalized) {
+          res.json(normalized);
+          return;
+        }
+      }
+    }
+
+    let sessions = [];
+    try {
+      const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+      if (upstreamSessions?.ok) sessions = mapUpstreamBrainCoachSessions(upstreamSessions.data);
+    } catch {
+      sessions = [];
+    }
+
+    if (!sessions.length) {
+      try {
+        const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+        if (checkinsUpstream?.ok) sessions = mapUpstreamBrainCoachSessions(checkinsUpstream.data);
+      } catch {
+        sessions = [];
+      }
+    }
+
+    if (!sessions.length && pool) {
+      req.context = await resolveRequestContext(req);
+      sessions = await loadBrainCoachSessions(req.context);
+    }
+
+    const session = sessions.find((item) => String(item.user_id) === userId);
+    res.json(buildBrainCoachReportFromSession(session, userId));
   } catch (error) {
     next(error);
   }

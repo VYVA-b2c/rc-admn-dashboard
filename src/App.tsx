@@ -25,6 +25,7 @@ import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
 import MedicationMonitoring from "@/pages/MedicationMonitoring";
 import BrainCoachMonitoring from "@/pages/BrainCoachMonitoring";
+import BrainCoachReport from "@/pages/BrainCoachReport";
 import TeamAccessGuide from "@/pages/TeamAccessGuide";
 import NotFound from "@/pages/NotFound";
 
@@ -137,6 +138,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <MedicationMonitoring />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/brain-coach/:id"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <BrainCoachReport />
                   </DashboardLayout>
                 </ProtectedRoute>
               }
