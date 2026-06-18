@@ -39,10 +39,10 @@ email sender is ever used:
 {{ .Data.manual_url }}
 ```
 
-`manual_url` is optional. Until the final user manual is ready, the template
-uses `https://rcadmin.vyva.life/manual` as a placeholder. Replace that URL in
-`magic-link.html`, or pass `manual_url` when requesting the magic link, once the
-final guide link is available.
+`manual_url` is optional. The template defaults to the published admin manual:
+`https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf`.
+Pass `manual_url` when requesting the magic link if a different manual should be
+used later.
 
 For the current admin-created team invite flow, update the backend email copy in
 `server/index.mjs` instead of editing the hosted Supabase template.

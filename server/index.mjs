@@ -55,7 +55,7 @@ const userManualUrlOverride =
   process.env.USER_MANUAL_URL ||
   process.env.VYVA_USER_MANUAL_URL ||
   process.env.VITE_USER_MANUAL_URL ||
-  "/manual";
+  "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf";
 const teamInviteEmailFrom =
   String(
     process.env.TEAM_INVITE_EMAIL_FROM ||
@@ -1796,6 +1796,48 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function renderVyvaEmailHeader(language = "en") {
+  const redCrossLabel =
+    language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross";
+  const secureLabel =
+    language === "de" ? "Sicherer Zugang" : language === "es" ? "Acceso seguro" : "Secure access";
+
+  return `
+            <tr>
+              <td style="padding:0;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;">
+                  <tr>
+                    <td style="padding:28px 36px 24px;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                        <tr>
+                          <td style="vertical-align:middle;">
+                            <table role="presentation" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td style="vertical-align:middle;padding-right:14px;">
+                                  <span style="display:inline-block;width:48px;height:48px;border-radius:999px;background:#e30613;color:#ffffff;font-size:30px;font-weight:900;line-height:48px;text-align:center;box-shadow:0 10px 22px rgba(227,6,19,0.20);">+</span>
+                                </td>
+                                <td style="vertical-align:middle;">
+                                  <div style="font-size:25px;font-weight:900;letter-spacing:0.01em;color:#17172f;line-height:1;">VYVA</div>
+                                  <div style="padding-top:6px;font-size:11px;font-weight:800;letter-spacing:0.24em;text-transform:uppercase;color:#6c4df6;">${escapeHtml(redCrossLabel)}</div>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                          <td align="right" style="vertical-align:middle;">
+                            <span style="display:inline-block;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;padding:9px 12px;">${escapeHtml(secureLabel)}</span>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="height:5px;background:linear-gradient(90deg,#e30613 0%,#e30613 28%,#6c4df6 28%,#6c4df6 100%);font-size:0;line-height:0;">&nbsp;</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>`;
+}
+
 function inviteEmailCopy(language, values) {
   const organizationName = values.organizationName || null;
   const roleLabel = values.roleLabel || "team member";
@@ -1902,12 +1944,7 @@ function renderTeamInviteEmail({ actionLink, invite }) {
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #dde3f0;border-radius:20px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
-            <tr>
-              <td style="padding:28px 32px 22px;border-bottom:1px solid #edf0f7;">
-                <span style="display:inline-block;width:42px;height:42px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:20px;font-weight:700;line-height:42px;text-align:center;margin-right:12px;">V</span>
-                <span style="font-size:20px;font-weight:700;color:#17172f;vertical-align:middle;">VYVA</span>
-              </td>
-            </tr>
+            ${renderVyvaEmailHeader(language)}
             <tr>
               <td style="padding:34px 32px 8px;">
                 <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
@@ -1963,7 +2000,7 @@ function consoleMagicLinkCopy(language) {
         "Oeffnen Sie die VYVA Operationskonsole mit diesem sicheren Einmal-Link.",
       button: "Bei VYVA anmelden",
       manualTitle: "Benutzerhandbuch",
-      manualText: "Ein Benutzerhandbuch wird hier verlinkt, sobald es bereitsteht.",
+      manualText: "Das Benutzerhandbuch ist verfuegbar, falls Sie Hilfe bei der Orientierung in der Konsole brauchen.",
       manualButton: "Handbuch oeffnen",
       securityText: "Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie einfach ignorieren.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
@@ -1980,7 +2017,7 @@ function consoleMagicLinkCopy(language) {
         "Abre la consola de operaciones VYVA con este enlace seguro de un solo uso.",
       button: "Abrir VYVA",
       manualTitle: "Manual de usuario",
-      manualText: "El manual de usuario se enlazara aqui en cuanto este disponible.",
+      manualText: "El manual de usuario esta disponible si necesitas ayuda para orientarte en la consola.",
       manualButton: "Abrir manual",
       securityText: "Si no solicitaste este correo, puedes ignorarlo.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
@@ -1996,7 +2033,7 @@ function consoleMagicLinkCopy(language) {
       "Open the VYVA operations console with this secure one-time link.",
     button: "Open VYVA",
     manualTitle: "User manual",
-    manualText: "The user manual will be linked here once it is available.",
+    manualText: "The user manual is available if you need help getting oriented in the console.",
     manualButton: "Open manual",
     securityText: "If you did not request this email, you can safely ignore it.",
     fallback: "Button not working? Copy and paste this link into your browser:",
@@ -2045,19 +2082,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.10);">
-            <tr>
-              <td style="padding:30px 38px 22px;border-bottom:1px solid #edf0f7;">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                  <tr>
-                    <td style="vertical-align:middle;">
-                      <span style="display:inline-block;width:42px;height:42px;border-radius:14px;background:#6c4df6;color:#ffffff;font-size:20px;font-weight:800;line-height:42px;text-align:center;margin-right:12px;">V</span>
-                      <span style="font-size:22px;font-weight:800;color:#17172f;vertical-align:middle;">VYVA</span>
-                    </td>
-                    <td align="right" style="font-size:11px;letter-spacing:0.22em;text-transform:uppercase;color:#7a8297;font-weight:700;">Red Cross</td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
+            ${renderVyvaEmailHeader(language)}
             <tr>
               <td style="padding:38px 38px 10px;">
                 <p style="display:inline-block;margin:0 0 16px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
