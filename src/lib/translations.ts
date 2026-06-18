@@ -3855,6 +3855,7 @@ const translations: Record<Language, Record<string, string>> = {
     "campaigns.wizard.reviewDescription": "Horario y revision final",
     "campaigns.wizard.selected": "Seleccionada",
     "campaigns.wizard.templateChoice": "Formato elegido",
+    "campaigns.wizard.campaignPreview": "Vista previa de campana",
     "campaigns.wizard.reviewReady": "Lista para guardar",
     "campaigns.wizard.back": "Atras",
     "campaigns.wizard.next": "Siguiente",
