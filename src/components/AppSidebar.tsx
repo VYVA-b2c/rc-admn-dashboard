@@ -14,7 +14,7 @@ import {
   UserPlus,
   Users,
 } from "lucide-react";
-import { useMemo, type ComponentType } from "react";
+import { type ComponentType } from "react";
 import { useLocation } from "react-router-dom";
 import { NavLink } from "@/components/NavLink";
 import { Button } from "@/components/ui/button";
@@ -34,11 +34,8 @@ import {
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
-import { useGISData } from "@/hooks/useGISData";
 import { authBypassEnabled } from "@/lib/authMode";
-import { demoOperationalUsers, type OperationalQueueUser } from "@/lib/operationalDemoData";
 import { isProjectPlatformAdminEmail } from "@/lib/projectAdmin";
-import { deriveRiskQueueRows } from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 
 type NavItem = {
@@ -150,7 +147,6 @@ export function AppSidebar() {
   const collapsed = state === "collapsed";
   const { signOut, user } = useAuth();
   const { t } = useLanguage();
-  const { data: gisData } = useGISData();
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const accountEmail = currentUser?.email || user?.email;
@@ -163,30 +159,6 @@ export function AppSidebar() {
       ? t("settings.role.admin")
       : t("sidebar.operator");
 
-  const riskQueueBadge = useMemo(() => {
-    const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
-    const sourceUsers = authBypassEnabled && apiUsers.length === 0 ? demoOperationalUsers : apiUsers;
-    const riskQueueCount = deriveRiskQueueRows(sourceUsers).length;
-
-    return riskQueueCount > 0 ? String(riskQueueCount) : undefined;
-  }, [gisData?.gisUsers]);
-
-  const navigationGroups = useMemo(
-    () =>
-      navGroups.map((group) => ({
-        ...group,
-        items: group.items.map((item) =>
-          item.titleKey === "sidebar.riskQueue"
-            ? {
-                ...item,
-                badge: riskQueueBadge,
-              }
-            : item,
-        ),
-      })),
-    [riskQueueBadge],
-  );
-
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border bg-white text-foreground">
       <SidebarHeader className="border-b border-sidebar-border p-4">
@@ -194,7 +166,7 @@ export function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent className="bg-white px-3 py-4">
-        {navigationGroups.map((group) => (
+        {navGroups.map((group) => (
           <SidebarGroup key={group.labelKey} className="p-0 pb-5">
             {!collapsed && (
               <SidebarGroupLabel className="px-2 pb-2 text-[10px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
