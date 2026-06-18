@@ -1649,6 +1649,14 @@ function inviteEmailProvider() {
   return null;
 }
 
+function inviteEmailProviders() {
+  return [
+    resendApiKey ? "resend" : null,
+    sendgridApiKey ? "sendgrid" : null,
+    postmarkServerToken ? "postmark" : null,
+  ].filter(Boolean);
+}
+
 function inviteEmailConfigurationError() {
   if (!teamInviteEmailFrom) return "Email sender address is not configured";
   if (!inviteEmailProvider()) return "Email provider is not configured";
@@ -2179,8 +2187,11 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
   const configError = inviteEmailConfigurationError();
   if (configError) return { sent: false, error: configError, provider: null };
 
-  const provider = inviteEmailProvider();
-  try {
+  const providers = inviteEmailProviders();
+  const failures = [];
+
+  for (const provider of providers) {
+    try {
     if (provider === "resend") {
       await sendEmailProviderRequest({
         provider,
@@ -2228,9 +2239,21 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
       });
     }
     return { sent: true, error: null, provider };
-  } catch (error) {
-    return { sent: false, error: error?.message || "Invite email could not be sent", provider };
+    } catch (error) {
+      failures.push({
+        provider,
+        error: error?.message || `${provider} email could not be sent`,
+      });
+    }
   }
+
+  const lastFailure = failures[failures.length - 1] || null;
+  return {
+    sent: false,
+    error: lastFailure?.error || "Invite email could not be sent",
+    provider: lastFailure?.provider || providers[0] || null,
+    failures,
+  };
 }
 
 async function reconcilePendingTeamMemberByEmail(userId, email) {
@@ -2587,10 +2610,14 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
   const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
   if (custom.sent) return custom;
 
+  const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin });
+  if (hosted.sent) return hosted;
+
   return {
     sent: false,
-    error: custom.error || "VYVA email sender is not configured",
-    provider: custom.provider || null,
+    error: hosted.error || custom.error || "VYVA email sender is not configured",
+    provider: hosted.provider || custom.provider || null,
+    failures: [custom, hosted].filter(Boolean),
   };
 }
 
