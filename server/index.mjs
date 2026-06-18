@@ -58,7 +58,7 @@ const userManualUrlOverride =
   process.env.USER_MANUAL_URL ||
   process.env.VYVA_USER_MANUAL_URL ||
   process.env.VITE_USER_MANUAL_URL ||
-  "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf";
+  "https://redcross.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf";
 const teamInviteEmailFrom =
   String(
     process.env.TEAM_INVITE_EMAIL_FROM ||
