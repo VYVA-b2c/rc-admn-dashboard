@@ -19,6 +19,7 @@ import UserProfile from "@/pages/UserProfile";
 import InviteAdmin from "@/pages/InviteAdmin";
 import EmergencyContacts from "@/pages/EmergencyContacts";
 import CheckInMonitoring from "@/pages/CheckInMonitoring";
+import CheckinAdherence from "@/pages/CheckinAdherence";
 import Sensors from "@/pages/Sensors";
 import Settings from "@/pages/Settings";
 import MedicationAdherence from "@/pages/MedicationAdherence";
@@ -96,6 +97,16 @@ const App = () => (
                 <ProtectedRoute>
                   <DashboardLayout>
                     <MedicationAdherence />
+                  </DashboardLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/users/:id/checkins"
+              element={
+                <ProtectedRoute>
+                  <DashboardLayout>
+                    <CheckinAdherence />
                   </DashboardLayout>
                 </ProtectedRoute>
               }

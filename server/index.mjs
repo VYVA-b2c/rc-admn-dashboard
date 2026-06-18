@@ -4425,6 +4425,7 @@ function normalizeCheckin(row) {
     pause_reason: row.pause_reason || null,
     pause_source: row.pause_source || null,
     is_paused: isPaused,
+    created_at: row.created_at ? new Date(row.created_at).toISOString() : null,
     last_checkin_at: row.last_checkin_at ? new Date(row.last_checkin_at).toISOString() : null,
     lastCheckinAt: row.last_checkin_at ? new Date(row.last_checkin_at).toISOString() : null,
     last_outcome: row.last_outcome || null,
@@ -4677,6 +4678,189 @@ function applyScheduledSessionContactToItem(item, contact) {
   };
 }
 
+const checkinAdherenceDateKeys = [
+  "scheduled_date",
+  "scheduledDate",
+  "call_date",
+  "callDate",
+  "date",
+  "day",
+  "scheduled_for",
+  "scheduledFor",
+  ...scheduledSessionLogDateKeys,
+];
+const checkinAdherenceTimeKeys = [
+  "scheduled_time",
+  "scheduledTime",
+  "call_time",
+  "callTime",
+  "preferred_time",
+  "preferredTime",
+  "time",
+  "started_at",
+  "startedAt",
+  "created_at",
+  "createdAt",
+];
+const checkinAdherenceNoteKeys = ["notes", "note", "summary", "reason", "failure_reason", "failureReason"];
+
+function recordFirstText(record, keys) {
+  if (!record || typeof record !== "object") return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (value === undefined || value === null || String(value).trim() === "") continue;
+    return String(value).trim();
+  }
+  return null;
+}
+
+function dateOnlyFromValue(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function timeOnlyFromValue(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  const match = text.match(/\b([01]\d|2[0-3]):([0-5]\d)\b/);
+  if (match) return `${match[1]}:${match[2]}`;
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(11, 16);
+}
+
+function normalizeCheckinAdherenceStatus(value) {
+  const normalized = normalizeServiceType(value);
+  if (!normalized) return null;
+  if (["completed", "complete", "confirmed", "answered", "success", "successful", "reached", "done"].includes(normalized)) {
+    return "completed";
+  }
+  if (
+    [
+      "missed",
+      "no_answer",
+      "no_response",
+      "unanswered",
+      "failed",
+      "failure",
+      "busy",
+      "timeout",
+      "not_reached",
+      "declined",
+      "cancelled",
+      "canceled",
+    ].includes(normalized)
+  ) {
+    return "missed";
+  }
+  if (["pending", "scheduled", "unconfirmed", "unknown", "in_progress", "queued"].includes(normalized)) {
+    return "unconfirmed";
+  }
+  if (["upcoming", "future", "planned"].includes(normalized)) return "upcoming";
+  return null;
+}
+
+function normalizeCheckinAdherenceItem(item = {}, userId = "") {
+  const nestedUser = item.user ?? item.vyva_users ?? {};
+  const firstName = item.first_name ?? nestedUser.first_name ?? null;
+  const lastName = item.last_name ?? nestedUser.last_name ?? null;
+  const fullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const frequency = firstValue(item.frequency_days, item.frequency, item.cadence);
+  const preferredTime = timeOnlyFromValue(firstValue(item.preferred_time, item.preferredTime, item.time));
+  const isActive =
+    typeof item.is_active === "boolean"
+      ? item.is_active
+      : typeof item.enabled === "boolean"
+        ? item.enabled
+        : typeof item.active === "boolean"
+          ? item.active
+          : true;
+
+  return {
+    id: String(firstValue(item.id, item.checkin_id, item.checkinId, "") || ""),
+    user_id: String(firstValue(item.user_id, item.vyva_user_id, item.userId, item.vyvaUserId, nestedUser.id, userId) || ""),
+    userName: firstValue(item.userName, item.user_name, item.name, nestedUser.name, fullName) || "Unknown user",
+    type: firstValue(item.type, item.service_type, item.serviceType, "scheduled_call") || "scheduled_call",
+    is_active: isActive,
+    frequency_days: parseFrequencyDays(frequency),
+    frequency: frequency == null ? null : String(frequency),
+    preferred_time: preferredTime,
+    created_at: dateOnlyFromValue(firstValue(item.created_at, item.createdAt)),
+  };
+}
+
+function checkinAdherenceLogFromRecord(record, fallbackTime) {
+  const date = dateOnlyFromValue(recordFirstText(record, checkinAdherenceDateKeys));
+  if (!date) return null;
+  return {
+    date,
+    time: timeOnlyFromValue(recordFirstText(record, checkinAdherenceTimeKeys)) || fallbackTime || null,
+    status: normalizeCheckinAdherenceStatus(recordFirstText(record, scheduledSessionStatusKeys)),
+    notes: recordFirstText(record, checkinAdherenceNoteKeys),
+  };
+}
+
+function defaultCheckinAdherenceStatus(date, time) {
+  const today = formatDate(new Date());
+  if (date < today) return "unconfirmed";
+  if (date > today) return "upcoming";
+  if (!time) return "upcoming";
+  return new Date(`${date}T${time}:00`).getTime() <= Date.now() ? "unconfirmed" : "upcoming";
+}
+
+function isCheckinScheduledForDate(checkin, date, start) {
+  if (!checkin?.is_active) return false;
+  const frequencyDays = Math.max(1, parseFrequencyDays(checkin.frequency_days || checkin.frequency));
+  if (frequencyDays === 1) return true;
+  const anchor = checkin.created_at || start;
+  const cursor = new Date(`${date}T00:00:00Z`);
+  const first = new Date(`${anchor}T00:00:00Z`);
+  const diffDays = Math.floor((cursor.getTime() - first.getTime()) / 86_400_000);
+  return diffDays >= 0 && diffDays % frequencyDays === 0;
+}
+
+function buildCheckinAdherenceSchedule(item, start, end, userId) {
+  const checkin = normalizeCheckinAdherenceItem(item, userId);
+  const logsByDate = new Map();
+  const records = [item, ...scheduledSessionLogRecords(item)];
+
+  for (const record of records) {
+    const log = checkinAdherenceLogFromRecord(record, checkin.preferred_time);
+    if (!log) continue;
+    if (!logsByDate.has(log.date)) logsByDate.set(log.date, []);
+    logsByDate.get(log.date).push(log);
+  }
+
+  const schedule = {};
+  for (const date of datesBetween(start, end)) {
+    const day = dayName(date);
+    const logs = logsByDate.get(date) || [];
+    schedule[day] = logs.length
+      ? logs.map((log) => ({
+          call_type: checkin.type,
+          frequency: checkin.frequency,
+          time: log.time,
+          notes: log.notes,
+          status: log.status || defaultCheckinAdherenceStatus(date, log.time || checkin.preferred_time),
+        }))
+      : [];
+
+    if (!schedule[day].length && isCheckinScheduledForDate(checkin, date, start)) {
+      schedule[day].push({
+        call_type: checkin.type,
+        frequency: checkin.frequency,
+        time: checkin.preferred_time,
+        notes: null,
+        status: defaultCheckinAdherenceStatus(date, checkin.preferred_time),
+      });
+    }
+  }
+
+  return { schedule, checkin };
+}
+
 function normalizeServiceType(value) {
   return String(value || "")
     .trim()
@@ -4922,6 +5106,7 @@ async function loadCheckins(context) {
       c.paused_until,
       c.pause_reason,
       c.pause_source,
+      c.created_at,
       u.first_name,
       u.last_name,
       u.first_name || ' ' || u.last_name AS user_name,
@@ -4965,6 +5150,7 @@ async function loadCheckins(context) {
       c.paused_until,
       c.pause_reason,
       c.pause_source,
+      c.created_at,
       u.first_name,
       u.last_name,
       u.phone,
@@ -8719,6 +8905,62 @@ app.delete("/api/v1/checkins-dashboard/checkins/:id", asyncRoute(async (req, res
   );
   res.status(204).end();
 }));
+
+app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
+  try {
+    const userId = req.body?.user_id;
+    const start = req.body?.date_start;
+    const end = req.body?.date_end;
+    if (!userId || !start || !end) {
+      res.status(400).json({ error: "user_id, date_start, and date_end are required" });
+      return;
+    }
+
+    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+      query: {
+        user_id: userId,
+        service_type: "all",
+        organization_name: "Red Cross",
+      },
+    });
+    if (upstream?.ok) {
+      const payload = filterUpstreamCheckins(upstream.data, "standard");
+      const item = extractUpstreamList(payload, ["checkins", "data", "sessions"]).find((entry) =>
+        scheduledSessionMatchesUser(entry, userId),
+      );
+      if (item) {
+        res.json(buildCheckinAdherenceSchedule(item, start, end, userId));
+        return;
+      }
+    }
+    if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
+      res.status(upstream.status).json(upstream.data);
+      return;
+    }
+
+    if (!pool) {
+      res.json({ schedule: Object.fromEntries(datesBetween(start, end).map((date) => [dayName(date), []])), checkin: null });
+      return;
+    }
+
+    req.context = await resolveRequestContext(req);
+    if (!(await userBelongsToOrganization(userId, req.context))) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+
+    const checkins = await loadCheckins(req.context);
+    const checkin = checkins.find((item) => String(item.user_id) === String(userId));
+    if (!checkin) {
+      res.json({ schedule: Object.fromEntries(datesBetween(start, end).map((date) => [dayName(date), []])), checkin: null });
+      return;
+    }
+
+    res.json(buildCheckinAdherenceSchedule(checkin, start, end, userId));
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
   try {

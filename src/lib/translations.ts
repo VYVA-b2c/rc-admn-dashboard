@@ -1229,6 +1229,22 @@ const translations: Record<Language, Record<string, string>> = {
     "medAdherence.status.unconfirmed": "Unconfirmed",
     "medAdherence.status.upcoming": "Upcoming",
 
+    // Check-in Adherence
+    "checkinAdherence.title": "Check-in adherence",
+    "checkinAdherence.subtitle": "Weekly status calendar for this user's scheduled check-in calls.",
+    "checkinAdherence.backToProfile": "Back to profile",
+    "checkinAdherence.previous": "Previous",
+    "checkinAdherence.next": "Next",
+    "checkinAdherence.call": "Call",
+    "checkinAdherence.dailySummary": "Daily summary",
+    "checkinAdherence.noScheduleTitle": "No scheduled calls configured",
+    "checkinAdherence.noScheduleDescription": "Add a scheduled call to start tracking check-in adherence.",
+    "checkinAdherence.goToScheduledCalls": "Go to scheduled calls",
+    "checkinAdherence.status.completed": "Completed",
+    "checkinAdherence.status.missed": "Missed",
+    "checkinAdherence.status.unconfirmed": "Unconfirmed",
+    "checkinAdherence.status.upcoming": "Upcoming",
+
     // Prepare Call
     "callPrep.title": "Prepare call — {name}",
     "callPrep.startCall": "Start call",
@@ -1409,6 +1425,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkin.enable": "Enable",
     "checkin.disable": "Disable",
     "checkin.delete": "Delete",
+    "checkin.viewAdherence": "View adherence",
     "checkin.cancel": "Cancel",
     "checkin.save": "Save",
     "checkin.saving": "Saving...",
@@ -2855,6 +2872,22 @@ const translations: Record<Language, Record<string, string>> = {
     "medAdherence.status.unconfirmed": "Unbestaetigt",
     "medAdherence.status.upcoming": "Anstehend",
 
+    // Check-in Adherence
+    "checkinAdherence.title": "Check-in-Adhaerenz",
+    "checkinAdherence.subtitle": "Woechentlicher Statuskalender fuer die geplanten Check-in-Anrufe dieses Benutzers.",
+    "checkinAdherence.backToProfile": "Zurueck zum Profil",
+    "checkinAdherence.previous": "Zurueck",
+    "checkinAdherence.next": "Weiter",
+    "checkinAdherence.call": "Anruf",
+    "checkinAdherence.dailySummary": "Tagesuebersicht",
+    "checkinAdherence.noScheduleTitle": "Keine geplanten Anrufe konfiguriert",
+    "checkinAdherence.noScheduleDescription": "Fuegen Sie einen geplanten Anruf hinzu, um die Check-in-Adhaerenz zu verfolgen.",
+    "checkinAdherence.goToScheduledCalls": "Zu geplanten Anrufen",
+    "checkinAdherence.status.completed": "Abgeschlossen",
+    "checkinAdherence.status.missed": "Verpasst",
+    "checkinAdherence.status.unconfirmed": "Unbestaetigt",
+    "checkinAdherence.status.upcoming": "Anstehend",
+
     // Prepare Call
     "callPrep.title": "Anruf vorbereiten — {name}",
     "callPrep.startCall": "Anruf starten",
@@ -3036,6 +3069,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkin.enable": "Aktivieren",
     "checkin.disable": "Deaktivieren",
     "checkin.delete": "Löschen",
+    "checkin.viewAdherence": "Adhaerenz ansehen",
     "checkin.cancel": "Abbrechen",
     "checkin.save": "Speichern",
     "checkin.saving": "Speichert...",
@@ -4444,6 +4478,22 @@ const translations: Record<Language, Record<string, string>> = {
     "medAdherence.status.unconfirmed": "Sin confirmar",
     "medAdherence.status.upcoming": "Programada",
 
+    // Check-in Adherence
+    "checkinAdherence.title": "Adherencia de check-in",
+    "checkinAdherence.subtitle": "Calendario semanal de estado para las llamadas de check-in programadas de este usuario.",
+    "checkinAdherence.backToProfile": "Volver al perfil",
+    "checkinAdherence.previous": "Anterior",
+    "checkinAdherence.next": "Siguiente",
+    "checkinAdherence.call": "Llamada",
+    "checkinAdherence.dailySummary": "Resumen diario",
+    "checkinAdherence.noScheduleTitle": "No hay llamadas programadas configuradas",
+    "checkinAdherence.noScheduleDescription": "Anade una llamada programada para empezar el seguimiento de adherencia de check-in.",
+    "checkinAdherence.goToScheduledCalls": "Ir a llamadas programadas",
+    "checkinAdherence.status.completed": "Completada",
+    "checkinAdherence.status.missed": "Perdida",
+    "checkinAdherence.status.unconfirmed": "Sin confirmar",
+    "checkinAdherence.status.upcoming": "Programada",
+
     // Settings
     "settings.title": "Configuración",
     "settings.backToConsole": "Volver a la consola",
@@ -4716,6 +4766,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkin.enable": "Activar",
     "checkin.disable": "Desactivar",
     "checkin.delete": "Eliminar",
+    "checkin.viewAdherence": "Ver adherencia",
     "checkin.cancel": "Cancelar",
     "checkin.save": "Guardar",
     "checkin.saving": "Guardando...",
