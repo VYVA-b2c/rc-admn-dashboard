@@ -176,6 +176,77 @@ ALTER TABLE public.vyva_user_medications
   ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT true,
   ADD COLUMN IF NOT EXISTS frequency TEXT;
 
+CREATE TABLE IF NOT EXISTS public.vyva_user_health_plans (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  vyva_user_id UUID NOT NULL UNIQUE REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  current_version INTEGER NOT NULL DEFAULT 1 CHECK (current_version >= 1),
+  last_action_type TEXT NOT NULL DEFAULT 'generated' CHECK (last_action_type IN ('generated', 'regenerated', 'edited', 'reviewed')),
+  last_action_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_actor_user_id TEXT,
+  last_actor_email TEXT,
+  language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'de', 'es')),
+  status TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current')),
+  review_status TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft', 'reviewed')),
+  summary_text TEXT,
+  goals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_support_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  monitoring_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  escalation_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  caregiver_guidance_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  generator_provider TEXT,
+  generator_model TEXT,
+  generator_version TEXT,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  generated_by_user_id TEXT,
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by_user_id TEXT,
+  reviewed_by_email TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_vyva_user_health_plans_org_id
+  ON public.vyva_user_health_plans (organization_id);
+
+CREATE TABLE IF NOT EXISTS public.vyva_user_health_plan_revisions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  health_plan_id UUID NOT NULL REFERENCES public.vyva_user_health_plans(id) ON DELETE CASCADE,
+  vyva_user_id UUID NOT NULL REFERENCES public.vyva_users(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
+  version_number INTEGER NOT NULL CHECK (version_number >= 1),
+  action_type TEXT NOT NULL CHECK (action_type IN ('generated', 'regenerated', 'edited', 'reviewed')),
+  actor_user_id TEXT,
+  actor_email TEXT,
+  language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'de', 'es')),
+  status TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current')),
+  review_status TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft', 'reviewed')),
+  summary_text TEXT,
+  goals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  daily_support_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  monitoring_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  escalation_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  caregiver_guidance_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  generator_provider TEXT,
+  generator_model TEXT,
+  generator_version TEXT,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  generated_by_user_id TEXT,
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by_user_id TEXT,
+  reviewed_by_email TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (health_plan_id, version_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vyva_user_health_plan_revisions_plan_id
+  ON public.vyva_user_health_plan_revisions (health_plan_id, version_number DESC);
+
+CREATE INDEX IF NOT EXISTS idx_vyva_user_health_plan_revisions_user_id
+  ON public.vyva_user_health_plan_revisions (vyva_user_id, version_number DESC);
+
 CREATE TABLE IF NOT EXISTS public.vyva_user_checkins (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   vyva_user_id UUID NOT NULL UNIQUE REFERENCES public.vyva_users(id) ON DELETE CASCADE,
@@ -859,6 +930,9 @@ CREATE TRIGGER update_vyva_user_health_updated_at BEFORE UPDATE ON public.vyva_u
 
 DROP TRIGGER IF EXISTS update_vyva_user_medications_updated_at ON public.vyva_user_medications;
 CREATE TRIGGER update_vyva_user_medications_updated_at BEFORE UPDATE ON public.vyva_user_medications FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_vyva_user_health_plans_updated_at ON public.vyva_user_health_plans;
+CREATE TRIGGER update_vyva_user_health_plans_updated_at BEFORE UPDATE ON public.vyva_user_health_plans FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_vyva_user_checkins_updated_at ON public.vyva_user_checkins;
 CREATE TRIGGER update_vyva_user_checkins_updated_at BEFORE UPDATE ON public.vyva_user_checkins FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();

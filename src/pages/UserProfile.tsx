@@ -33,6 +33,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
@@ -40,6 +41,7 @@ import { toast } from "@/hooks/use-toast";
 import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
 import { EditHealthDialog } from "@/components/user/EditHealthDialog";
+import { EditHealthPlanDialog } from "@/components/user/EditHealthPlanDialog";
 import { EditMedicationDialog } from "@/components/user/EditMedicationDialog";
 import { EditSensorDialog } from "@/components/user/EditSensorDialog";
 import { EditServiceDialog } from "@/components/user/EditServiceDialog";
@@ -115,6 +117,21 @@ function channelIcon(channel: OperationalChannel) {
   if (channel === "whatsapp") return MessageCircle;
   if (channel === "app") return CheckCircle2;
   return PhoneCall;
+}
+
+function inferHealthPlanSignalStrength(signal?: { label?: string | null; detail?: string | null; strength?: string | null }) {
+  const normalizedStrength = String(signal?.strength || "").trim().toLowerCase();
+  if (["high", "medium", "low"].includes(normalizedStrength)) return normalizedStrength as "high" | "medium" | "low";
+  const text = `${signal?.label || ""} ${signal?.detail || ""}`.toLowerCase();
+  if (/(high|critical|urgent|active alert|offline|unconfirmed|missed|limited)/.test(text)) return "high";
+  if (/(forecast|enabled|profile context|medication|sensor)/.test(text)) return "medium";
+  return "low";
+}
+
+function healthPlanSignalBadgeClasses(strength?: "high" | "medium" | "low" | null) {
+  if (strength === "high") return "border-red-200 bg-red-50 text-red-700";
+  if (strength === "medium") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
 function channelKey(channel: OperationalChannel) {
@@ -206,9 +223,12 @@ export default function UserProfile() {
   const [editBrainOpen, setEditBrainOpen] = useState(false);
   const [editSensorOpen, setEditSensorOpen] = useState(false);
   const [editSensorTarget, setEditSensorTarget] = useState<OperationalSensor | null>(null);
+  const [editHealthPlanOpen, setEditHealthPlanOpen] = useState(false);
   const [addNoteOpen, setAddNoteOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  const [generatingHealthPlan, setGeneratingHealthPlan] = useState(false);
+  const [healthPlanError, setHealthPlanError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["vyva-user-profile", id],
@@ -262,6 +282,67 @@ export default function UserProfile() {
     }
   };
 
+  const handleGenerateHealthPlan = async (regenerate = false) => {
+    if (!id || !data?.user) return;
+    if (data.isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+    if (regenerate && !window.confirm(t("profile.healthPlanRegenerateConfirm"))) return;
+
+    setGeneratingHealthPlan(true);
+    setHealthPlanError(null);
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan/generate`, {
+        method: "POST",
+      });
+      toast({ title: regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("profile.healthPlanGenerationFailed");
+      setHealthPlanError(message);
+      toast({
+        title: t("profile.healthPlanGenerationFailed"),
+        description: message,
+        variant: "destructive",
+      });
+    } finally {
+      setGeneratingHealthPlan(false);
+    }
+  };
+
+  const handleMarkHealthPlanReviewed = async () => {
+    if (!id || !data?.user || !healthPlan) return;
+    if (data.isPreviewDemo || authBypassEnabled) {
+      handleOperationalAction("profile.previewNoWrite");
+      return;
+    }
+
+    try {
+      await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan`, {
+        method: "PUT",
+        body: JSON.stringify({
+          language: healthPlan.language || user.language,
+          review_status: "reviewed",
+          summary_text: healthPlan.summary_text,
+          goals_json: healthPlan.goals_json || [],
+          daily_support_json: healthPlan.daily_support_json || [],
+          monitoring_json: healthPlan.monitoring_json || [],
+          escalation_json: healthPlan.escalation_json || [],
+          caregiver_guidance_json: healthPlan.caregiver_guidance_json || [],
+        }),
+      });
+      toast({ title: t("profile.healthPlanMarkedReviewed") });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+    } catch (error) {
+      toast({
+        title: t("profile.healthPlanMarkReviewedFailed"),
+        description: error instanceof Error ? error.message : undefined,
+        variant: "destructive",
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-5">
@@ -304,6 +385,7 @@ export default function UserProfile() {
   const checkins = data.checkins ?? null;
   const brainCoach = data.brainCoach ?? null;
   const medicationActivity = data.medicationActivity ?? null;
+  const healthPlan = data.healthPlan ?? null;
   const isPreviewDemo = Boolean(data.isPreviewDemo);
   const openAddNoteDialog = () => {
     setNoteDraft("");
@@ -584,6 +666,36 @@ export default function UserProfile() {
   const canEditMedications = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_medications ?? isAdmin);
   const canEditCheckins = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_checkins ?? isAdmin);
   const canEditBrainCoach = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_brain_coach ?? isAdmin);
+  const canManageHealthPlan = canEditProfile;
+  const healthPlanSectionCount = healthPlan
+    ? [
+        safeArray(healthPlan.goals_json).length,
+        safeArray(healthPlan.daily_support_json).length,
+        safeArray(healthPlan.monitoring_json).length,
+        safeArray(healthPlan.escalation_json).length,
+        safeArray(healthPlan.caregiver_guidance_json).length,
+      ].reduce((total, value) => total + value, 0)
+    : 0;
+  const healthPlanSignalCount = safeArray(healthPlan?.source_signals_json).length;
+  const healthPlanIsReviewed = healthPlan?.review_status === "reviewed";
+  const healthPlanReviewedBy = healthPlan?.reviewed_by_email || healthPlan?.reviewed_by_user_id || null;
+  const healthPlanSignals = safeArray(healthPlan?.source_signals_json);
+  const healthPlanSignalLookup = new Map(
+    healthPlanSignals
+      .map((signal) => [signal.id || signal.label || "", signal] as const)
+      .filter(([key]) => Boolean(key)),
+  );
+  const healthPlanUsesFallback = healthPlan?.generator_provider === "fallback";
+  const healthPlanHighPrioritySignals = healthPlanSignals.filter((signal) => inferHealthPlanSignalStrength(signal) === "high").length;
+  const healthPlanEvidenceLinkedCount = healthPlan
+    ? [
+        ...safeArray(healthPlan.goals_json),
+        ...safeArray(healthPlan.daily_support_json),
+        ...safeArray(healthPlan.monitoring_json),
+        ...safeArray(healthPlan.escalation_json),
+        ...safeArray(healthPlan.caregiver_guidance_json),
+      ].filter((item) => safeArray(item.source_signal_ids).length > 0).length
+    : 0;
 
   return (
     <div className="space-y-5">
@@ -947,6 +1059,291 @@ export default function UserProfile() {
       </div>
 
       <Card className="rounded-2xl border-border bg-white shadow-sm">
+        <CardHeader className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              <CardTitle className="text-base font-bold">{t("profile.healthPlanTitle")}</CardTitle>
+            </div>
+            <p className="text-sm text-muted-foreground">{t("profile.healthPlanDescription")}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {healthPlan && (
+              <Button
+                variant="outline"
+                className="h-9 rounded-full px-3 text-xs font-bold"
+                disabled={!canManageHealthPlan || generatingHealthPlan}
+                onClick={() => setEditHealthPlanOpen(true)}
+              >
+                <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                {t("profile.edit")}
+              </Button>
+            )}
+            {healthPlan && canManageHealthPlan && !healthPlanIsReviewed && (
+              <Button
+                variant="outline"
+                className="h-9 rounded-full border-emerald-200 bg-emerald-50 px-3 text-xs font-bold text-emerald-700 hover:bg-emerald-100 hover:text-emerald-700"
+                disabled={generatingHealthPlan}
+                onClick={() => void handleMarkHealthPlanReviewed()}
+              >
+                <ShieldCheck className="mr-1.5 h-3.5 w-3.5" />
+                {t("profile.healthPlanMarkReviewed")}
+              </Button>
+            )}
+            {canManageHealthPlan && (
+              <Button
+                className="h-9 rounded-full px-3 text-xs font-bold shadow-sm"
+                disabled={generatingHealthPlan}
+                onClick={() => void handleGenerateHealthPlan(Boolean(healthPlan))}
+              >
+                <Brain className={cn("mr-1.5 h-3.5 w-3.5", generatingHealthPlan && "animate-spin")} />
+                {healthPlan ? t("profile.healthPlanRegenerate") : t("profile.healthPlanGenerate")}
+              </Button>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {healthPlanError && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <p className="font-semibold">{t("profile.healthPlanGenerationFailed")}</p>
+              <p className="mt-1">{healthPlanError}</p>
+            </div>
+          )}
+
+          {!healthPlan ? (
+            <div className="grid gap-5 rounded-[24px] border border-dashed border-border/80 bg-[linear-gradient(180deg,rgba(245,243,255,0.7),rgba(255,255,255,0.96))] p-6 lg:grid-cols-[minmax(0,1.7fr)_280px]">
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge className="rounded-full bg-primary/10 px-3 py-1 text-primary hover:bg-primary/10">
+                    {t("profile.healthPlanDraftBadge")}
+                  </Badge>
+                  <Badge variant="secondary" className="rounded-full px-3 py-1">
+                    {t("profile.healthPlanReviewRequired")}
+                  </Badge>
+                </div>
+                <p className="max-w-4xl text-sm leading-7 text-muted-foreground">{t("profile.healthPlanEmpty")}</p>
+                <p className="max-w-3xl text-sm leading-6 text-foreground/80">{t("profile.healthPlanReadyToShare")}</p>
+              </div>
+              <div className="rounded-[20px] border border-white/80 bg-white/85 p-5 shadow-sm">
+                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReviewTitle")}</p>
+                <div className="mt-4 space-y-3">
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                  <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-[24px] border border-primary/12 bg-[linear-gradient(180deg,rgba(246,243,255,0.82),rgba(255,255,255,1))]">
+              <div className="px-6 py-6">
+                <div className="flex flex-col gap-5">
+                  <div className="min-w-0 space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {healthPlanIsReviewed ? (
+                        <Badge className="rounded-full bg-emerald-600 px-3 py-1 text-white hover:bg-emerald-600">
+                          {t("profile.healthPlanReviewedBadge")}
+                        </Badge>
+                      ) : (
+                        <>
+                          <Badge className="rounded-full bg-primary px-3 py-1 text-white hover:bg-primary">
+                            {t("profile.healthPlanDraftBadge")}
+                          </Badge>
+                          <Badge variant="secondary" className="rounded-full px-3 py-1">
+                            {t("profile.healthPlanReviewRequired")}
+                          </Badge>
+                        </>
+                      )}
+                    </div>
+                    <div>
+                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSummary")}</p>
+                      <p className="mt-3 max-w-5xl text-[15px] font-medium leading-8 text-foreground">{healthPlan.summary_text || "-"}</p>
+                    </div>
+                    <p className="text-sm leading-6 text-foreground/75">
+                      {healthPlanIsReviewed ? t("profile.healthPlanReviewedSummary") : t("profile.healthPlanReadyToShare")}
+                    </p>
+                    <div className="flex flex-wrap gap-2.5">
+                      <HealthPlanMetaChip label={t("profile.healthPlanLastGenerated")} value={healthPlan.generated_at ? formatDateTime(healthPlan.generated_at) : "-"} />
+                      <HealthPlanMetaChip label={t("profile.language")} value={(healthPlan.language || user.language || "-").toString().toUpperCase()} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanGoals")} value={String(healthPlanSectionCount)} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanGenerationMode")} value={healthPlanUsesFallback ? t("profile.healthPlanModeFallback") : t("profile.healthPlanModeAI")} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanEvidenceLinked")} value={String(healthPlanEvidenceLinkedCount)} />
+                      <HealthPlanMetaChip label={t("profile.healthPlanHighPrioritySignals")} value={String(healthPlanHighPrioritySignals)} />
+                    </div>
+                    {healthPlanUsesFallback && (
+                      <div className="rounded-[18px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        <p className="font-semibold">{t("profile.healthPlanModeFallback")}</p>
+                        <p className="mt-1">{t("profile.healthPlanFallbackSummary")}</p>
+                      </div>
+                    )}
+                    {healthPlanIsReviewed && (healthPlan.reviewed_at || healthPlanReviewedBy) && (
+                      <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-muted-foreground">
+                        {healthPlan.reviewed_at && (
+                          <span>
+                            {t("profile.healthPlanReviewedAt")}: <span className="font-medium text-foreground">{formatDateTime(healthPlan.reviewed_at)}</span>
+                          </span>
+                        )}
+                        {healthPlanReviewedBy && (
+                          <span>
+                            {t("profile.healthPlanReviewedBy")}: <span className="font-medium text-foreground">{healthPlanReviewedBy}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-6 border-t border-primary/10 bg-white/80 p-6 xl:grid-cols-[minmax(0,1.85fr)_320px]">
+                <div className="min-w-0 space-y-4">
+                  <Tabs defaultValue="support" className="space-y-5">
+                    <TabsList className="h-auto rounded-full bg-slate-100/90 p-1">
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="support">
+                        {t("profile.healthPlanGoals")}
+                      </TabsTrigger>
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="monitoring">
+                        {t("profile.healthPlanMonitoring")}
+                      </TabsTrigger>
+                      <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="caregiver">
+                        {t("profile.healthPlanCaregiverGuidance")}
+                      </TabsTrigger>
+                    </TabsList>
+
+                    <TabsContent value="support" className="mt-0">
+                      <div className="grid gap-5 lg:grid-cols-2">
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanGoals")}
+                          items={healthPlan.goals_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanDailySupport")}
+                          items={healthPlan.daily_support_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="monitoring" className="mt-0">
+                      <div className="grid gap-5 lg:grid-cols-2">
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanMonitoring")}
+                          items={healthPlan.monitoring_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                        <HealthPlanTextSection
+                          title={t("profile.healthPlanEscalation")}
+                          items={healthPlan.escalation_json}
+                          signalLookup={healthPlanSignalLookup}
+                          evidenceLabel={t("profile.healthPlanEvidence")}
+                        />
+                      </div>
+                    </TabsContent>
+
+                    <TabsContent value="caregiver" className="mt-0">
+                      <HealthPlanTextSection
+                        title={t("profile.healthPlanCaregiverGuidance")}
+                        items={healthPlan.caregiver_guidance_json}
+                        signalLookup={healthPlanSignalLookup}
+                        evidenceLabel={t("profile.healthPlanEvidence")}
+                      />
+                    </TabsContent>
+                  </Tabs>
+                </div>
+
+                <aside className="overflow-hidden rounded-[22px] border border-border/80 bg-white/88 shadow-sm">
+                  <div className="p-5">
+                    <div className="flex items-start gap-3">
+                      <span className={cn(
+                        "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white shadow-sm",
+                        healthPlanIsReviewed ? "text-emerald-600" : "text-primary",
+                      )}>
+                        <ShieldCheck className="h-4 w-4" />
+                      </span>
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">
+                          {healthPlanIsReviewed ? t("profile.healthPlanReviewReceipt") : t("profile.healthPlanReviewTitle")}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                          {healthPlanIsReviewed ? t("profile.healthPlanReviewedSummary") : t("profile.healthPlanReviewDescription")}
+                        </p>
+                      </div>
+                    </div>
+                    {healthPlanIsReviewed ? (
+                      <div className="mt-4 space-y-4">
+                        {(healthPlan.reviewed_at || healthPlanReviewedBy) && (
+                          <div className="rounded-[18px] border border-emerald-100 bg-emerald-50 px-4 py-4 text-sm text-emerald-950">
+                            {healthPlan.reviewed_at && (
+                              <p>{t("profile.healthPlanReviewedAt")}: {formatDateTime(healthPlan.reviewed_at)}</p>
+                            )}
+                            {healthPlanReviewedBy && (
+                              <p className={cn(healthPlan.reviewed_at && "mt-1.5")}>
+                                {t("profile.healthPlanReviewedBy")}: {healthPlanReviewedBy}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                        <div className="space-y-3">
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                          <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-4 space-y-3">
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewSummary")} />
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewTiming")} />
+                        <HealthPlanChecklistItem text={t("profile.healthPlanReviewEscalation")} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="border-t border-border/80 px-5 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSourceSignals")}</p>
+                        {healthPlan.generator_provider && (
+                          <p className="mt-1 text-xs font-medium text-muted-foreground">
+                            {healthPlan.generator_provider}
+                            {healthPlan.generator_model ? ` · ${healthPlan.generator_model}` : ""}
+                          </p>
+                        )}
+                      </div>
+                      <Badge variant="secondary" className="rounded-full px-3 py-1">{healthPlanSignalCount}</Badge>
+                    </div>
+                  </div>
+                  <div className="max-h-[520px] overflow-y-auto px-5 pb-3">
+                    {Array.isArray(healthPlan.source_signals_json) && healthPlan.source_signals_json.length > 0 ? (
+                      healthPlan.source_signals_json.map((signal, index) => (
+                        <div
+                          key={signal.id || `${signal.label}-${index}`}
+                          className={cn("py-3", index > 0 && "border-t border-border/70")}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-sm font-semibold leading-6 text-foreground">{signal.label}</p>
+                            <Badge
+                              variant="outline"
+                              className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanSignalBadgeClasses(inferHealthPlanSignalStrength(signal)))}
+                            >
+                              {t(`profile.healthPlanSignal${inferHealthPlanSignalStrength(signal).charAt(0).toUpperCase()}${inferHealthPlanSignalStrength(signal).slice(1)}`)}
+                            </Badge>
+                          </div>
+                          {signal.detail && <p className="mt-1 text-xs leading-5 text-muted-foreground">{signal.detail}</p>}
+                        </div>
+                      ))
+                    ) : (
+                      <p className="py-3 text-sm text-muted-foreground">{t("profile.healthPlanNoSourceSignals")}</p>
+                    )}
+                  </div>
+                </aside>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="rounded-2xl border-border bg-white shadow-sm">
         <CardHeader className="flex flex-row items-center gap-2 pb-2">
           <FileText className="h-5 w-5 text-primary" />
           <CardTitle className="text-base font-bold">{t("profile.activityTimeline")}</CardTitle>
@@ -1001,6 +1398,14 @@ export default function UserProfile() {
       {editCheckinOpen && <EditServiceDialog open={editCheckinOpen} onOpenChange={setEditCheckinOpen} vyvaUserId={user.id} service={checkins} serviceName="Check-in" serviceType="checkin" />}
       {editBrainOpen && <EditServiceDialog open={editBrainOpen} onOpenChange={setEditBrainOpen} vyvaUserId={user.id} service={brainCoach} serviceName="Brain Coach" serviceType="brainCoach" />}
       {editSensorOpen && <EditSensorDialog open={editSensorOpen} onOpenChange={setEditSensorOpen} vyvaUserId={user.id} sensor={editSensorTarget} />}
+      {editHealthPlanOpen && healthPlan && (
+        <EditHealthPlanDialog
+          open={editHealthPlanOpen}
+          onOpenChange={setEditHealthPlanOpen}
+          vyvaUserId={user.id}
+          plan={healthPlan}
+        />
+      )}
       <Dialog open={addNoteOpen} onOpenChange={(open) => !savingNote && setAddNoteOpen(open)}>
         <DialogContent className="max-w-lg rounded-2xl border-border bg-white">
           <DialogHeader>
@@ -1027,6 +1432,86 @@ export default function UserProfile() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function HealthPlanTextSection({
+  title,
+  items,
+  variant = "list",
+  signalLookup,
+  evidenceLabel,
+}: {
+  title: string;
+  items?: Array<{ id?: string; text?: string | null; source_signal_ids?: string[] }> | null;
+  variant?: "list" | "summary";
+  signalLookup?: Map<string, { id?: string; label?: string | null; detail?: string | null; strength?: string | null }>;
+  evidenceLabel?: string;
+}) {
+  const content = safeArray(items).filter((item) => item?.text);
+  return (
+    <div className="rounded-[18px] border border-border/70 bg-white/72 px-5 py-5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{title}</p>
+      {content.length === 0 ? (
+        <p className="mt-3 text-sm text-muted-foreground">-</p>
+      ) : variant === "summary" ? (
+        <p className="mt-3 text-sm font-medium leading-7 text-foreground">{content[0].text}</p>
+      ) : (
+        <ul className="mt-4 space-y-3">
+          {content.map((item, index) => (
+            <li key={item.id || `${title}-${index}`} className="flex gap-2.5 text-sm leading-7 text-foreground">
+              <span className="mt-[0.85rem] h-1.5 w-1.5 shrink-0 rounded-full bg-primary/80" />
+              <div className="min-w-0">
+                <span>{item.text}</span>
+                {signalLookup && safeArray(item.source_signal_ids).length > 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                    {evidenceLabel && (
+                      <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{evidenceLabel}</span>
+                    )}
+                    {safeArray(item.source_signal_ids)
+                      .map((signalId) => signalLookup.get(signalId))
+                      .filter(Boolean)
+                      .slice(0, 3)
+                      .map((signal, signalIndex) => {
+                        const strength = inferHealthPlanSignalStrength(signal);
+                        return (
+                          <Badge
+                            key={signal?.id || `${title}-${index}-${signalIndex}`}
+                            variant="outline"
+                            className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanSignalBadgeClasses(strength))}
+                          >
+                            {signal?.label || "-"}
+                          </Badge>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function HealthPlanMetaChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-full border border-primary/10 bg-white/88 px-3.5 py-2 shadow-sm">
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function HealthPlanChecklistItem({ text }: { text: string }) {
+  return (
+    <div className="flex items-start gap-2.5 text-sm leading-6 text-foreground">
+      <span className="mt-1.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+      </span>
+      <span>{text}</span>
     </div>
   );
 }

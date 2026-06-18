@@ -375,12 +375,12 @@ async function loadLocalUserIdForExternalUser(externalUserId, context, client = 
   return result.rows[0]?.id || null;
 }
 
-async function loadExternalUserCareProviders(externalUserId, context) {
-  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
-  return localUserId ? loadUserCareProviders(localUserId, context) : [];
+async function loadExternalUserCareProviders(externalUserId, context, client = { query }) {
+  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context, client);
+  return localUserId ? loadUserCareProviders(localUserId, context, client) : [];
 }
 
-async function loadLatestMedicationActivity(userId) {
+async function loadLatestMedicationActivity(userId, client = { query }) {
   const rows = await optionalRows(
     `
       SELECT
@@ -399,17 +399,10 @@ async function loadLatestMedicationActivity(userId) {
       LIMIT 1
     `,
     [userId],
+    client,
   );
   return rows[0] || null;
 }
-
-const healthPlanSectionKeys = [
-  "goals_json",
-  "daily_support_json",
-  "monitoring_json",
-  "escalation_json",
-  "caregiver_guidance_json",
-];
 
 function normalizeHealthPlanSectionItems(value) {
   if (!Array.isArray(value)) return [];
@@ -419,9 +412,39 @@ function normalizeHealthPlanSectionItems(value) {
       const text = nullIfBlank(typeof item === "string" ? item : firstValue(record?.text, record?.value, record?.label, record?.title));
       if (!text) return null;
       const id = nullIfBlank(record?.id) || `item-${index + 1}`;
-      return { id, text };
+      const sourceSignalIds = Array.isArray(record?.source_signal_ids)
+        ? record.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
+        : [];
+      return {
+        id,
+        text,
+        ...(sourceSignalIds.length ? { source_signal_ids: sourceSignalIds } : {}),
+      };
     })
     .filter(Boolean);
+}
+
+function slugToken(value, fallback = "item") {
+  const token = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return token || fallback;
+}
+
+function normalizeHealthPlanSignalStrength(value, fallback = "medium") {
+  const normalized = nullIfBlank(value);
+  if (["high", "medium", "low"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanSignalCategory(value, fallback = "context") {
+  const normalized = nullIfBlank(value);
+  if (["risk", "forecast", "alert", "medication", "service", "sensor", "care-circle", "context"].includes(normalized)) {
+    return normalized;
+  }
+  return fallback;
 }
 
 function normalizeHealthPlanSourceSignals(value) {
@@ -432,14 +455,23 @@ function normalizeHealthPlanSourceSignals(value) {
       const label = nullIfBlank(typeof item === "string" ? item : firstValue(record?.label, record?.title, record?.text, record?.value));
       if (!label) return null;
       const detail = nullIfBlank(firstValue(record?.detail, record?.description, record?.summary));
-      const id = nullIfBlank(record?.id) || `signal-${index + 1}`;
+      const category = normalizeHealthPlanSignalCategory(record?.category);
+      const id = nullIfBlank(record?.id) || `${category}-${slugToken(label, `signal-${index + 1}`)}`;
       return {
         id,
         label,
         ...(detail ? { detail } : {}),
+        category,
+        strength: normalizeHealthPlanSignalStrength(record?.strength),
       };
     })
     .filter(Boolean);
+}
+
+function normalizeHealthPlanActionType(value, fallback = "edited") {
+  const normalized = nullIfBlank(value);
+  if (["generated", "regenerated", "edited", "reviewed"].includes(normalized)) return normalized;
+  return fallback;
 }
 
 function normalizeHealthPlanRow(row) {
@@ -448,8 +480,14 @@ function normalizeHealthPlanRow(row) {
     id: String(row.id),
     vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
     organization_id: row.organization_id == null ? null : String(row.organization_id),
+    current_version: Number(row.current_version || 1),
+    last_action_type: normalizeHealthPlanActionType(row.last_action_type, "generated"),
+    last_action_at: normalizeTimestampValue(row.last_action_at),
+    last_actor_user_id: nullIfBlank(row.last_actor_user_id),
+    last_actor_email: nullIfBlank(row.last_actor_email),
     language: normalizeLanguage(row.language, "de"),
     status: nullIfBlank(row.status) || "current",
+    review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
     summary_text: nullIfBlank(row.summary_text),
     goals_json: normalizeHealthPlanSectionItems(row.goals_json),
     daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
@@ -462,7 +500,43 @@ function normalizeHealthPlanRow(row) {
     generator_version: nullIfBlank(row.generator_version),
     generated_at: normalizeTimestampValue(row.generated_at),
     generated_by_user_id: nullIfBlank(row.generated_by_user_id),
+    reviewed_at: normalizeTimestampValue(row.reviewed_at),
+    reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
+    reviewed_by_email: nullIfBlank(row.reviewed_by_email),
     updated_at: normalizeTimestampValue(row.updated_at),
+  };
+}
+
+function normalizeHealthPlanRevisionRow(row) {
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    health_plan_id: row.health_plan_id == null ? null : String(row.health_plan_id),
+    vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
+    organization_id: row.organization_id == null ? null : String(row.organization_id),
+    version_number: Number(row.version_number || 1),
+    action_type: normalizeHealthPlanActionType(row.action_type, "edited"),
+    actor_user_id: nullIfBlank(row.actor_user_id),
+    actor_email: nullIfBlank(row.actor_email),
+    created_at: normalizeTimestampValue(row.created_at),
+    language: normalizeLanguage(row.language, "de"),
+    status: nullIfBlank(row.status) || "current",
+    review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
+    summary_text: nullIfBlank(row.summary_text),
+    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
+    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
+    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
+    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
+    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+    generator_provider: nullIfBlank(row.generator_provider),
+    generator_model: nullIfBlank(row.generator_model),
+    generator_version: nullIfBlank(row.generator_version),
+    generated_at: normalizeTimestampValue(row.generated_at),
+    generated_by_user_id: nullIfBlank(row.generated_by_user_id),
+    reviewed_at: normalizeTimestampValue(row.reviewed_at),
+    reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
+    reviewed_by_email: nullIfBlank(row.reviewed_by_email),
   };
 }
 
@@ -485,13 +559,32 @@ async function loadCurrentHealthPlan(userId, context, client = { query }) {
   }
 }
 
+async function loadHealthPlanHistory(userId, context, client = { query }) {
+  try {
+    const result = await client.query(
+      `
+        SELECT *, id::text, health_plan_id::text, vyva_user_id::text, organization_id::text
+        FROM public.vyva_user_health_plan_revisions
+        WHERE vyva_user_id = $1
+          AND organization_id = $2
+        ORDER BY version_number DESC, created_at DESC
+      `,
+      [userId, scopeOrganizationId(context)],
+    );
+    return result.rows.map(normalizeHealthPlanRevisionRow);
+  } catch (error) {
+    if (error.code === "42P01") return [];
+    throw error;
+  }
+}
+
 async function loadExternalUserHealthPlan(externalUserId, context, client = { query }) {
   const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context, client);
   if (!localUserId) return null;
   return loadCurrentHealthPlan(localUserId, context, client);
 }
 
-async function loadHealthPlanPredictiveContext(userId, organizationId) {
+async function loadHealthPlanPredictiveContext(userId, organizationId, client = { query }) {
   const [latestScoreRows, latestForecastRows] = await Promise.all([
     optionalRows(
       `
@@ -508,6 +601,7 @@ async function loadHealthPlanPredictiveContext(userId, organizationId) {
         LIMIT 1
       `,
       [userId, organizationId],
+      client,
     ),
     optionalRows(
       `
@@ -531,6 +625,7 @@ async function loadHealthPlanPredictiveContext(userId, organizationId) {
         ORDER BY horizon_day ASC
       `,
       [userId, organizationId],
+      client,
     ),
   ]);
 
@@ -667,6 +762,38 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   return normalizeHealthPlanSourceSignals(signalItems);
 }
 
+function findHealthPlanSignalId(sourceSignals, matcher) {
+  return sourceSignals.find((signal) => matcher(signal))?.id || null;
+}
+
+function deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals) {
+  const critical = [];
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const latestMedicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const hasActiveAlerts = Array.isArray(profile?.alerts) && profile.alerts.some((alert) => !alert?.resolved_at);
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const offlineSensors = sensors.some((sensor) => String(sensor?.status || "").toLowerCase() !== "online");
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+
+  if (["critical", "high", "urgent"].includes(riskBand)) {
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /predictive risk score/i.test(signal?.label)));
+  }
+  if (hasActiveAlerts) {
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /active alert/i.test(signal?.label)));
+  }
+  if (["missed", "late", "skipped", "unconfirmed"].includes(latestMedicationStatus)) {
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /medication/i.test(signal?.label)));
+  }
+  if (offlineSensors) {
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /sensor/i.test(signal?.label)));
+  }
+  if (!careProviders.length) {
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /profile context/i.test(signal?.label)));
+  }
+
+  return [...new Set(critical.filter(Boolean))];
+}
+
 function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language) {
   const user = profile?.user || {};
   const health = profile?.health || {};
@@ -674,6 +801,7 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
   const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
   const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
 
   return {
     language,
@@ -744,6 +872,7 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
     predictive: predictiveContext?.latestScore || predictiveContext?.forecastRows?.length
       ? predictiveContext
       : { unavailable: true },
+    critical_signal_ids: criticalSignalIds,
     source_signals: sourceSignals,
   };
 }
@@ -759,52 +888,97 @@ function getAgeFromDateOfBirth(value) {
 const structuredHealthPlanSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["summary_text", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"],
+  required: ["summary_text", "summary_signal_ids", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"],
   properties: {
     summary_text: { type: "string" },
+    summary_signal_ids: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+    },
     goals: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text"],
-        properties: { text: { type: "string" } },
+        required: ["text", "source_signal_ids"],
+        properties: {
+          text: { type: "string" },
+          source_signal_ids: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+        },
       },
     },
     daily_support: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text"],
-        properties: { text: { type: "string" } },
+        required: ["text", "source_signal_ids"],
+        properties: {
+          text: { type: "string" },
+          source_signal_ids: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+        },
       },
     },
     monitoring: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text"],
-        properties: { text: { type: "string" } },
+        required: ["text", "source_signal_ids"],
+        properties: {
+          text: { type: "string" },
+          source_signal_ids: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+        },
       },
     },
     escalation: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text"],
-        properties: { text: { type: "string" } },
+        required: ["text", "source_signal_ids"],
+        properties: {
+          text: { type: "string" },
+          source_signal_ids: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+        },
       },
     },
     caregiver_guidance: {
       type: "array",
+      minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text"],
-        properties: { text: { type: "string" } },
+        required: ["text", "source_signal_ids"],
+        properties: {
+          text: { type: "string" },
+          source_signal_ids: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string" },
+          },
+        },
       },
     },
   },
@@ -817,11 +991,175 @@ function normalizeGeneratedHealthPlan(value) {
   if (!summaryText) throw httpError(502, "Health plan generation returned an invalid summary");
   return {
     summary_text: summaryText,
+    summary_signal_ids: Array.isArray(plan.summary_signal_ids) ? plan.summary_signal_ids.map((item) => nullIfBlank(item)).filter(Boolean) : [],
     goals_json: normalizeHealthPlanSectionItems(plan.goals),
     daily_support_json: normalizeHealthPlanSectionItems(plan.daily_support),
     monitoring_json: normalizeHealthPlanSectionItems(plan.monitoring),
     escalation_json: normalizeHealthPlanSectionItems(plan.escalation),
     caregiver_guidance_json: normalizeHealthPlanSectionItems(plan.caregiver_guidance),
+  };
+}
+
+function healthPlanTextContainsForbiddenMedicalClaims(text) {
+  const normalized = String(text || "").toLowerCase();
+  return [
+    "diagnose",
+    "diagnosis",
+    "prescribe",
+    "prescription",
+    "change the medication",
+    "stop the medication",
+    "increase the dose",
+    "decrease the dose",
+    "replace the medication",
+    "start a new medication",
+  ].some((phrase) => normalized.includes(phrase));
+}
+
+function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) {
+  const sourceSignalIds = new Set(sourceSignals.map((signal) => signal.id));
+  const criticalSignalIds = new Set(Array.isArray(promptInput?.critical_signal_ids) ? promptInput.critical_signal_ids : []);
+  const sections = [
+    ["goals", generatedPlan.goals_json],
+    ["daily_support", generatedPlan.daily_support_json],
+    ["monitoring", generatedPlan.monitoring_json],
+    ["escalation", generatedPlan.escalation_json],
+    ["caregiver_guidance", generatedPlan.caregiver_guidance_json],
+  ];
+  const referencedIds = new Set();
+
+  const requireValidSignalRefs = (items, sectionName) => {
+    if (!Array.isArray(items) || items.length === 0) throw httpError(502, `Health plan generation returned an empty ${sectionName} section`);
+    for (const item of items) {
+      if (healthPlanTextContainsForbiddenMedicalClaims(item?.text)) {
+        throw httpError(502, `Health plan generation returned unsafe medical guidance in ${sectionName}`);
+      }
+      const refs = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.filter(Boolean) : [];
+      if (!refs.length) throw httpError(502, `Health plan generation returned a ${sectionName} item without evidence links`);
+      for (const ref of refs) {
+        if (!sourceSignalIds.has(ref)) throw httpError(502, `Health plan generation referenced an unknown source signal in ${sectionName}`);
+        referencedIds.add(ref);
+      }
+    }
+  };
+
+  if (healthPlanTextContainsForbiddenMedicalClaims(generatedPlan.summary_text)) {
+    throw httpError(502, "Health plan generation returned unsafe medical guidance in the summary");
+  }
+
+  if (!Array.isArray(generatedPlan.summary_signal_ids) || generatedPlan.summary_signal_ids.length === 0) {
+    throw httpError(502, "Health plan generation returned a summary without evidence links");
+  }
+  for (const ref of generatedPlan.summary_signal_ids) {
+    if (!sourceSignalIds.has(ref)) throw httpError(502, "Health plan generation referenced an unknown source signal in the summary");
+    referencedIds.add(ref);
+  }
+
+  for (const [sectionName, items] of sections) requireValidSignalRefs(items, sectionName);
+
+  const escalationRefs = new Set((generatedPlan.escalation_json || []).flatMap((item) => item?.source_signal_ids || []));
+  const monitoringRefs = new Set((generatedPlan.monitoring_json || []).flatMap((item) => item?.source_signal_ids || []));
+  for (const criticalId of criticalSignalIds) {
+    if (!referencedIds.has(criticalId)) {
+      throw httpError(502, "Health plan generation did not address a critical client signal");
+    }
+  }
+  if (criticalSignalIds.size && (!escalationRefs.size || !monitoringRefs.size)) {
+    throw httpError(502, "Health plan generation did not include enough monitoring or escalation support for critical signals");
+  }
+
+  return generatedPlan;
+}
+
+function fallbackPlanText(language, key) {
+  const copy = {
+    en: {
+      summaryLead: "This support plan focuses on safety, steady routines, and early escalation based on the current care profile.",
+      goalSafety: "Keep the client safe, reachable, and supported through the next review period.",
+      goalRoutine: "Protect medication, check-in, and daily support routines so small issues are caught early.",
+      supportDaily: "Keep daily support practical and consistent, starting with the strongest risk signals on file.",
+      supportMedication: "Use the saved medication plan and reminder times as the baseline for daily follow-up.",
+      monitoringRisk: "Track the signals below every day and note any change from the current baseline.",
+      monitoringAlerts: "Review unresolved alerts and any missed service activity on the same day.",
+      escalationUrgent: "Escalate quickly if safety, adherence, or contact reliability worsens.",
+      escalationCircle: "Inform the care circle early when follow-up becomes harder or the client becomes less reachable.",
+      caregiverShare: "Share short, practical updates with caregivers or staff so everyone is working from the same picture.",
+      caregiverAction: "Ask the care circle to reinforce routines, confirm changes, and report concerns promptly.",
+    },
+    de: {
+      summaryLead: "Dieser Unterstützungsplan konzentriert sich auf Sicherheit, verlässliche Routinen und frühe Eskalation auf Basis des aktuellen Pflegeprofils.",
+      goalSafety: "Die Person in der nächsten Betreuungsphase sicher, erreichbar und gut unterstützt halten.",
+      goalRoutine: "Medikation, Check-ins und tägliche Unterstützung stabil halten, damit kleine Probleme früh erkannt werden.",
+      supportDaily: "Die tägliche Unterstützung praktisch und verlässlich gestalten und mit den wichtigsten Risikosignalen beginnen.",
+      supportMedication: "Den hinterlegten Medikationsplan und die Erinnerungszeiten als Grundlage für die tägliche Nachverfolgung nutzen.",
+      monitoringRisk: "Die unten genannten Signale täglich beobachten und jede Veränderung gegenüber dem aktuellen Ausgangszustand festhalten.",
+      monitoringAlerts: "Offene Warnhinweise und verpasste Service-Aktivitäten noch am selben Tag prüfen.",
+      escalationUrgent: "Schnell eskalieren, wenn sich Sicherheit, Adhärenz oder Erreichbarkeit verschlechtern.",
+      escalationCircle: "Den Betreuungskreis früh informieren, wenn die Nachverfolgung schwieriger wird oder die Person schlechter erreichbar ist.",
+      caregiverShare: "Kurze, praktische Updates mit Angehörigen oder Fachkräften teilen, damit alle vom gleichen Bild ausgehen.",
+      caregiverAction: "Den Betreuungskreis bitten, Routinen zu stärken, Veränderungen zu bestätigen und Sorgen zeitnah weiterzugeben.",
+    },
+    es: {
+      summaryLead: "Este plan de apoyo se centra en la seguridad, las rutinas estables y la escalada temprana según el perfil actual de cuidado.",
+      goalSafety: "Mantener a la persona segura, localizable y acompañada durante el siguiente periodo de seguimiento.",
+      goalRoutine: "Proteger las rutinas de medicación, check-ins y apoyo diario para detectar los problemas pequeños a tiempo.",
+      supportDaily: "Mantener el apoyo diario práctico y constante, empezando por las señales de riesgo más fuertes registradas.",
+      supportMedication: "Usar el plan de medicación guardado y los horarios de recordatorio como base del seguimiento diario.",
+      monitoringRisk: "Revisar cada día las señales indicadas abajo y anotar cualquier cambio respecto a la situación actual.",
+      monitoringAlerts: "Revisar el mismo día las alertas abiertas y cualquier actividad de servicio perdida.",
+      escalationUrgent: "Escalar rápidamente si empeoran la seguridad, la adherencia o la capacidad de contacto.",
+      escalationCircle: "Informar pronto al círculo de cuidado cuando el seguimiento sea más difícil o la persona esté menos localizable.",
+      caregiverShare: "Compartir actualizaciones breves y prácticas con cuidadores o personal para que todos trabajen con la misma información.",
+      caregiverAction: "Pedir al círculo de cuidado que refuerce las rutinas, confirme los cambios y comunique cualquier preocupación a tiempo.",
+    },
+  };
+  return (copy[language] || copy.en)[key] || copy.en[key];
+}
+
+function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language) {
+  const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const pickIds = (preferredMatchers, fallbackCount = 2) => {
+    const matched = preferredMatchers
+      .map((matcher) => sourceSignals.find(matcher)?.id)
+      .filter(Boolean);
+    if (matched.length) return [...new Set(matched)];
+    return sourceSignals.slice(0, fallbackCount).map((signal) => signal.id).filter(Boolean);
+  };
+  const ensureRefs = (refs) => {
+    const picked = [...new Set([...(refs || []), ...criticalSignalIds.slice(0, 1)])].filter(Boolean);
+    return picked.length ? picked : sourceSignals.slice(0, 1).map((signal) => signal.id).filter(Boolean);
+  };
+  const medicationRefs = pickIds([(signal) => /medication/i.test(signal?.label)]);
+  const riskRefs = pickIds([(signal) => /predictive risk score/i.test(signal?.label), (signal) => /risk forecast/i.test(signal?.label)]);
+  const alertRefs = pickIds([(signal) => /active alert/i.test(signal?.label), (signal) => /sensor/i.test(signal?.label)]);
+  const careCircleRefs = pickIds([(signal) => /profile context/i.test(signal?.label)]);
+
+  return {
+    summary_text: fallbackPlanText(language, "summaryLead"),
+    summary_signal_ids: ensureRefs([...riskRefs, ...alertRefs]),
+    goals_json: [
+      { id: "goal-1", text: fallbackPlanText(language, "goalSafety"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
+      { id: "goal-2", text: fallbackPlanText(language, "goalRoutine"), source_signal_ids: ensureRefs([...medicationRefs, ...riskRefs]) },
+    ],
+    daily_support_json: [
+      { id: "daily-1", text: fallbackPlanText(language, "supportDaily"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
+      { id: "daily-2", text: fallbackPlanText(language, "supportMedication"), source_signal_ids: ensureRefs(medicationRefs) },
+    ],
+    monitoring_json: [
+      { id: "monitor-1", text: fallbackPlanText(language, "monitoringRisk"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
+      { id: "monitor-2", text: fallbackPlanText(language, "monitoringAlerts"), source_signal_ids: ensureRefs(alertRefs) },
+    ],
+    escalation_json: [
+      { id: "escalation-1", text: fallbackPlanText(language, "escalationUrgent"), source_signal_ids: ensureRefs([...alertRefs, ...riskRefs]) },
+      { id: "escalation-2", text: fallbackPlanText(language, "escalationCircle"), source_signal_ids: ensureRefs([...careCircleRefs, ...riskRefs]) },
+    ],
+    caregiver_guidance_json: [
+      { id: "caregiver-1", text: fallbackPlanText(language, "caregiverShare"), source_signal_ids: ensureRefs(careCircleRefs) },
+      { id: "caregiver-2", text: fallbackPlanText(language, "caregiverAction"), source_signal_ids: ensureRefs([...careCircleRefs, ...alertRefs]) },
+    ],
+    generator_provider: "fallback",
+    generator_model: "deterministic-template",
+    generator_version: `${healthPlanGeneratorVersion}-fallback`,
   };
 }
 
@@ -847,6 +1185,8 @@ async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSi
     "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
     "Be specific to the provided profile, but avoid inventing facts.",
     "Keep each list item concise and actionable.",
+    "Every summary and recommendation must cite one or more source signal ids from the provided source_signals array.",
+    "Critical signal ids must be addressed clearly in monitoring or escalation guidance.",
     "Return only valid JSON that matches the provided schema.",
   ].join(" ");
   const userPrompt = [
@@ -894,25 +1234,47 @@ async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSi
     throw httpError(502, "Health plan generation returned malformed JSON");
   }
 
-  return {
+  return validateGeneratedHealthPlan({
     ...normalizeGeneratedHealthPlan(parsed),
     generator_provider: "openai",
     generator_model: healthPlanOpenAiModel,
     generator_version: healthPlanGeneratorVersion,
-  };
+  }, sourceSignals, promptInput);
 }
 
 async function generateHealthPlan(profile, predictiveContext, sourceSignals, language) {
-  if (healthPlanAiProvider === "openai") {
-    return generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language);
+  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+    try {
+      return await generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language);
+    } catch (error) {
+      console.warn("Health plan LLM generation failed, using deterministic fallback:", error?.message || error);
+      return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+    }
   }
-  throw httpError(400, `Unsupported health plan provider: ${healthPlanAiProvider}`);
+  return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
 }
 
-function normalizeHealthPlanPayload(payload, { fallbackLanguage = "de", sourceSignals = [], generator = null, generatedByUserId = null } = {}) {
+function normalizeHealthPlanPayload(
+  payload,
+  {
+    fallbackLanguage = "de",
+    sourceSignals = [],
+    generator = null,
+    generatedByUserId = null,
+    reviewedByEmail = null,
+    actionType = "edited",
+    actorUserId = null,
+    actorEmail = null,
+  } = {},
+) {
+  const reviewStatus = payload?.review_status === "reviewed" ? "reviewed" : "draft";
   return {
+    action_type: normalizeHealthPlanActionType(payload?.action_type, actionType),
+    actor_user_id: nullIfBlank(payload?.actor_user_id) || actorUserId || generatedByUserId || null,
+    actor_email: normalizedEmail(payload?.actor_email || actorEmail || reviewedByEmail) || null,
     language: normalizeLanguage(payload?.language, fallbackLanguage),
     status: "current",
+    review_status: reviewStatus,
     summary_text: nullIfBlank(payload?.summary_text),
     goals_json: normalizeHealthPlanSectionItems(payload?.goals_json ?? payload?.goals),
     daily_support_json: normalizeHealthPlanSectionItems(payload?.daily_support_json ?? payload?.daily_support),
@@ -924,6 +1286,9 @@ function normalizeHealthPlanPayload(payload, { fallbackLanguage = "de", sourceSi
     generator_model: nullIfBlank(payload?.generator_model) || generator?.model || null,
     generator_version: nullIfBlank(payload?.generator_version) || generator?.version || null,
     generated_by_user_id: nullIfBlank(payload?.generated_by_user_id) || generatedByUserId || null,
+    reviewed_at: reviewStatus === "reviewed" ? normalizeTimestampValue(payload?.reviewed_at) || new Date().toISOString() : null,
+    reviewed_by_user_id: reviewStatus === "reviewed" ? nullIfBlank(payload?.reviewed_by_user_id) || generatedByUserId || null : null,
+    reviewed_by_email: reviewStatus === "reviewed" ? normalizedEmail(payload?.reviewed_by_email || reviewedByEmail) : null,
   };
 }
 
@@ -937,17 +1302,175 @@ async function saveHealthPlan(client, userId, context, payload) {
       version: payload?.generator_version,
     },
     generatedByUserId: payload?.generated_by_user_id || context?.userId || null,
+    reviewedByEmail: context?.email || null,
+    actionType: payload?.action_type || "edited",
+    actorUserId: context?.userId || null,
+    actorEmail: context?.email || null,
   });
   if (!normalized.summary_text) return { error: "summary_text is required" };
   const generatedAt = normalizeTimestampValue(payload?.generated_at) || new Date().toISOString();
-
-  const result = await client.query(
+  const organizationId = scopeOrganizationId(context);
+  const currentResult = await client.query(
     `
-      INSERT INTO public.vyva_user_health_plans (
+      SELECT id::text, current_version
+      FROM public.vyva_user_health_plans
+      WHERE vyva_user_id = $1
+        AND organization_id = $2
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [userId, organizationId],
+  );
+
+  const existing = currentResult.rows[0] || null;
+  const nextVersion = Math.max(1, Number(existing?.current_version || 0) + (existing ? 1 : 0));
+  const effectiveActionType = existing
+    ? normalized.action_type === "generated"
+      ? "regenerated"
+      : normalized.action_type
+    : normalized.action_type === "regenerated"
+      ? "generated"
+      : normalized.action_type;
+
+  let currentPlanId = existing?.id || null;
+  let result;
+  if (!existing) {
+    result = await client.query(
+      `
+        INSERT INTO public.vyva_user_health_plans (
+          vyva_user_id,
+          organization_id,
+          current_version,
+          last_action_type,
+          last_action_at,
+          last_actor_user_id,
+          last_actor_email,
+          language,
+          status,
+          review_status,
+          summary_text,
+          goals_json,
+          daily_support_json,
+          monitoring_json,
+          escalation_json,
+          caregiver_guidance_json,
+          source_signals_json,
+          generator_provider,
+          generator_model,
+          generator_version,
+          generated_at,
+          generated_by_user_id,
+          reviewed_at,
+          reviewed_by_user_id,
+          reviewed_by_email
+        )
+        VALUES ($1, $2, $3, $4, now(), $5, $6, $7, 'current', $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19::timestamptz, $20, $21::timestamptz, $22, $23)
+        RETURNING *, id::text, vyva_user_id::text, organization_id::text
+      `,
+      [
+        userId,
+        organizationId,
+        nextVersion,
+        effectiveActionType,
+        normalized.actor_user_id,
+        normalized.actor_email,
+        normalized.language,
+        normalized.review_status,
+        normalized.summary_text,
+        JSON.stringify(normalized.goals_json),
+        JSON.stringify(normalized.daily_support_json),
+        JSON.stringify(normalized.monitoring_json),
+        JSON.stringify(normalized.escalation_json),
+        JSON.stringify(normalized.caregiver_guidance_json),
+        JSON.stringify(normalized.source_signals_json),
+        normalized.generator_provider,
+        normalized.generator_model,
+        normalized.generator_version,
+        generatedAt,
+        normalized.generated_by_user_id,
+        normalized.reviewed_at,
+        normalized.reviewed_by_user_id,
+        normalized.reviewed_by_email,
+      ],
+    );
+    currentPlanId = result.rows[0]?.id || null;
+  } else {
+    currentPlanId = existing.id;
+    result = await client.query(
+      `
+        UPDATE public.vyva_user_health_plans
+        SET
+          current_version = $3,
+          last_action_type = $4,
+          last_action_at = now(),
+          last_actor_user_id = $5,
+          last_actor_email = $6,
+          language = $7,
+          status = 'current',
+          review_status = $8,
+          summary_text = $9,
+          goals_json = $10::jsonb,
+          daily_support_json = $11::jsonb,
+          monitoring_json = $12::jsonb,
+          escalation_json = $13::jsonb,
+          caregiver_guidance_json = $14::jsonb,
+          source_signals_json = $15::jsonb,
+          generator_provider = $16,
+          generator_model = $17,
+          generator_version = $18,
+          generated_at = $19::timestamptz,
+          generated_by_user_id = $20,
+          reviewed_at = $21::timestamptz,
+          reviewed_by_user_id = $22,
+          reviewed_by_email = $23,
+          updated_at = now()
+        WHERE id = $1
+          AND organization_id = $2
+        RETURNING *, id::text, vyva_user_id::text, organization_id::text
+      `,
+      [
+        currentPlanId,
+        organizationId,
+        nextVersion,
+        effectiveActionType,
+        normalized.actor_user_id,
+        normalized.actor_email,
+        normalized.language,
+        normalized.review_status,
+        normalized.summary_text,
+        JSON.stringify(normalized.goals_json),
+        JSON.stringify(normalized.daily_support_json),
+        JSON.stringify(normalized.monitoring_json),
+        JSON.stringify(normalized.escalation_json),
+        JSON.stringify(normalized.caregiver_guidance_json),
+        JSON.stringify(normalized.source_signals_json),
+        normalized.generator_provider,
+        normalized.generator_model,
+        normalized.generator_version,
+        generatedAt,
+        normalized.generated_by_user_id,
+        normalized.reviewed_at,
+        normalized.reviewed_by_user_id,
+        normalized.reviewed_by_email,
+      ],
+    );
+  }
+
+  if (!currentPlanId) return { error: "Failed to persist health plan" };
+
+  await client.query(
+    `
+      INSERT INTO public.vyva_user_health_plan_revisions (
+        health_plan_id,
         vyva_user_id,
         organization_id,
+        version_number,
+        action_type,
+        actor_user_id,
+        actor_email,
         language,
         status,
+        review_status,
         summary_text,
         goals_json,
         daily_support_json,
@@ -959,32 +1482,23 @@ async function saveHealthPlan(client, userId, context, payload) {
         generator_model,
         generator_version,
         generated_at,
-        generated_by_user_id
+        generated_by_user_id,
+        reviewed_at,
+        reviewed_by_user_id,
+        reviewed_by_email
       )
-      VALUES ($1, $2, $3, 'current', $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12, $13, $14::timestamptz, $15)
-      ON CONFLICT (vyva_user_id) DO UPDATE SET
-        organization_id = EXCLUDED.organization_id,
-        language = EXCLUDED.language,
-        status = 'current',
-        summary_text = EXCLUDED.summary_text,
-        goals_json = EXCLUDED.goals_json,
-        daily_support_json = EXCLUDED.daily_support_json,
-        monitoring_json = EXCLUDED.monitoring_json,
-        escalation_json = EXCLUDED.escalation_json,
-        caregiver_guidance_json = EXCLUDED.caregiver_guidance_json,
-        source_signals_json = EXCLUDED.source_signals_json,
-        generator_provider = EXCLUDED.generator_provider,
-        generator_model = EXCLUDED.generator_model,
-        generator_version = EXCLUDED.generator_version,
-        generated_at = EXCLUDED.generated_at,
-        generated_by_user_id = EXCLUDED.generated_by_user_id,
-        updated_at = now()
-      RETURNING *, id::text, vyva_user_id::text, organization_id::text
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'current', $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20::timestamptz, $21, $22::timestamptz, $23, $24)
     `,
     [
+      currentPlanId,
       userId,
-      scopeOrganizationId(context),
+      organizationId,
+      nextVersion,
+      effectiveActionType,
+      normalized.actor_user_id,
+      normalized.actor_email,
       normalized.language,
+      normalized.review_status,
       normalized.summary_text,
       JSON.stringify(normalized.goals_json),
       JSON.stringify(normalized.daily_support_json),
@@ -997,6 +1511,9 @@ async function saveHealthPlan(client, userId, context, payload) {
       normalized.generator_version,
       generatedAt,
       normalized.generated_by_user_id,
+      normalized.reviewed_at,
+      normalized.reviewed_by_user_id,
+      normalized.reviewed_by_email,
     ],
   );
 
@@ -1020,7 +1537,11 @@ async function resolveHealthPlanUserId(rawUserId, context, { createShadow = fals
 async function loadHealthPlanProfile(rawUserId, context, { createShadow = false, client = { query } } = {}) {
   const resolved = await resolveHealthPlanUserId(rawUserId, context, { createShadow, client });
   if (resolved.error || resolved.notFound) return resolved;
-  const profile = await loadUserInfo(resolved.value, context);
+  const profile = await loadUserInfo(resolved.value, context, {
+    client,
+    includeHealthPlan: false,
+    includeCarePlanAccess: false,
+  });
   if (!profile) return { notFound: true };
   return {
     value: {
@@ -1364,9 +1885,9 @@ async function query(text, params = []) {
   return pool.query(text, params);
 }
 
-async function optionalRows(text, params = []) {
+async function optionalRows(text, params = [], client = { query }) {
   try {
-    const result = await query(text, params);
+    const result = await client.query(text, params);
     return result.rows;
   } catch (error) {
     if (["42P01", "42703"].includes(error.code)) {
@@ -3026,6 +3547,13 @@ function teamInviteAuthConfigured(authToken) {
   return Boolean((supabaseBaseUrl && supabaseServiceRoleKey) || (supabaseInviteAdminFunctionUrl && supabaseAnonKey && authToken));
 }
 
+function teamInviteSetupError(hasPassword) {
+  if (hasPassword) {
+    return "Team member was not created. Configure SUPABASE_SERVICE_ROLE_KEY or the invite-admin function before creating password-based team access.";
+  }
+  return "Team member was not created. Configure SUPABASE_SERVICE_ROLE_KEY and an invite email provider before sending secure invite links.";
+}
+
 async function createTeamMember(payload, context, options = {}) {
   requireAdmin(context);
   const organizationId = scopeOrganizationId(context);
@@ -3046,6 +3574,7 @@ async function createTeamMember(payload, context, options = {}) {
   let inviteMode = "magic_link_pending";
   let inviteLink = null;
   let inviteEmailError = inviteEmailConfigurationError();
+  let authCreateError = null;
 
   if (!inviteEmailError) {
     const generatedLink = await generateSupabaseTeamMagicLink({
@@ -3074,10 +3603,19 @@ async function createTeamMember(payload, context, options = {}) {
       userId = authUserIdFromInviteResponse(authUser) || userId;
       inviteMode = "password";
     } catch (error) {
-      console.warn("Team auth invite unavailable; created a pending magic-link team member instead.", {
+      authCreateError = error?.message || teamInviteSetupError(true);
+      console.warn("Team auth invite unavailable; team member was not created.", {
         status: error.status || null,
       });
     }
+  }
+  if (!inviteLink && inviteMode !== "password") {
+    return {
+      error: member.value.password
+        ? authCreateError || teamInviteSetupError(true)
+        : inviteEmailError || teamInviteSetupError(false),
+      status: 503,
+    };
   }
   if (!userId) throw httpError(502, "Team member auth record was not returned");
 
@@ -5241,9 +5779,17 @@ function validateCheckinPayload(payload, creating = false) {
   return null;
 }
 
-async function loadUserInfo(userId, context) {
+async function loadUserInfo(
+  userId,
+  context,
+  {
+    client = { query },
+    includeHealthPlan = true,
+    includeCarePlanAccess = true,
+  } = {},
+) {
   const organizationId = scopeOrganizationId(context);
-  const userResult = await query(
+  const userResult = await client.query(
     "SELECT *, id::text, organization_id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
     [userId, organizationId],
   );
@@ -5251,16 +5797,16 @@ async function loadUserInfo(userId, context) {
   if (!user) return null;
 
   const [consent, health, medications, medicationActivity, checkins, brainCoach, careProviders, sensors, alerts, healthPlan] = await Promise.all([
-    optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
-    loadLatestMedicationActivity(userId),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId]),
-    loadUserCareProviders(userId, context),
-    optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId]),
-    optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId]),
-    loadCurrentHealthPlan(userId, context),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
+    loadLatestMedicationActivity(userId, client),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
+    loadUserCareProviders(userId, context, client),
+    optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
+    optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId], client),
+    includeHealthPlan ? loadCurrentHealthPlan(userId, context, client) : Promise.resolve(null),
   ]);
   const caregivers = careProviders
     .filter((provider) => provider.provider_type === "caregiver")
@@ -5277,13 +5823,21 @@ async function loadUserInfo(userId, context) {
       source: provider.source,
       created_at: provider.created_at,
     }));
-  const carePlanAccess = (await loadCarePlanAccessMap([userId], context)).get(String(userId)) || {
-    can_edit_care_plan: Boolean(context.isAdmin),
-    can_edit_medications: Boolean(context.isAdmin),
-    can_edit_checkins: Boolean(context.isAdmin && consent[0]?.consent_given),
-    can_edit_brain_coach: Boolean(context.isAdmin && consent[0]?.consent_given),
-    edit_block_reason: null,
-  };
+  const carePlanAccess = includeCarePlanAccess
+    ? (await loadCarePlanAccessMap([userId], context, client)).get(String(userId)) || {
+        can_edit_care_plan: Boolean(context.isAdmin),
+        can_edit_medications: Boolean(context.isAdmin),
+        can_edit_checkins: Boolean(context.isAdmin && consent[0]?.consent_given),
+        can_edit_brain_coach: Boolean(context.isAdmin && consent[0]?.consent_given),
+        edit_block_reason: null,
+      }
+    : {
+        can_edit_care_plan: Boolean(context.isAdmin),
+        can_edit_medications: Boolean(context.isAdmin),
+        can_edit_checkins: Boolean(context.isAdmin && consent[0]?.consent_given),
+        can_edit_brain_coach: Boolean(context.isAdmin && consent[0]?.consent_given),
+        edit_block_reason: null,
+      };
 
   return {
     user,
@@ -5520,7 +6074,7 @@ function careProviderAssignmentRow(row) {
   };
 }
 
-async function loadUserCareProviders(userId, context = null) {
+async function loadUserCareProviders(userId, context = null, client = { query }) {
   const organizationId = context ? scopeOrganizationId(context) : null;
   const rows = await optionalRows(
     `
@@ -5549,6 +6103,7 @@ async function loadUserCareProviders(userId, context = null) {
       ORDER BY a.is_primary DESC, a.provider_type ASC, COALESCE(c.full_name, fs.full_name) ASC
     `,
     [userId, organizationId],
+    client,
   );
   return rows.map(careProviderAssignmentRow);
 }
@@ -7644,7 +8199,7 @@ app.get("/api/v1/team-members", asyncRoute(async (req, res) => {
 app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
   const result = await createTeamMember(req.body, req.context, { origin: requestOrigin(req) });
   if (result.error) {
-    res.status(400).json({ error: result.error });
+    res.status(result.status || 400).json({ error: result.error });
     return;
   }
   res.status(201).json({
@@ -7783,6 +8338,20 @@ app.get("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
   res.json(await loadCurrentHealthPlan(resolved.value, req.context));
 }));
 
+app.get("/api/v1/user-dashboard/users/:id/health-plan/history", asyncRoute(async (req, res) => {
+  if (!pool) {
+    res.json([]);
+    return;
+  }
+  const resolved = await resolveHealthPlanUserId(req.params.id, req.context, { createShadow: false });
+  if (resolved.notFound) {
+    res.json([]);
+    return;
+  }
+  if (resolved.error) throw httpError(400, resolved.error);
+  res.json(await loadHealthPlanHistory(resolved.value, req.context));
+}));
+
 app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(async (req, res) => {
   if (!pool) throw httpError(503, "Database is not configured");
   const client = await pool.connect();
@@ -7806,11 +8375,13 @@ app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(asy
       profileResult.value.profile?.user?.language,
       req.context?.organization?.defaultLanguage || "de",
     );
-    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context));
+    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
     const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
     const generated = await generateHealthPlan(profileResult.value.profile, predictiveContext, sourceSignals, language);
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
+      action_type: "generated",
       language,
+      review_status: "draft",
       summary_text: generated.summary_text,
       goals_json: generated.goals_json,
       daily_support_json: generated.daily_support_json,
@@ -7864,8 +8435,21 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
       return;
     }
 
+    const requestedReviewStatus =
+      req.body?.review_status === "reviewed"
+        ? "reviewed"
+        : req.body?.review_status === "draft"
+          ? "draft"
+          : existing.review_status === "reviewed"
+            ? "reviewed"
+            : "draft";
+    const preserveReviewedMetadata = requestedReviewStatus === "reviewed" && req.body?.review_status !== "reviewed";
+    const actionType = req.body?.review_status === "reviewed" ? "reviewed" : "edited";
+
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
+      action_type: actionType,
       language: req.body?.language || existing.language,
+      review_status: requestedReviewStatus,
       summary_text: req.body?.summary_text,
       goals_json: req.body?.goals_json,
       daily_support_json: req.body?.daily_support_json,
@@ -7878,6 +8462,9 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
       generator_version: existing.generator_version,
       generated_by_user_id: existing.generated_by_user_id || req.context?.userId || null,
       generated_at: existing.generated_at,
+      reviewed_at: preserveReviewedMetadata ? existing.reviewed_at : undefined,
+      reviewed_by_user_id: preserveReviewedMetadata ? existing.reviewed_by_user_id : undefined,
+      reviewed_by_email: preserveReviewedMetadata ? existing.reviewed_by_email : undefined,
     });
     if (saved.error) {
       await client.query("ROLLBACK");

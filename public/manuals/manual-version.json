@@ -1,0 +1,10 @@
+{
+  "title": "VYVA Admin Console User Manual",
+  "version": "2026-06-18.2",
+  "lastUpdated": "2026-06-18",
+  "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual.pdf",
+  "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-18.2.pdf",
+  "language": "en",
+  "audience": "admin",
+  "releaseNote": "Adds Check-in adherence and latest check-in status label guidance."
+}

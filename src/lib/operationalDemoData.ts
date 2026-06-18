@@ -84,6 +84,77 @@ export interface OperationalMedicationActivity extends ProfileRecord {
   scheduled_time?: string | null;
 }
 
+export interface HealthPlanSectionItem extends ProfileRecord {
+  id?: string;
+  text: string;
+  source_signal_ids?: string[];
+}
+
+export interface HealthPlanSourceSignal extends ProfileRecord {
+  id?: string;
+  label: string;
+  detail?: string | null;
+  category?: string | null;
+  strength?: "high" | "medium" | "low" | null;
+}
+
+export interface OperationalHealthPlan extends ProfileRecord {
+  id: string;
+  current_version?: number;
+  last_action_type?: "generated" | "regenerated" | "edited" | "reviewed" | null;
+  last_action_at?: string | null;
+  last_actor_user_id?: string | null;
+  last_actor_email?: string | null;
+  language?: string | null;
+  status?: string | null;
+  review_status?: "draft" | "reviewed" | null;
+  summary_text?: string | null;
+  goals_json?: HealthPlanSectionItem[];
+  daily_support_json?: HealthPlanSectionItem[];
+  monitoring_json?: HealthPlanSectionItem[];
+  escalation_json?: HealthPlanSectionItem[];
+  caregiver_guidance_json?: HealthPlanSectionItem[];
+  source_signals_json?: HealthPlanSourceSignal[];
+  generator_provider?: string | null;
+  generator_model?: string | null;
+  generator_version?: string | null;
+  generated_at?: string | null;
+  reviewed_at?: string | null;
+  reviewed_by_user_id?: string | null;
+  reviewed_by_email?: string | null;
+  updated_at?: string | null;
+}
+
+export interface OperationalHealthPlanRevision extends ProfileRecord {
+  id: string;
+  health_plan_id?: string | null;
+  vyva_user_id?: string | null;
+  organization_id?: string | null;
+  version_number?: number;
+  action_type?: "generated" | "regenerated" | "edited" | "reviewed" | null;
+  actor_user_id?: string | null;
+  actor_email?: string | null;
+  created_at?: string | null;
+  language?: string | null;
+  status?: string | null;
+  review_status?: "draft" | "reviewed" | null;
+  summary_text?: string | null;
+  goals_json?: HealthPlanSectionItem[];
+  daily_support_json?: HealthPlanSectionItem[];
+  monitoring_json?: HealthPlanSectionItem[];
+  escalation_json?: HealthPlanSectionItem[];
+  caregiver_guidance_json?: HealthPlanSectionItem[];
+  source_signals_json?: HealthPlanSourceSignal[];
+  generator_provider?: string | null;
+  generator_model?: string | null;
+  generator_version?: string | null;
+  generated_at?: string | null;
+  generated_by_user_id?: string | null;
+  reviewed_at?: string | null;
+  reviewed_by_user_id?: string | null;
+  reviewed_by_email?: string | null;
+}
+
 export interface OperationalService extends ProfileRecord {
   id?: string;
   created_at?: string;
@@ -154,6 +225,7 @@ export interface OperationalProfileResponse {
   health?: OperationalHealth | null;
   medications?: OperationalMedication[];
   medicationActivity?: OperationalMedicationActivity | null;
+  healthPlan?: OperationalHealthPlan | null;
   checkins?: OperationalService | null;
   brainCoach?: OperationalService | null;
   careProviders?: OperationalCareProviderAssignment[];
@@ -348,6 +420,53 @@ export const demoOperationalProfile: OperationalProfileResponse = {
       created_at: "2025-04-21T08:00:00.000Z",
     },
   ],
+  healthPlan: {
+    id: "demo-health-plan-carmen",
+    language: "es",
+    status: "current",
+    review_status: "draft",
+    summary_text: "Carmen is managing several daily routines well, but she needs closer follow-up this week around dizziness, medication confidence, and steady daily check-ins.",
+    goals_json: [
+      { id: "goal-1", text: "Keep Carmen feeling safe and steady at home during the next seven days." },
+      { id: "goal-2", text: "Support consistent medication confirmation, especially for morning doses." },
+      { id: "goal-3", text: "Check whether dizziness is changing and whether extra support is needed from family or staff." },
+    ],
+    daily_support_json: [
+      { id: "daily-1", text: "Keep the daily check-in active at the current morning time and ask first about dizziness and hydration." },
+      { id: "daily-2", text: "Use short, clear medication reminders and confirm whether each scheduled dose was understood." },
+      { id: "daily-3", text: "Encourage Carmen to keep her phone close and ask Maria to stay reachable during higher-risk mornings." },
+    ],
+    monitoring_json: [
+      { id: "monitor-1", text: "Watch for repeated missed or unconfirmed medication doses this week." },
+      { id: "monitor-2", text: "Review any fall-detector or heart-monitor anomalies on the same day they appear." },
+      { id: "monitor-3", text: "Note whether mood, appetite, or response quality drops below Carmen's usual baseline." },
+    ],
+    escalation_json: [
+      { id: "escalation-1", text: "Escalate if dizziness becomes more frequent, lasts longer, or affects safe movement at home." },
+      { id: "escalation-2", text: "Escalate if two or more medication doses are missed or cannot be confirmed within 48 hours." },
+      { id: "escalation-3", text: "Escalate if sensor alerts suggest a fall, unusual inactivity, or inability to reach Carmen." },
+    ],
+    caregiver_guidance_json: [
+      { id: "caregiver-1", text: "Share a simple update with Maria after any significant dizziness report or missed medication pattern." },
+      { id: "caregiver-2", text: "Ask Maria to help confirm whether food, hydration, and rest are stable on higher-risk days." },
+      { id: "caregiver-3", text: "Keep guidance practical and reassuring so the family knows what to watch for without alarm." },
+    ],
+    source_signals_json: [
+      { id: "signal-1", label: "Predictive risk score 87 (high)", detail: "As of today · Up from prior score" },
+      { id: "signal-2", label: "3 active alerts", detail: "Dizziness mentioned during morning check-in · Two doses unconfirmed this week" },
+      { id: "signal-3", label: "2 medications on file", detail: "1 reminder currently off · Saved reminder times 08:00, 20:00, 09:00" },
+      { id: "signal-4", label: "Check-ins", detail: "Enabled · daily · Preferred time 09:30" },
+      { id: "signal-5", label: "2 sensors linked", detail: "All currently reporting" },
+    ],
+    generator_provider: "openai",
+    generator_model: "gpt-4o-mini",
+    generator_version: "health-plan-v1",
+    generated_at: sixHoursAgo,
+    reviewed_at: null,
+    reviewed_by_user_id: null,
+    reviewed_by_email: null,
+    updated_at: sixHoursAgo,
+  },
   checkins: {
     id: "demo-checkin-carmen",
     enabled: true,
@@ -549,6 +668,30 @@ export function getDemoProfileById(id?: string | null): OperationalProfileRespon
     alerts: queueUser.activeAlerts
       ? demoOperationalProfile.alerts?.slice(0, queueUser.activeAlerts)
       : [],
+    healthPlan:
+      queueUser.id === "demo-hans-mueller"
+        ? null
+        : queueUser.id === "demo-marta-schneider"
+          ? {
+              ...demoOperationalProfile.healthPlan!,
+              id: "demo-health-plan-marta",
+              language: "de",
+              review_status: "reviewed",
+              summary_text: "Marta is currently stable, with family support and routine services in place. The plan should focus on maintaining routines, monitoring subtle changes, and keeping support light but consistent.",
+              goals_json: [
+                { id: "goal-1", text: "Maintain Marta's current stable routine at home." },
+                { id: "goal-2", text: "Keep communication easy for both Marta and her family support network." },
+              ],
+              source_signals_json: [
+                { id: "signal-1", label: "Predictive inputs unavailable", detail: "Plan can still be generated from live profile, service, sensor, and caregiver data." },
+                { id: "signal-2", label: "Brain Coach", detail: "Enabled · weekly · Preferred time 16:00" },
+                { id: "signal-3", label: "Profile context", detail: "Living context family · 2 care provider assignments" },
+              ],
+              reviewed_at: twoDaysAgo,
+              reviewed_by_user_id: "demo-admin-mila",
+              reviewed_by_email: "mila@redcross.example",
+            }
+          : demoOperationalProfile.healthPlan,
     operationalContext: {
       ...demoOperationalProfile.operationalContext!,
       ...queueUser.operationalContext!,
