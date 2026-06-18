@@ -131,7 +131,8 @@ const validTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const frequencyOptions = ["daily", "weekly", "biweekly", "monthly"] as const;
 
 function normalizeResponse(response: BrainCoachSessionResponse): BrainCoachSession[] {
-  return Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+  const list = Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+  return normalizeFallbackResponse(list as ScheduledCallFallbackItem[]);
 }
 
 function pickString(...values: unknown[]) {
@@ -508,7 +509,7 @@ export default function BrainCoachMonitoring() {
 
     const query = search.toLowerCase();
     return list.filter((session) =>
-      session.userName.toLowerCase().includes(query) ||
+      (session.userName ?? "").toLowerCase().includes(query) ||
       (session.userPhone ?? "").toLowerCase().includes(query) ||
       (session.city ?? "").toLowerCase().includes(query),
     );
@@ -615,7 +616,7 @@ export default function BrainCoachMonitoring() {
                     onClick={() => navigate(`/brain-coach/${session.user_id}`)}
                   >
                     <TableCell>
-                      <div className="font-medium text-foreground">{session.userName}</div>
+                      <div className="font-medium text-foreground">{session.userName || t("common.unknown")}</div>
                       {session.city && <div className="text-xs text-muted-foreground">{session.city}</div>}
                     </TableCell>
                     <TableCell>{session.userPhone || "-"}</TableCell>
