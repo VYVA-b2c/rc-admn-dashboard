@@ -2327,6 +2327,7 @@ function renderVyvaEmailHeader(language = "en") {
     language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross";
   const secureLabel =
     language === "de" ? "Sicherer Zugang" : language === "es" ? "Acceso seguro" : "Secure access";
+  const poweredByLabel = "Powered by VYVA";
 
   return `
             <tr>
@@ -2343,21 +2344,25 @@ function renderVyvaEmailHeader(language = "en") {
                                   <span style="display:inline-block;width:48px;height:48px;border-radius:999px;background:#e30613;color:#ffffff;font-size:30px;font-weight:900;line-height:48px;text-align:center;box-shadow:0 10px 22px rgba(227,6,19,0.20);">+</span>
                                 </td>
                                 <td style="vertical-align:middle;">
-                                  <div style="font-size:25px;font-weight:900;letter-spacing:0.01em;color:#17172f;line-height:1;">VYVA</div>
-                                  <div style="padding-top:6px;font-size:11px;font-weight:800;letter-spacing:0.24em;text-transform:uppercase;color:#6c4df6;">${escapeHtml(redCrossLabel)}</div>
+                                  <div style="font-size:24px;font-weight:900;letter-spacing:0.01em;color:#17172f;line-height:1;">${escapeHtml(redCrossLabel)}</div>
+                                  <div style="padding-top:6px;font-size:11px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#e30613;">Operations console</div>
                                 </td>
                               </tr>
                             </table>
                           </td>
                           <td align="right" style="vertical-align:middle;">
-                            <span style="display:inline-block;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:11px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;padding:9px 12px;">${escapeHtml(secureLabel)}</span>
+                            <div style="display:inline-block;text-align:right;">
+                              <div style="font-size:11px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#8a91a6;">${escapeHtml(poweredByLabel)}</div>
+                              <div style="padding-top:5px;font-size:21px;font-weight:900;letter-spacing:0.01em;color:#6c4df6;line-height:1;">VYVA</div>
+                              <div style="display:inline-block;margin-top:9px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:10px;font-weight:800;letter-spacing:0.10em;text-transform:uppercase;padding:7px 10px;">${escapeHtml(secureLabel)}</div>
+                            </div>
                           </td>
                         </tr>
                       </table>
                     </td>
                   </tr>
                   <tr>
-                    <td style="height:5px;background:linear-gradient(90deg,#e30613 0%,#e30613 28%,#6c4df6 28%,#6c4df6 100%);font-size:0;line-height:0;">&nbsp;</td>
+                    <td style="height:5px;background:#e30613;font-size:0;line-height:0;">&nbsp;</td>
                   </tr>
                 </table>
               </td>
