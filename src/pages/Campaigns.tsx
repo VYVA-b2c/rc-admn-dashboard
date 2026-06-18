@@ -587,7 +587,7 @@ function stateClasses(state: CampaignState) {
 function templateIcon(templateKey: TemplateKey) {
   switch (templateKey) {
     case "custom_campaign":
-      return Sparkles;
+      return MessageSquare;
     case "heatwave_alert":
       return Flame;
     case "medication_reminder":
