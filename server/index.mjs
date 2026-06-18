@@ -3864,16 +3864,43 @@ async function loadDashboardUsers(context) {
         cardinality(COALESCE(health_conditions, ARRAY[]::text[]))::int AS health_conditions
       FROM public.vyva_user_health
     ),
+    due_medication_slots AS (
+      SELECT
+        m.vyva_user_id,
+        m.id AS medication_id,
+        slot_date::date AS scheduled_date,
+        scheduled_time.value AS scheduled_time
+      FROM public.vyva_user_medications m
+      CROSS JOIN LATERAL generate_series(
+        date_trunc('week', CURRENT_DATE)::date,
+        CURRENT_DATE,
+        INTERVAL '1 day'
+      ) AS slot_date
+      CROSS JOIN LATERAL unnest(
+        CASE
+          WHEN cardinality(COALESCE(m.schedule_times, ARRAY[]::text[])) > 0 THEN m.schedule_times
+          ELSE ARRAY['']::text[]
+        END
+      ) AS scheduled_time(value)
+      WHERE COALESCE(m.reminders_enabled, true) = true
+        AND (
+          slot_date::date < CURRENT_DATE
+          OR scheduled_time.value = ''
+          OR scheduled_time.value <= to_char(CURRENT_TIME, 'HH24:MI')
+        )
+    ),
     missed_med_counts AS (
       SELECT
-        vyva_user_id,
+        slots.vyva_user_id,
         COUNT(*) FILTER (
-          WHERE scheduled_date >= CURRENT_DATE - INTERVAL '7 days'
-            AND scheduled_date < CURRENT_DATE
-            AND status IN ('missed', 'unconfirmed', 'pending')
+          WHERE COALESCE(logs.status, 'unconfirmed') IN ('missed', 'unconfirmed', 'pending')
         )::int AS missed_meds_7d
-      FROM public.vyva_medication_logs
-      GROUP BY vyva_user_id
+      FROM due_medication_slots slots
+      LEFT JOIN public.vyva_medication_logs logs
+        ON logs.medication_id = slots.medication_id
+       AND logs.scheduled_date = slots.scheduled_date
+       AND COALESCE(logs.scheduled_time, '') = COALESCE(slots.scheduled_time, '')
+      GROUP BY slots.vyva_user_id
     ),
     care_provider_counts AS (
       SELECT
