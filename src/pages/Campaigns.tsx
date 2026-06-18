@@ -1193,9 +1193,9 @@ export default function Campaigns() {
       ...current,
       scriptMode: "template",
       templateKey,
-      name: isCustomTemplate(templateKey) ? current.name : templateLabel(templateKey),
-      audience: isCustomTemplate(templateKey) ? current.audience : templateAudience(templateKey, current.city),
-      objective: isCustomTemplate(templateKey) ? current.objective : templateObjective(templateKey, current.city),
+      name: isCustomTemplate(templateKey) ? "" : templateLabel(templateKey),
+      audience: isCustomTemplate(templateKey) ? "" : templateAudience(templateKey, current.city),
+      objective: isCustomTemplate(templateKey) ? "" : templateObjective(templateKey, current.city),
       callScript: templateScript(templateKey),
     } : current);
     setAiSuggestion(null);
@@ -1457,9 +1457,12 @@ export default function Campaigns() {
         scheduledAt,
       },
     };
+    const fallbackName = isCustomTemplate(draft.templateKey)
+      ? ""
+      : `${templateLabel(draft.templateKey)}${draft.city.trim() ? ` - ${draft.city.trim()}` : ""}`;
     return {
       templateKey: draft.templateKey,
-      name: draft.name.trim() || `${templateLabel(draft.templateKey)}${draft.city.trim() ? ` - ${draft.city.trim()}` : ""}`,
+      name: draft.name.trim() || fallbackName,
       objective: draft.objective.trim() || templateObjective(draft.templateKey, draft.city.trim()),
       audience: draft.audience.trim() || templateAudience(draft.templateKey, draft.city.trim()),
       city: draft.city.trim(),
@@ -3103,7 +3106,7 @@ export default function Campaigns() {
                   </div>
                   <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
                     <h3 className="text-lg font-bold text-foreground">{t("campaigns.wizard.reviewReady")}</h3>
-                    <InfoPair title={t("campaigns.form.name")} value={form.name.trim() || templateLabel(form.templateKey)} />
+                    <InfoPair title={t("campaigns.form.name")} value={form.name.trim()} />
                     <InfoPair title={t("campaigns.form.template")} value={templateLabel(form.templateKey)} />
                     <InfoPair title={t("campaigns.form.channel")} value={form.channels.map((channel) => t(`campaigns.channel.${channel}`)).join(", ")} />
                     <InfoPair title={t("campaigns.form.scheduledAt")} value={formatDateTime(toIsoOrNull(form.scheduledAt))} />
