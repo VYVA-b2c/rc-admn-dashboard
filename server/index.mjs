@@ -100,6 +100,11 @@ const healthPlanGeneratorVersion = "health-plan-v1";
 const consoleSessionSecret =
   String(process.env.SESSION_SECRET || process.env.AUTH_SESSION_SECRET || process.env.CONSOLE_SESSION_SECRET || "").trim() ||
   (!isProduction ? "dev-vyva-console-session-secret" : null);
+const consoleLoginTokenTtlSeconds = 15 * 60;
+const teamInviteTokenTtlSeconds = Math.max(
+  60,
+  Number(process.env.TEAM_INVITE_TOKEN_TTL_SECONDS || process.env.TEAM_INVITE_TOKEN_TTL_HOURS * 3600 || 7 * 24 * 60 * 60),
+);
 const apiAuthBypass =
   process.env.AUTH_BYPASS === "true" ||
   process.env.VITE_AUTH_BYPASS === "true" ||
@@ -2011,7 +2016,7 @@ function verifyConsoleToken(token, expectedKind) {
   return payload;
 }
 
-function createConsoleLoginToken({ email, redirectPath }) {
+function createConsoleLoginToken({ email, redirectPath, ttlSeconds = consoleLoginTokenTtlSeconds }) {
   const now = Math.floor(Date.now() / 1000);
   return createConsoleToken({
     typ: "vyva_console",
@@ -2019,7 +2024,7 @@ function createConsoleLoginToken({ email, redirectPath }) {
     email: normalizedEmail(email),
     next: loginRedirectPath(redirectPath),
     iat: now,
-    exp: now + 15 * 60,
+    exp: now + ttlSeconds,
   });
 }
 
@@ -3555,7 +3560,7 @@ function teamInviteSetupError(hasPassword) {
 }
 
 function createConsoleTeamInviteLink({ email, redirectPath, origin }) {
-  const loginToken = createConsoleLoginToken({ email, redirectPath });
+  const loginToken = createConsoleLoginToken({ email, redirectPath, ttlSeconds: teamInviteTokenTtlSeconds });
   if (!loginToken) return { actionLink: null, error: "Console session secret is not configured" };
 
   const loginUrl = absoluteAppUrl("/login", origin);
