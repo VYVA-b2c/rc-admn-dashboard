@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { Brain, PauseCircle, Pencil, Play, Power, PowerOff, Search, UserRound } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,9 +22,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { StatCard } from "@/components/StatCard";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
+import { cn } from "@/lib/utils";
 
 type FilterTab = "all" | "active" | "inactive";
 
@@ -40,6 +43,18 @@ type BrainCoachSession = {
   pause_reason?: string | null;
   pause_source?: string | null;
   is_paused?: boolean;
+  lastOutcome?: string | null;
+  lastOutcomeAt?: string | null;
+  last_outcome?: string | null;
+  last_outcome_at?: string | null;
+  last_session_at?: string | null;
+  lastSessionAt?: string | null;
+  last_status?: string | null;
+  last_status_at?: string | null;
+  last_checkin_at?: string | null;
+  lastCheckinAt?: string | null;
+  last_reported_at?: string | null;
+  last_completed_at?: string | null;
 };
 
 type BrainCoachSessionResponse =
@@ -68,6 +83,18 @@ type ScheduledCallFallbackItem = {
   frequency_days?: string | number | null;
   preferred_time?: string | null;
   preferredTime?: string | null;
+  lastOutcome?: string | null;
+  lastOutcomeAt?: string | null;
+  last_outcome?: string | null;
+  last_outcome_at?: string | null;
+  last_session_at?: string | null;
+  lastSessionAt?: string | null;
+  last_status?: string | null;
+  last_status_at?: string | null;
+  last_checkin_at?: string | null;
+  lastCheckinAt?: string | null;
+  last_reported_at?: string | null;
+  last_completed_at?: string | null;
   user?: {
     id?: string | number;
     first_name?: string | null;
@@ -152,6 +179,18 @@ function normalizeFallbackResponse(response: ScheduledCallFallbackResponse): Bra
       pause_reason: item.pause_reason ?? null,
       pause_source: item.pause_source ?? null,
       is_paused: Boolean(item.is_paused),
+      lastOutcome: item.lastOutcome ?? item.last_outcome ?? item.last_status ?? null,
+      lastOutcomeAt:
+        item.lastOutcomeAt ??
+        item.last_outcome_at ??
+        item.lastSessionAt ??
+        item.last_session_at ??
+        item.last_status_at ??
+        item.lastCheckinAt ??
+        item.last_checkin_at ??
+        item.last_reported_at ??
+        item.last_completed_at ??
+        null,
     };
   }).filter((item) => item.user_id);
 }
@@ -165,6 +204,115 @@ function formatFrequency(value: string | null | undefined, t: (key: string) => s
 
 function statusLabel(enabled: boolean, t: (key: string) => string) {
   return enabled ? t("brainCoach.active") : t("brainCoach.inactive");
+}
+
+function scheduledTodayAt(value?: string | null) {
+  if (!value) return null;
+  const [hour, minute] = value.split(":").map((part) => Number(part));
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  return date;
+}
+
+function timeToMinutes(value?: string | null) {
+  if (!value) return null;
+  const [hour, minute] = value.split(":").map((part) => Number(part));
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function nowMinutesInTimezone(timeZone?: string | null) {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: timeZone || undefined,
+  });
+  const parts = formatter.formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function hasScheduledTimePassed(value?: string | null, timeZone?: string | null) {
+  const scheduledMinutes = timeToMinutes(value);
+  if (scheduledMinutes == null) return false;
+  const currentMinutes = nowMinutesInTimezone(timeZone) ?? nowMinutesInTimezone();
+  if (currentMinutes == null) return false;
+  return currentMinutes >= scheduledMinutes;
+}
+
+function normalizeOutcome(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return null;
+  if (["success", "completed", "complete", "answered", "reached", "confirmed"].includes(normalized)) return "confirmed";
+  if (["missed", "failed", "no_answer", "unanswered", "not_reached"].includes(normalized)) return "missed";
+  if (["escalated", "emergency", "emergency_protocol", "urgent_escalation"].includes(normalized)) return "escalated";
+  if (["unconfirmed", "unknown", "pending"].includes(normalized)) return normalized;
+  return normalized;
+}
+
+type BrainCoachOutcomeDisplay = {
+  label: string;
+  status: string;
+};
+
+function sessionOutcomeDisplay(session: BrainCoachSession, t: (key: string) => string, timeZone?: string | null): BrainCoachOutcomeDisplay {
+  const normalized = normalizeOutcome(session.lastOutcome ?? session.last_outcome ?? session.last_status);
+  if (normalized) {
+    const key = `checkin.outcome.${normalized}`;
+    const translated = t(key);
+    return {
+      label: translated !== key ? translated : normalized.replace(/_/g, " "),
+      status: normalized,
+    };
+  }
+
+  if (!session.preferred_time || !session.enabled || isPaused(session)) {
+    return { label: t("checkin.outcomeNoHistory"), status: "unknown" };
+  }
+
+  if (hasScheduledTimePassed(session.preferred_time, timeZone)) {
+    return { label: t("checkin.outcomeMissedToday"), status: "missed" };
+  }
+
+  return { label: t("checkin.outcomeScheduledToday"), status: "pending" };
+}
+
+function outcomeBadgeClass(status: string) {
+  if (status === "confirmed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "missed") return "border-red-200 bg-red-50 text-red-700";
+  if (status === "escalated") return "border-orange-200 bg-orange-50 text-orange-700";
+  if (status === "pending") return "border-slate-200 bg-slate-50 text-slate-600";
+  return "border-slate-200 bg-slate-50 text-slate-600";
+}
+
+function formatSessionTime(value?: string | null) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+}
+
+function lastSessionTime(session: BrainCoachSession) {
+  const actual = formatSessionTime(
+    session.lastOutcomeAt ??
+      session.last_outcome_at ??
+      session.lastSessionAt ??
+      session.last_session_at ??
+      session.last_status_at ??
+      session.lastCheckinAt ??
+      session.last_checkin_at ??
+      session.last_reported_at ??
+      session.last_completed_at,
+  );
+  if (actual) return actual;
+  const scheduledAt = scheduledTodayAt(session.preferred_time);
+  if (!scheduledAt || session.lastOutcome || session.last_outcome || session.last_status) return null;
+  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
 }
 
 function isPaused(session: Pick<BrainCoachSession, "is_paused" | "paused_until">) {
@@ -200,7 +348,9 @@ export default function BrainCoachMonitoring() {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
-  const canEdit = isAdmin && !authBypassEnabled;
+  const { data: currentUserContext } = useCurrentUserContext();
+  const organizationTimezone = currentUserContext?.user?.organization?.timezone ?? "Europe/Berlin";
+  const canEdit = isAdmin && !authBypassEnabled();
 
   const {
     data: sessionsData,
@@ -216,7 +366,7 @@ export default function BrainCoachMonitoring() {
         });
         return normalizeResponse(response);
       } catch (error) {
-        if (authBypassEnabled) return [];
+        if (authBypassEnabled()) return [];
         const fallbackResponse = await apiFetch<ScheduledCallFallbackResponse>("/api/v1/checkins-dashboard/checkins?service_type=brain_coach", {
           timeoutMs: REQUEST_TIMEOUT_MS,
         });
@@ -370,7 +520,7 @@ export default function BrainCoachMonitoring() {
     { key: "inactive", label: `${t("brainCoach.inactive")} (${stats.inactive})` },
   ];
 
-  const actionColSpan = canEdit ? 6 : 5;
+  const actionColSpan = canEdit ? 7 : 6;
 
   const handleSave = async () => {
     if (!editingSession) return;
@@ -425,6 +575,7 @@ export default function BrainCoachMonitoring() {
               <TableHead>{t("brainCoach.userName")}</TableHead>
               <TableHead>{t("brainCoach.phone")}</TableHead>
               <TableHead>{t("brainCoach.status")}</TableHead>
+              <TableHead>{t("brainCoach.lastSession")}</TableHead>
               <TableHead>{t("brainCoach.frequency")}</TableHead>
               <TableHead>{t("brainCoach.preferredTime")}</TableHead>
               {canEdit && <TableHead className="text-right">{t("brainCoach.actions")}</TableHead>}
@@ -454,6 +605,8 @@ export default function BrainCoachMonitoring() {
             ) : (
               filtered.map((session) => {
                 const paused = isPaused(session);
+                const outcome = sessionOutcomeDisplay(session, t, organizationTimezone);
+                const outcomeTime = lastSessionTime(session);
 
                 return (
                   <TableRow
@@ -470,6 +623,14 @@ export default function BrainCoachMonitoring() {
                       <div className="space-y-1">
                         <div>{paused ? t("routineCalls.pausedLabel") : statusLabel(session.enabled, t)}</div>
                         {paused && <p className="max-w-[280px] text-xs text-amber-700">{pauseDescription(session, t)}</p>}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-0.5">
+                        <Badge variant="outline" className={cn("rounded-full text-xs", outcomeBadgeClass(outcome.status))}>
+                          {outcome.label}
+                        </Badge>
+                        {outcomeTime && <p className="text-xs text-muted-foreground">{outcomeTime}</p>}
                       </div>
                     </TableCell>
                     <TableCell>{formatFrequency(session.frequency, t)}</TableCell>

@@ -5352,10 +5352,18 @@ function applyScheduledSessionContactToItem(item, contact) {
   const existingStatus = recordFirstString(item, scheduledSessionStatusKeys);
   const at = existingAt || contact.at;
   const status = existingStatus || contact.status || null;
+  const serviceType = normalizeScheduledContactServiceType(contact.serviceType);
+  const isBrainCoach = serviceType === "brain_coach";
   return {
     ...item,
     last_checkin_at: at,
     lastCheckinAt: at,
+    ...(isBrainCoach
+      ? {
+          last_session_at: at,
+          lastSessionAt: at,
+        }
+      : {}),
     last_outcome: status,
     lastOutcome: status,
   };
@@ -5605,6 +5613,46 @@ function mapUpstreamBrainCoachSessions(payload) {
         pause_reason: item?.pause_reason ?? item?.pauseReason ?? null,
         pause_source: item?.pause_source ?? item?.pauseSource ?? null,
         is_paused: Boolean(item?.is_paused ?? item?.isPaused),
+        last_session_at:
+          item?.last_session_at ??
+          item?.lastSessionAt ??
+          item?.last_checkin_at ??
+          item?.lastCheckinAt ??
+          item?.last_reported_at ??
+          item?.lastReportedAt ??
+          item?.last_completed_at ??
+          item?.lastCompletedAt ??
+          null,
+        lastSessionAt:
+          item?.lastSessionAt ??
+          item?.last_session_at ??
+          item?.lastCheckinAt ??
+          item?.last_checkin_at ??
+          item?.lastReportedAt ??
+          item?.last_reported_at ??
+          item?.lastCompletedAt ??
+          item?.last_completed_at ??
+          null,
+        last_outcome:
+          item?.last_outcome ??
+          item?.lastOutcome ??
+          item?.last_status ??
+          item?.lastStatus ??
+          item?.last_checkin_status ??
+          item?.lastCheckinStatus ??
+          item?.outcome ??
+          null,
+        lastOutcome:
+          item?.lastOutcome ??
+          item?.last_outcome ??
+          item?.lastStatus ??
+          item?.last_status ??
+          item?.lastCheckinStatus ??
+          item?.last_checkin_status ??
+          item?.outcome ??
+          null,
+        last_outcome_at: item?.last_outcome_at ?? item?.lastOutcomeAt ?? item?.last_status_at ?? item?.lastStatusAt ?? null,
+        lastOutcomeAt: item?.lastOutcomeAt ?? item?.last_outcome_at ?? item?.lastStatusAt ?? item?.last_status_at ?? null,
       };
     })
     .filter((item) => item.user_id);
