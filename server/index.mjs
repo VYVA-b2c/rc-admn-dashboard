@@ -50,7 +50,7 @@ const publicAppUrl =
   null;
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || "/guide/team-access";
-const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || teamInviteGuidePath;
+const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
 const userManualUrlOverride =
   process.env.USER_MANUAL_URL ||
   process.env.VYVA_USER_MANUAL_URL ||
