@@ -40,7 +40,7 @@ email sender is ever used:
 ```
 
 `manual_url` is optional. The template defaults to the published admin manual:
-`https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf`.
+`https://redcross.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf`.
 Pass `manual_url` when requesting the magic link if a different manual should be
 used later.
 

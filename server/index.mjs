@@ -2252,6 +2252,10 @@ function absoluteAppUrl(pathOrUrl, origin) {
   return new URL(normalizedPath, `${baseUrl}/`).toString();
 }
 
+function normalizePublicGuideUrl(url) {
+  return url ? String(url).replace(/^https:\/\/rcadmin\.vyva\.life(?=\/|$)/i, "https://redcross.vyva.life") : null;
+}
+
 function inviteEmailLanguage(organization) {
   const language = String(organization?.defaultLanguage || organization?.default_language || "").toLowerCase();
   if (language.startsWith("de")) return "de";
@@ -2297,7 +2301,7 @@ function inviteRoleLabel(role, language) {
 }
 
 function teamInviteGuideUrl(origin) {
-  return absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin);
+  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin));
 }
 
 function teamInviteRedirectUrl(origin) {
@@ -2305,7 +2309,7 @@ function teamInviteRedirectUrl(origin) {
 }
 
 function userManualUrl(origin) {
-  return absoluteAppUrl(userManualUrlOverride, origin);
+  return normalizePublicGuideUrl(absoluteAppUrl(userManualUrlOverride, origin));
 }
 
 function teamInviteMetadata({ context, role, organization, origin }) {
@@ -2323,6 +2327,7 @@ function teamInviteMetadata({ context, role, organization, origin }) {
       organization_id: organization?.id || null,
       organization_name: organization?.name || null,
       guide_url: guideUrl,
+      manual_url: guideUrl,
     },
     guideUrl,
     language,
