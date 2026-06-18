@@ -4487,9 +4487,7 @@ async function loadCampaigns(context) {
         tone
       FROM public.campaigns
       WHERE organization_id = $1
-      ORDER BY
-        CASE status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
-        created_at DESC
+      ORDER BY created_at DESC
     `, [organizationId]),
     loadDashboardUsers(context),
   ]);
