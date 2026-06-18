@@ -2457,7 +2457,7 @@ export default function Campaigns() {
           if (!open) clearCreateIntent();
         }}
       >
-        <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col overflow-hidden rounded-2xl border-border bg-[#f7f9ff] p-0">
+        <DialogContent className="flex max-h-[90vh] max-w-6xl flex-col overflow-hidden rounded-2xl border-border bg-[#f7f9ff] p-0">
           <DialogHeader className="border-b border-border bg-white px-6 py-5 text-left">
             <DialogTitle className="text-2xl font-bold text-foreground">
               {form?.id ? t("campaigns.form.editTitle") : t("campaigns.form.title")}
@@ -2467,7 +2467,7 @@ export default function Campaigns() {
 
           {form && (
             <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
-              <div className="mb-5 rounded-2xl border border-border bg-white px-4 py-3">
+              <div className="mb-5 rounded-2xl border border-border bg-white px-3 py-3">
                 <div className="grid gap-2 sm:grid-cols-4" aria-label={t("campaigns.wizard.stepsLabel")}>
                 {[
                   { step: 1 as WizardStep, title: t("campaigns.wizard.stepScript"), description: form.callScript.trim() ? t("campaigns.wizard.scriptReady") : t("campaigns.wizard.scriptMissing") },
@@ -2480,20 +2480,20 @@ export default function Campaigns() {
                     type="button"
                     onClick={() => setWizardStep(item.step)}
                     className={cn(
-                      "rounded-2xl border px-4 py-3 text-left transition",
-                      wizardStep === item.step ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-white hover:border-primary/20",
+                      "rounded-xl border px-3 py-2.5 text-left transition",
+                      wizardStep === item.step ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-transparent bg-white hover:border-primary/20 hover:bg-slate-50",
                     )}
                   >
                     <div className="flex items-start gap-3">
                       <span className={cn(
-                        "flex size-8 shrink-0 items-center justify-center rounded-full text-sm font-bold",
+                        "flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-bold",
                         wizardStep === item.step ? "bg-primary text-white" : "bg-primary/10 text-primary",
                       )}>
                         {item.step}
                       </span>
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                        <p className="mt-1 truncate text-sm text-muted-foreground">{item.description}</p>
+                        <p className="mt-0.5 truncate text-xs text-muted-foreground">{item.description}</p>
                       </div>
                     </div>
                   </button>
@@ -2502,74 +2502,67 @@ export default function Campaigns() {
               </div>
 
               {wizardStep === 1 && (
-                <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-                  <div className="space-y-5">
-                    <div className="rounded-2xl border border-border bg-white p-5">
-                      <div className="mb-4 space-y-1">
-                        <h3 className="text-xl font-bold text-foreground">{t("campaigns.script.title")}</h3>
-                        <p className="text-sm leading-6 text-muted-foreground">{t("campaigns.script.description")}</p>
+                <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
+                  <div className="rounded-2xl border border-border bg-white p-5">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1">
+                        <h3 className="text-xl font-bold text-foreground">{t("campaigns.form.template")}</h3>
+                        <p className="max-w-2xl text-sm leading-6 text-muted-foreground">{t("campaigns.script.description")}</p>
                       </div>
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid shrink-0 grid-cols-2 gap-2 rounded-full border border-border bg-slate-50 p-1">
                         {[
-                          { mode: "template" as ScriptMode, title: t("campaigns.script.useTemplate"), description: t("campaigns.script.useTemplateDescription"), Icon: Megaphone },
-                          { mode: "ai" as ScriptMode, title: t("campaigns.script.createWithAi"), description: t("campaigns.script.createWithAiDescription"), Icon: Sparkles },
+                          { mode: "template" as ScriptMode, title: t("campaigns.script.useTemplate"), Icon: Megaphone },
+                          { mode: "ai" as ScriptMode, title: t("campaigns.script.createWithAi"), Icon: Sparkles },
                         ].map((item) => (
                           <button
                             key={item.mode}
                             type="button"
                             onClick={() => setForm((current) => current ? { ...current, scriptMode: item.mode } : current)}
                             className={cn(
-                              "flex items-start gap-3 rounded-2xl border p-4 text-left transition",
-                              form.scriptMode === item.mode ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
+                              "inline-flex items-center justify-center gap-2 rounded-full px-3 py-2 text-sm font-semibold transition",
+                              form.scriptMode === item.mode ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:bg-white hover:text-foreground",
                             )}
                           >
-                            <span className={cn("rounded-full p-2", form.scriptMode === item.mode ? "bg-primary text-white" : "bg-white text-primary")}>
-                              <item.Icon className="h-4 w-4" />
-                            </span>
-                            <span>
-                              <span className="block font-semibold text-foreground">{item.title}</span>
-                              <span className="mt-1 block text-sm leading-6 text-muted-foreground">{item.description}</span>
-                            </span>
+                            <item.Icon className="h-4 w-4" />
+                            {item.title}
                           </button>
                         ))}
                       </div>
                     </div>
 
                     {form.scriptMode === "template" ? (
-                      <div className="rounded-2xl border border-border bg-white p-5">
-                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.form.template")}</h3>
-                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("campaigns.form.templateDescription")}</p>
-                        <div className="mt-4 space-y-3">
-                          {createTemplateKeys.map((templateKey) => {
-                            const Icon = templateIcon(templateKey);
-                            const active = form.templateKey === templateKey;
-                            return (
-                              <button
-                                key={templateKey}
-                                type="button"
-                                onClick={() => selectTemplateForForm(templateKey)}
-                                className={cn(
-                                  "flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition",
-                                  active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/20",
-                                )}
-                              >
-                                <span className={cn("rounded-full p-2 shadow-sm", active ? "bg-primary text-white" : "bg-white text-primary")}>
-                                  <Icon className="h-4 w-4" />
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        {createTemplateKeys.map((templateKey) => {
+                          const Icon = templateIcon(templateKey);
+                          const active = form.templateKey === templateKey;
+                          return (
+                            <button
+                              key={templateKey}
+                              type="button"
+                              onClick={() => selectTemplateForForm(templateKey)}
+                              className={cn(
+                                "flex min-h-[132px] items-start gap-3 rounded-2xl border p-4 text-left transition",
+                                active ? "border-primary bg-primary/5 ring-1 ring-primary/20" : "border-border bg-slate-50 hover:border-primary/25 hover:bg-white",
+                              )}
+                            >
+                              <span className={cn("rounded-full p-2 shadow-sm", active ? "bg-primary text-white" : "bg-white text-primary")}>
+                                <Icon className="h-4 w-4" />
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-start justify-between gap-3">
+                                  <span className="font-semibold text-foreground">{templateLabel(templateKey)}</span>
+                                  {active && <Badge className="shrink-0 rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
                                 </span>
-                                <span className="min-w-0 flex-1">
-                                  <span className="block font-semibold text-foreground">{templateLabel(templateKey)}</span>
-                                  <span className="mt-1 block text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</span>
-                                </span>
-                                {active && <Badge className="rounded-full border-0 bg-primary/10 text-primary">{t("campaigns.wizard.selected")}</Badge>}
-                              </button>
-                            );
-                          })}
-                        </div>
+                                <span className="mt-2 block text-sm leading-6 text-muted-foreground">{templateDescription(templateKey)}</span>
+                              </span>
+                            </button>
+                          );
+                        })}
                       </div>
                     ) : (
-                      <div className="rounded-2xl border border-primary/15 bg-primary/5 p-5">
+                      <div className="mt-5 rounded-2xl border border-primary/15 bg-primary/5 p-5">
                         <div className="mb-4 flex items-center gap-2">
-                          <span className="rounded-full bg-primary/10 p-2 text-primary">
+                          <span className="rounded-full bg-white p-2 text-primary shadow-sm">
                             <Sparkles className="h-4 w-4" />
                           </span>
                           <h3 className="text-lg font-bold text-foreground">{t("campaigns.ai.title")}</h3>
@@ -2581,42 +2574,49 @@ export default function Campaigns() {
                             value={form.aiPrompt}
                             onChange={(event) => setForm((current) => current ? { ...current, aiPrompt: event.target.value } : current)}
                             placeholder={t("campaigns.ai.promptPlaceholder")}
-                            className="min-h-[120px] bg-white text-sm leading-6"
+                            className="min-h-[130px] bg-white text-sm leading-6"
                           />
-                          <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.ai.helper")}</p>
-                          <Button type="button" variant="outline" className="rounded-full bg-white" onClick={() => applyAiDraft(form)}>
-                            <Sparkles className="mr-2 h-4 w-4 text-primary" />
-                            {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
-                          </Button>
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.ai.helper")}</p>
+                            <Button type="button" variant="outline" className="shrink-0 rounded-full bg-white" onClick={() => applyAiDraft(form)}>
+                              <Sparkles className="mr-2 h-4 w-4 text-primary" />
+                              {aiSuggestion ? t("campaigns.ai.regenerate") : t("campaigns.ai.open")}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
                   </div>
 
-                  <aside className="space-y-4 rounded-2xl border border-border bg-white p-5">
-                    <div className="space-y-2">
-                      <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
-                      <Input
-                        id="campaign-name"
-                        value={form.name}
-                        onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
-                        placeholder={t("campaigns.form.namePlaceholder")}
-                      />
+                  <aside className="rounded-2xl border border-border bg-white p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-lg font-bold text-foreground">{t("campaigns.wizard.campaignPreview")}</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">{templateLabel(form.templateKey)}</p>
+                      </div>
+                      <Badge className="rounded-full border-0 bg-primary/10 text-primary">{form.scriptMode === "ai" ? t("campaigns.script.createWithAi") : t("campaigns.script.useTemplate")}</Badge>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
-                      <Textarea
-                        id="campaign-script"
-                        value={form.callScript}
-                        onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
-                        placeholder={t("campaigns.call.scriptPlaceholder")}
-                        className="min-h-[280px] resize-y bg-white text-sm leading-6"
-                      />
-                      <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
-                    </div>
-                    <div className="rounded-2xl border border-border bg-slate-50 p-4">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("campaigns.wizard.templateChoice")}</p>
-                      <p className="mt-2 font-semibold text-foreground">{templateLabel(form.templateKey)}</p>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-name">{t("campaigns.form.name")}</Label>
+                        <Input
+                          id="campaign-name"
+                          value={form.name}
+                          onChange={(event) => setForm((current) => current ? { ...current, name: event.target.value } : current)}
+                          placeholder={t("campaigns.form.namePlaceholder")}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="campaign-script">{t("campaigns.call.script")}</Label>
+                        <Textarea
+                          id="campaign-script"
+                          value={form.callScript}
+                          onChange={(event) => setForm((current) => current ? { ...current, callScript: event.target.value } : current)}
+                          placeholder={t("campaigns.call.scriptPlaceholder")}
+                          className="min-h-[300px] resize-y bg-white text-sm leading-6"
+                        />
+                        <p className="text-xs leading-5 text-muted-foreground">{t("campaigns.call.scriptHelp")}</p>
+                      </div>
                     </div>
                   </aside>
                 </section>
