@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   Calendar,
+  CalendarCheck,
   CheckCircle,
   Info,
   PauseCircle,
@@ -35,6 +36,7 @@ import { ScheduledCallDialog } from "@/components/checkins/ScheduledCallDialog";
 import { StatCard } from "@/components/StatCard";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
@@ -238,20 +240,82 @@ function scheduledTodayAt(value?: string | null) {
   return date;
 }
 
-function fallbackOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
-  const scheduledAt = scheduledTodayAt(call.preferred_time);
-  if (!scheduledAt) return t("checkin.outcomeNoHistory");
-  if (!call.is_active || isPaused(call)) return t("checkin.outcomeNoHistory");
-  return scheduledAt.getTime() <= Date.now()
-    ? t("checkin.outcomeMissedToday")
-    : t("checkin.outcomeScheduledToday");
+function timeToMinutes(value?: string | null) {
+  if (!value) return null;
+  const [hour, minute] = value.split(":").map((part) => Number(part));
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
 }
 
-function lastOutcomeLabel(call: ScheduledCallRow, t: (key: string) => string) {
-  if (!call.lastOutcome) return fallbackOutcomeLabel(call, t);
-  const key = `checkin.outcome.${call.lastOutcome}`;
+function nowMinutesInTimezone(timeZone?: string | null) {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: timeZone || undefined,
+  });
+  const parts = formatter.formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function hasScheduledTimePassed(value?: string | null, timeZone?: string | null) {
+  const scheduledMinutes = timeToMinutes(value);
+  if (scheduledMinutes == null) return false;
+  const currentMinutes = nowMinutesInTimezone(timeZone) ?? nowMinutesInTimezone();
+  if (currentMinutes == null) return false;
+  return currentMinutes >= scheduledMinutes;
+}
+
+function normalizeOutcome(value?: string | null) {
+  const normalized = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!normalized) return null;
+  if (["success", "completed", "complete", "answered", "reached", "confirmed"].includes(normalized)) return "confirmed";
+  if (["missed", "failed", "no_answer", "unanswered", "not_reached"].includes(normalized)) return "missed";
+  if (["escalated", "emergency", "emergency_protocol", "urgent_escalation"].includes(normalized)) return "escalated";
+  if (["unconfirmed", "unknown", "pending"].includes(normalized)) return normalized;
+  return normalized;
+}
+
+type CheckinOutcomeDisplay = {
+  inferred: boolean;
+  label: string;
+  status: string;
+};
+
+function fallbackOutcome(call: ScheduledCallRow, t: (key: string) => string, timeZone?: string | null): CheckinOutcomeDisplay {
+  if (!call.preferred_time || !call.is_active || isPaused(call)) {
+    return { inferred: true, label: t("checkin.outcomeNoHistory"), status: "unknown" };
+  }
+
+  if (hasScheduledTimePassed(call.preferred_time, timeZone)) {
+    return { inferred: true, label: t("checkin.outcomeMissedToday"), status: "missed" };
+  }
+
+  return { inferred: true, label: t("checkin.outcomeScheduledToday"), status: "pending" };
+}
+
+function lastOutcomeDisplay(call: ScheduledCallRow, t: (key: string) => string, timeZone?: string | null): CheckinOutcomeDisplay {
+  const normalized = normalizeOutcome(call.lastOutcome);
+  if (!normalized) return fallbackOutcome(call, t, timeZone);
+  const key = `checkin.outcome.${normalized}`;
   const translated = t(key);
-  return translated !== key ? translated : call.lastOutcome;
+  return {
+    inferred: false,
+    label: translated !== key ? translated : normalized.replace(/_/g, " "),
+    status: normalized,
+  };
+}
+
+function outcomeBadgeClass(status: string) {
+  if (status === "confirmed") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "missed") return "border-red-200 bg-red-50 text-red-700";
+  if (status === "escalated") return "border-orange-200 bg-orange-50 text-orange-700";
+  if (status === "pending") return "border-slate-200 bg-slate-50 text-slate-600";
+  return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
 function lastOutcomeTime(value?: string | null) {
@@ -315,6 +379,8 @@ export default function CheckInMonitoring() {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
+  const { data: currentUserContext } = useCurrentUserContext();
+  const organizationTimezone = currentUserContext?.user.organization?.timezone ?? "Europe/Berlin";
 
   const {
     data: checkinsData,
@@ -347,7 +413,8 @@ export default function CheckInMonitoring() {
   const checkins = useMemo(() => checkinsData ?? [], [checkinsData]);
   const usingFallbackData = useMemo(() => checkins.some((call) => call.isFallback), [checkins]);
   const canCreate = isAdmin && !authBypassEnabled && !usingFallbackData;
-  const canShowActions = !usingFallbackData && (isAdmin || checkins.some((call) => call.can_edit));
+  const canManageActions = !usingFallbackData && (isAdmin || checkins.some((call) => call.can_edit));
+  const canShowActions = canManageActions || checkins.some((call) => Boolean(call.user_id));
 
   useEffect(() => {
     if (!isError) return;
@@ -629,8 +696,11 @@ export default function CheckInMonitoring() {
               filtered.map((c) => {
                 const canWriteRow = Boolean(c.user_id);
                 const paused = isPaused(c);
-                const canManageRow = Boolean(c.can_edit && canWriteRow);
-                const canDeleteRow = Boolean(isAdmin && canWriteRow);
+                const canViewAdherence = Boolean(c.user_id);
+                const canManageRow = Boolean(!usingFallbackData && c.can_edit && canWriteRow);
+                const canDeleteRow = Boolean(!usingFallbackData && isAdmin && canWriteRow);
+                const outcome = lastOutcomeDisplay(c, t, organizationTimezone);
+                const outcomeTime = lastOutcomeTimeForCall(c);
 
                 return (
                   <TableRow
@@ -653,9 +723,11 @@ export default function CheckInMonitoring() {
                     </TableCell>
                     <TableCell>
                       <div className="space-y-0.5">
-                        <p>{lastOutcomeLabel(c, t)}</p>
-                        {lastOutcomeTimeForCall(c) && (
-                          <p className="text-xs text-muted-foreground">{lastOutcomeTimeForCall(c)}</p>
+                        <Badge variant="outline" className={cn("rounded-full text-xs", outcomeBadgeClass(outcome.status))}>
+                          {outcome.label}
+                        </Badge>
+                        {outcomeTime && (
+                          <p className="text-xs text-muted-foreground">{outcomeTime}</p>
                         )}
                       </div>
                     </TableCell>
@@ -664,6 +736,18 @@ export default function CheckInMonitoring() {
                     {canShowActions && (
                       <TableCell onClick={(event) => event.stopPropagation()}>
                         <div className="flex justify-end gap-1">
+                          {canViewAdherence && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={t("checkin.viewAdherence")}
+                              aria-label={`${t("checkin.viewAdherence")} ${c.userName}`}
+                              className="h-8 w-8 rounded-xl"
+                              onClick={() => navigate(`/users/${c.user_id}/checkins`)}
+                            >
+                              <CalendarCheck className="h-4 w-4" />
+                            </Button>
+                          )}
                           {canManageRow && (
                             <>
                               <Button
@@ -714,7 +798,7 @@ export default function CheckInMonitoring() {
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
-                          {!canManageRow && !canDeleteRow && (
+                          {!canViewAdherence && !canManageRow && !canDeleteRow && (
                             <span className="max-w-[220px] text-right text-xs text-muted-foreground">
                               {editPermissionLabel(c, t)}
                             </span>
@@ -730,7 +814,7 @@ export default function CheckInMonitoring() {
         </Table>
       </div>
 
-      {canShowActions && (
+      {canManageActions && (
         <>
           <ScheduledCallDialog
             open={dialogOpen}
