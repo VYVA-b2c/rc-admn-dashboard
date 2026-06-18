@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Brain, PauseCircle, Pencil, Play, Power, PowerOff, Search, UserRound } from "lucide-react";
+import { BarChart3, Brain, PauseCircle, Pencil, Play, Power, PowerOff, Search } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -612,7 +612,7 @@ export default function BrainCoachMonitoring() {
                   <TableRow
                     key={session.id}
                     className="cursor-pointer"
-                    onClick={() => navigate(`/users/${session.user_id}`)}
+                    onClick={() => navigate(`/brain-coach/${session.user_id}`)}
                   >
                     <TableCell>
                       <div className="font-medium text-foreground">{session.userName}</div>
@@ -676,11 +676,11 @@ export default function BrainCoachMonitoring() {
                             size="icon"
                             onClick={(event) => {
                               event.stopPropagation();
-                              navigate(`/users/${session.user_id}`);
+                              navigate(`/brain-coach/${session.user_id}`);
                             }}
-                            aria-label={t("brainCoach.openProfile")}
+                            aria-label={t("brainCoach.openReport")}
                           >
-                            <UserRound className="h-4 w-4" />
+                            <BarChart3 className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>
