@@ -60,21 +60,15 @@ const teamInviteEmailFrom =
   String(
     process.env.TEAM_INVITE_EMAIL_FROM ||
       process.env.INVITE_EMAIL_FROM ||
+      process.env.NOTIFY_FROM_EMAIL ||
+      process.env.NOTIFICATION_FROM_EMAIL ||
+      process.env.NOTIFICATIONS_FROM_EMAIL ||
       process.env.RESEND_FROM ||
-      process.env.RESEND_FROM_NAME ||
       process.env.RESEND_FROM_EMAIL ||
       process.env.RESEND_FROM_ADDRESS ||
       process.env.RESEND_SENDER ||
       process.env.RESEND_SENDER_EMAIL ||
       process.env.RESEND_EMAIL_FROM ||
-      process.env.SENDGRID_FROM ||
-      process.env.SENDGRID_FROM_EMAIL ||
-      process.env.SENDGRID_SENDER_EMAIL ||
-      process.env.POSTMARK_FROM ||
-      process.env.POSTMARK_FROM_EMAIL ||
-      process.env.NOTIFY_FROM_EMAIL ||
-      process.env.NOTIFICATION_FROM_EMAIL ||
-      process.env.NOTIFICATIONS_FROM_EMAIL ||
       process.env.FROM_EMAIL ||
       process.env.FROM_ADDRESS ||
       process.env.SENDER_EMAIL ||
@@ -90,7 +84,6 @@ const teamInviteEmailFrom =
 const teamInviteEmailReplyTo =
   String(process.env.TEAM_INVITE_EMAIL_REPLY_TO || process.env.EMAIL_REPLY_TO || "").trim() || null;
 const resendApiKey = String(process.env.RESEND_API_KEY || "").trim() || null;
-const sendgridApiKey = String(process.env.SENDGRID_API_KEY || "").trim() || null;
 const postmarkServerToken = String(process.env.POSTMARK_SERVER_TOKEN || "").trim() || null;
 const healthPlanAiProvider = String(process.env.HEALTH_PLAN_AI_PROVIDER || "openai").trim().toLowerCase();
 const openAiApiKey =
@@ -1644,7 +1637,6 @@ function supabaseHostedMagicLinkClient() {
 
 function inviteEmailProvider() {
   if (resendApiKey) return "resend";
-  if (sendgridApiKey) return "sendgrid";
   if (postmarkServerToken) return "postmark";
   return null;
 }
@@ -1652,7 +1644,6 @@ function inviteEmailProvider() {
 function inviteEmailProviders() {
   return [
     resendApiKey ? "resend" : null,
-    sendgridApiKey ? "sendgrid" : null,
     postmarkServerToken ? "postmark" : null,
   ].filter(Boolean);
 }
@@ -2204,23 +2195,6 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
           html: rendered.html,
           text: rendered.text,
           reply_to: teamInviteEmailReplyTo || undefined,
-        },
-      });
-    } else if (provider === "sendgrid") {
-      const from = parseEmailIdentity(teamInviteEmailFrom);
-      const replyTo = teamInviteEmailReplyTo ? parseEmailIdentity(teamInviteEmailReplyTo) : null;
-      await sendEmailProviderRequest({
-        provider,
-        url: "https://api.sendgrid.com/v3/mail/send",
-        headers: { Authorization: `Bearer ${sendgridApiKey}` },
-        body: {
-          personalizations: [{ to: [{ email: to }], subject: rendered.subject }],
-          from,
-          reply_to: replyTo || undefined,
-          content: [
-            { type: "text/plain", value: rendered.text },
-            { type: "text/html", value: rendered.html },
-          ],
         },
       });
     } else if (provider === "postmark") {
