@@ -25,7 +25,7 @@ import { Input } from "@/components/ui/input";
 import { GISMap } from "@/components/dashboard/GISMap";
 import { InterventionPanel } from "@/components/dashboard/InterventionPanel";
 import { useLanguage } from "@/contexts/LanguageContext";
-import { getRiskBand } from "@/lib/riskScore";
+import { deriveRiskQueueRows } from "@/lib/riskQueue";
 import { cn } from "@/lib/utils";
 import { useGISData, type ActiveAlert, type GISUser } from "@/hooks/useGISData";
 
@@ -251,6 +251,16 @@ export default function Dashboard() {
       });
   }, [alerts, users, t]);
 
+  const operationalRows = useMemo(() => deriveRiskQueueRows(users), [users]);
+  const urgentUserIds = useMemo(
+    () => new Set(operationalRows.filter((row) => row.status === "urgent").map((row) => row.id)),
+    [operationalRows],
+  );
+  const reviewUserIds = useMemo(
+    () => new Set(operationalRows.filter((row) => row.status === "review").map((row) => row.id)),
+    [operationalRows],
+  );
+
   const filteredTasks = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     return queueTasks.filter((task) => {
@@ -280,20 +290,20 @@ export default function Dashboard() {
         `${user.first_name} ${user.last_name}`.toLowerCase().includes(q) ||
         (user.city?.toLowerCase().includes(q) ?? false);
       if (!matchesSearch) return false;
-      if (activeFilter === "urgent") return user.criticalAlerts > 0 || getRiskBand(user.riskScore) === "high";
-      if (activeFilter === "review") return user.activeAlerts > 0 && user.criticalAlerts === 0;
+      if (activeFilter === "urgent") return urgentUserIds.has(user.id);
+      if (activeFilter === "review") return reviewUserIds.has(user.id);
       if (activeFilter === "medication") return user.missedMeds7d > 0;
       return true;
     });
-  }, [activeFilter, searchQuery, users]);
+  }, [activeFilter, reviewUserIds, searchQuery, urgentUserIds, users]);
 
   const handleUserClick = useCallback((user: GISUser) => {
     setInterventionUser(user);
     setInterventionOpen(true);
   }, []);
 
-  const urgentCount = data?.criticalAlertCount ?? filteredTasks.filter((task) => task.status === "urgent").length;
-  const reviewCount = Math.max((data?.activeAlertCount ?? 0) - urgentCount, 0);
+  const urgentCount = operationalRows.filter((row) => row.status === "urgent").length;
+  const reviewCount = operationalRows.filter((row) => row.status === "review").length;
   const missedMeds = users.reduce((sum, user) => sum + (user.missedMeds7d ?? 0), 0);
   const noResponseCount = alerts.filter((alert) => ["missed_checkin", "inactivity_detected"].includes(alert.alert_type)).length;
   const weeklyCheckinsCompleted = data?.checkinsCompletedWeekly ?? 0;
