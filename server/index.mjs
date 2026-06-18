@@ -3549,9 +3549,23 @@ function teamInviteAuthConfigured(authToken) {
 
 function teamInviteSetupError(hasPassword) {
   if (hasPassword) {
-    return "Team member was not created. Configure SUPABASE_SERVICE_ROLE_KEY or the invite-admin function before creating password-based team access.";
+    return "Team member was not created. Temporary passwords require an external auth provider. Leave the password blank to send a secure console magic link.";
   }
-  return "Team member was not created. Configure SUPABASE_SERVICE_ROLE_KEY and an invite email provider before sending secure invite links.";
+  return "Team member was not created. Configure CONSOLE_SESSION_SECRET and an invite email provider before sending secure invite links.";
+}
+
+function createConsoleTeamInviteLink({ email, redirectPath, origin }) {
+  const loginToken = createConsoleLoginToken({ email, redirectPath });
+  if (!loginToken) return { actionLink: null, error: "Console session secret is not configured" };
+
+  const loginUrl = absoluteAppUrl("/login", origin);
+  if (!loginUrl) return { actionLink: null, error: "Console app URL is not configured" };
+
+  const nextPath = loginRedirectPath(redirectPath);
+  const actionUrl = new URL(loginUrl);
+  actionUrl.searchParams.set("console_token", loginToken);
+  if (nextPath !== "/") actionUrl.searchParams.set("next", nextPath);
+  return { actionLink: actionUrl.toString(), error: null };
 }
 
 async function createTeamMember(payload, context, options = {}) {
@@ -3577,14 +3591,13 @@ async function createTeamMember(payload, context, options = {}) {
   let authCreateError = null;
 
   if (!inviteEmailError) {
-    const generatedLink = await generateSupabaseTeamMagicLink({
+    const generatedLink = createConsoleTeamInviteLink({
       email: member.value.email,
-      metadata: invite.metadata,
-      redirectUrl: invite.redirectUrl,
+      redirectPath: teamInviteRedirectPath,
+      origin: options.origin,
     });
     if (generatedLink.actionLink) {
       inviteLink = generatedLink;
-      userId = generatedLink.userId || userId;
     } else {
       inviteEmailError = generatedLink.error || "Invite link could not be generated";
     }
@@ -3613,7 +3626,7 @@ async function createTeamMember(payload, context, options = {}) {
     return {
       error: member.value.password
         ? authCreateError || teamInviteSetupError(true)
-        : inviteEmailError || teamInviteSetupError(false),
+        : inviteEmailError || "Team member was not created. Configure CONSOLE_SESSION_SECRET and an invite email provider before sending secure invite links.",
       status: 503,
     };
   }
