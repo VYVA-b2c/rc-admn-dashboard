@@ -58,6 +58,7 @@ type QueueRow = {
   lastContactKey: string;
   lastContactAt?: string | null;
   lastContactStatus?: string | null;
+  checkinPreferredTime?: string | null;
   assignedTo?: string | null;
   careProviderCount: number;
   primaryCaregiverName?: string | null;
@@ -142,6 +143,7 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     lastContactKey: meta?.lastContactKey ?? "usersList.lastContactAwaiting",
     lastContactAt: user.checkinLastReportedAt ?? meta?.lastContactAt ?? null,
     lastContactStatus: user.checkinLastStatus ?? meta?.lastContactStatus ?? null,
+    checkinPreferredTime: user.checkinPreferredTime ?? null,
     assignedTo,
     careProviderCount,
     primaryCaregiverName: user.primaryCaregiverName ?? null,
@@ -182,6 +184,24 @@ function channelKey(channel: OperationalChannel) {
   return "profile.channel.phone";
 }
 
+function timeToMinutes(value?: string | null) {
+  if (!value) return null;
+  const match = value.match(/\b([01]\d|2[0-3]):([0-5]\d)\b/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function todayScheduledContactLabel(row: QueueRow, t: (key: string) => string) {
+  if (!row.checkinEnabled || !row.checkinPreferredTime) return null;
+  const scheduledMinutes = timeToMinutes(row.checkinPreferredTime);
+  if (scheduledMinutes == null) return null;
+
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const statusKey = currentMinutes >= scheduledMinutes ? "checkin.outcomeMissedToday" : "checkin.outcomeScheduledToday";
+  return `${t(statusKey)} - ${row.checkinPreferredTime.slice(0, 5)}`;
+}
+
 function lastContactLabel(row: QueueRow, t: (key: string) => string) {
   const status = row.lastContactStatus ? t(`checkin.outcome.${row.lastContactStatus}`) : "";
   const hasStatus = status && status !== `checkin.outcome.${row.lastContactStatus}`;
@@ -193,6 +213,8 @@ function lastContactLabel(row: QueueRow, t: (key: string) => string) {
     }
   }
   if (hasStatus) return status;
+  const scheduledContact = todayScheduledContactLabel(row, t);
+  if (scheduledContact) return scheduledContact;
   return t(row.lastContactKey);
 }
 
