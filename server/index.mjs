@@ -4755,8 +4755,8 @@ function normalizeCheckinAdherenceStatus(value) {
   ) {
     return "missed";
   }
-  if (["pending", "scheduled", "unconfirmed", "unknown", "in_progress", "queued"].includes(normalized)) {
-    return "unconfirmed";
+  if (["pending", "scheduled", "unconfirmed", "unknown", "in_progress", "queued", "no_record", "no_result"].includes(normalized)) {
+    return "no_record";
   }
   if (["upcoming", "future", "planned"].includes(normalized)) return "upcoming";
   return null;
@@ -4804,10 +4804,10 @@ function checkinAdherenceLogFromRecord(record, fallbackTime) {
 
 function defaultCheckinAdherenceStatus(date, time) {
   const today = formatDate(new Date());
-  if (date < today) return "unconfirmed";
+  if (date < today) return "no_record";
   if (date > today) return "upcoming";
   if (!time) return "upcoming";
-  return new Date(`${date}T${time}:00`).getTime() <= Date.now() ? "unconfirmed" : "upcoming";
+  return new Date(`${date}T${time}:00`).getTime() <= Date.now() ? "no_record" : "upcoming";
 }
 
 function isCheckinScheduledForDate(checkin, date, start) {

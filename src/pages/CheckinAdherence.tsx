@@ -25,7 +25,7 @@ import { authBypassEnabled } from "@/lib/authMode";
 import { getDemoProfileById, isDemoUserId, type OperationalProfileResponse } from "@/lib/operationalDemoData";
 import { cn } from "@/lib/utils";
 
-type CheckinStatus = "completed" | "missed" | "unconfirmed" | "upcoming";
+type CheckinStatus = "completed" | "missed" | "no_record" | "upcoming";
 
 type CheckinScheduleEntry = {
   call_type?: string | null;
@@ -62,11 +62,11 @@ const STATUS_CONFIG: Record<CheckinStatus, { bg: string; color: string; icon: Lu
     labelKey: "checkinAdherence.status.missed",
     pill: "bg-red-50 text-red-700 ring-red-200",
   },
-  unconfirmed: {
+  no_record: {
     bg: "bg-amber-50 border-amber-200",
     color: "text-amber-600",
     icon: AlertCircle,
-    labelKey: "checkinAdherence.status.unconfirmed",
+    labelKey: "checkinAdherence.status.noRecord",
     pill: "bg-amber-50 text-amber-700 ring-amber-200",
   },
   upcoming: {
@@ -109,7 +109,7 @@ function statusFromApi(status: CheckinScheduleEntry["status"]): CheckinStatus {
   ) {
     return "missed";
   }
-  if (["pending", "scheduled", "unconfirmed", "unknown", "in_progress", "queued"].includes(normalized)) return "unconfirmed";
+  if (["pending", "scheduled", "unconfirmed", "unknown", "in_progress", "queued", "no_record", "no_result"].includes(normalized)) return "no_record";
   if (["upcoming", "future", "planned"].includes(normalized)) return "upcoming";
   return "upcoming";
 }
@@ -147,7 +147,7 @@ function frequencyLabel(value: string | number | null | undefined, t: (key: stri
 function demoStatus(day: Date, todayStart: Date, dayIndex: number): CheckinStatus {
   if (!isBefore(startOfDay(day), todayStart)) return "upcoming";
   if (dayIndex === 2) return "missed";
-  if (dayIndex === 3) return "unconfirmed";
+  if (dayIndex === 3) return "no_record";
   return "completed";
 }
 
@@ -243,7 +243,7 @@ export default function CheckinAdherence() {
 
   const getEffectiveStatus = useCallback((status: CheckinScheduleEntry["status"], day: Date): CheckinStatus => {
     const normalized = statusFromApi(status);
-    if (normalized === "upcoming" && isBefore(startOfDay(day), todayStart)) return "unconfirmed";
+    if (normalized === "upcoming" && isBefore(startOfDay(day), todayStart)) return "no_record";
     return normalized;
   }, [todayStart]);
 
@@ -284,7 +284,7 @@ export default function CheckinAdherence() {
 
   const daySummary = useMemo(() => {
     return DAY_NAMES.map((name, index) => {
-      const summary: Record<CheckinStatus, number> = { completed: 0, missed: 0, unconfirmed: 0, upcoming: 0 };
+      const summary: Record<CheckinStatus, number> = { completed: 0, missed: 0, no_record: 0, upcoming: 0 };
       for (const call of calls) {
         const entries = entryMap[call.type]?.[name] ?? [];
         for (const entry of entries) summary[getEffectiveStatus(entry.status, weekDays[index])] += 1;
@@ -298,10 +298,10 @@ export default function CheckinAdherence() {
       (acc, day) => ({
         completed: acc.completed + day.completed,
         missed: acc.missed + day.missed,
-        unconfirmed: acc.unconfirmed + day.unconfirmed,
+        no_record: acc.no_record + day.no_record,
         upcoming: acc.upcoming + day.upcoming,
       }),
-      { completed: 0, missed: 0, unconfirmed: 0, upcoming: 0 },
+      { completed: 0, missed: 0, no_record: 0, upcoming: 0 },
     );
   }, [daySummary]);
 
@@ -344,7 +344,7 @@ export default function CheckinAdherence() {
         {(Object.keys(STATUS_CONFIG) as CheckinStatus[]).map((status) => {
           const config = STATUS_CONFIG[status];
           return (
-            <Card key={status} className={cn("rounded-2xl border bg-white shadow-sm", status === "completed" && "border-t-4 border-t-emerald-500", status === "missed" && "border-t-4 border-t-red-500", status === "unconfirmed" && "border-t-4 border-t-amber-500", status === "upcoming" && "border-t-4 border-t-slate-300")}>
+            <Card key={status} className={cn("rounded-2xl border bg-white shadow-sm", status === "completed" && "border-t-4 border-t-emerald-500", status === "missed" && "border-t-4 border-t-red-500", status === "no_record" && "border-t-4 border-t-amber-500", status === "upcoming" && "border-t-4 border-t-slate-300")}>
               <CardContent className="flex h-24 items-center justify-between p-4">
                 <div>
                   <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t(config.labelKey)}</p>
@@ -458,13 +458,13 @@ export default function CheckinAdherence() {
                     </td>
                     {DAY_NAMES.map((dayName, dayIndex) => {
                       const summary = daySummary[dayIndex];
-                      const total = summary.completed + summary.missed + summary.unconfirmed + summary.upcoming;
+                      const total = summary.completed + summary.missed + summary.no_record + summary.upcoming;
                       return (
                         <td key={dayName} className="px-2 py-3 text-center">
                           <div className="flex flex-col items-center gap-1">
                             {summary.completed > 0 && <SummaryBadge status="completed" value={`${summary.completed}/${total}`} />}
                             {summary.missed > 0 && <SummaryBadge status="missed" value={`${summary.missed}`} />}
-                            {summary.unconfirmed > 0 && <SummaryBadge status="unconfirmed" value={`${summary.unconfirmed}?`} />}
+                            {summary.no_record > 0 && <SummaryBadge status="no_record" value={`${summary.no_record}`} />}
                             {summary.upcoming > 0 && <SummaryBadge status="upcoming" value={`${summary.upcoming}`} />}
                             {total === 0 && <span className="text-xs font-semibold text-muted-foreground/60">-</span>}
                           </div>

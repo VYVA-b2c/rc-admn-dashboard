@@ -1242,7 +1242,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkinAdherence.goToScheduledCalls": "Go to scheduled calls",
     "checkinAdherence.status.completed": "Completed",
     "checkinAdherence.status.missed": "Missed",
-    "checkinAdherence.status.unconfirmed": "Unconfirmed",
+    "checkinAdherence.status.noRecord": "No result logged",
     "checkinAdherence.status.upcoming": "Upcoming",
 
     // Prepare Call
@@ -2885,7 +2885,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkinAdherence.goToScheduledCalls": "Zu geplanten Anrufen",
     "checkinAdherence.status.completed": "Abgeschlossen",
     "checkinAdherence.status.missed": "Verpasst",
-    "checkinAdherence.status.unconfirmed": "Unbestaetigt",
+    "checkinAdherence.status.noRecord": "Kein Ergebnis erfasst",
     "checkinAdherence.status.upcoming": "Anstehend",
 
     // Prepare Call
@@ -4491,7 +4491,7 @@ const translations: Record<Language, Record<string, string>> = {
     "checkinAdherence.goToScheduledCalls": "Ir a llamadas programadas",
     "checkinAdherence.status.completed": "Completada",
     "checkinAdherence.status.missed": "Perdida",
-    "checkinAdherence.status.unconfirmed": "Sin confirmar",
+    "checkinAdherence.status.noRecord": "Sin resultado registrado",
     "checkinAdherence.status.upcoming": "Programada",
 
     // Settings
