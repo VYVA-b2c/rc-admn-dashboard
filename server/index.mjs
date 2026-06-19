@@ -271,6 +271,46 @@ function mergeExternalCareProviderSummary(user, summary) {
 const spanishCityHints = new Set(["barcelona", "madrid", "malaga", "málaga", "marbella", "sevilla", "tarifa", "valencia", "zamora"]);
 const germanCityHints = new Set(["berlin", "chemnitz", "dresden", "erfurt", "halle", "jena", "leipzig", "zwickau"]);
 
+function normalizedBranchKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (text.includes("zamora")) return "zamora";
+  if (text.includes("leipzig")) return "leipzig";
+  return null;
+}
+
+function branchKeyFromOrganization(organization) {
+  return normalizedBranchKey(firstValue(organization?.slug, organization?.name));
+}
+
+function inferBranchKeyFromExternalUser(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const explicitBranch = normalizedBranchKey(
+    firstValue(
+      user.organization_slug,
+      user.organizationSlug,
+      user.organization_name,
+      user.organizationName,
+      user.branch_slug,
+      user.branchSlug,
+      user.branch,
+      user.org,
+      nestedUser.organization_slug,
+      nestedUser.organizationSlug,
+      nestedUser.organization_name,
+      nestedUser.organizationName,
+    ),
+  );
+  if (explicitBranch) return explicitBranch;
+
+  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
+  if (phone.startsWith("+34") || phone.startsWith("0034")) return "zamora";
+  if (phone.startsWith("+49") || phone.startsWith("0049")) return "leipzig";
+
+  return null;
+}
+
 function normalizedCountryKey(value) {
   const text = String(value || "").trim().toLowerCase();
   if (!text) return null;
@@ -317,6 +357,11 @@ function inferCountryKeyFromExternalUser(user) {
 
 function externalUserMatchesOrganization(user, organization) {
   if (!organization) return true;
+  const organizationBranch = branchKeyFromOrganization(organization);
+  if (organizationBranch) {
+    return inferBranchKeyFromExternalUser(user) === organizationBranch;
+  }
+
   const organizationCountry = normalizedCountryKey(organization.country);
   if (!organizationCountry) return true;
   const userCountry = inferCountryKeyFromExternalUser(user);
@@ -397,6 +442,15 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
   const computedWeeklyExpected =
     gisUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0) || activeCheckins * 7;
   const computedWeeklyCompleted = gisUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0);
+  const computedCityDistribution = Array.from(
+    gisUsers.reduce((cityCounts, user) => {
+      const city = String(firstValue(user?.city, user?.userCity, user?.user_city) || "").trim();
+      if (!city) return cityCounts;
+      cityCounts.set(city, (cityCounts.get(city) || 0) + 1);
+      return cityCounts;
+    }, new Map()),
+    ([city, count]) => ({ city, count }),
+  );
 
   return {
     totalUsers: gisUsers.length,
@@ -409,9 +463,7 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     caregiversLinked: Number(data?.caregiversLinked ?? 0),
     gisUsers,
     activeAlerts,
-    cityDistribution: Array.isArray(data?.cityDistribution)
-      ? data.cityDistribution.filter((item) => externalUserMatchesOrganization({ city: item?.city ?? item?.name }, context?.organization))
-      : [],
+    cityDistribution: computedCityDistribution,
   };
 }
 
