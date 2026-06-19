@@ -367,7 +367,7 @@ export default function BrainCoachMonitoring() {
   const { isAdmin } = useAdminRole();
   const { data: currentUserContext } = useCurrentUserContext();
   const organizationTimezone = currentUserContext?.user?.organization?.timezone ?? "Europe/Berlin";
-  const canEdit = isAdmin && !authBypassEnabled();
+  const canEdit = isAdmin && !authBypassEnabled;
 
   const {
     data: sessionsData,
@@ -383,7 +383,7 @@ export default function BrainCoachMonitoring() {
         });
         return normalizeResponse(response);
       } catch (error) {
-        if (authBypassEnabled()) return [];
+        if (authBypassEnabled) return [];
         const fallbackResponse = await apiFetch<ScheduledCallFallbackResponse>("/api/v1/checkins-dashboard/checkins?service_type=brain_coach", {
           timeoutMs: REQUEST_TIMEOUT_MS,
         });
