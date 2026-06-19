@@ -225,17 +225,21 @@ function timeToMinutes(value?: string | null) {
 }
 
 function nowMinutesInTimezone(timeZone?: string | null) {
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: timeZone || undefined,
-  });
-  const parts = formatter.formatToParts(new Date());
-  const hour = Number(parts.find((part) => part.type === "hour")?.value);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
-  return hour * 60 + minute;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: timeZone || undefined,
+    });
+    const parts = formatter.formatToParts(new Date());
+    const hour = Number(parts.find((part) => part.type === "hour")?.value);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
 }
 
 function hasScheduledTimePassed(value?: string | null, timeZone?: string | null) {
@@ -295,7 +299,11 @@ function formatSessionTime(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 function lastSessionTime(session: BrainCoachSession) {
@@ -313,7 +321,11 @@ function lastSessionTime(session: BrainCoachSession) {
   if (actual) return actual;
   const scheduledAt = scheduledTodayAt(session.preferred_time);
   if (!scheduledAt || session.lastOutcome || session.last_outcome || session.last_status) return null;
-  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+  } catch {
+    return session.preferred_time ?? null;
+  }
 }
 
 function isPaused(session: Pick<BrainCoachSession, "is_paused" | "paused_until">) {
@@ -326,7 +338,11 @@ function formatPausedUntil(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 function pauseDescription(session: BrainCoachSession, t: (key: string) => string) {
@@ -337,7 +353,7 @@ function pauseDescription(session: BrainCoachSession, t: (key: string) => string
   const explanation = until
     ? t("routineCalls.pauseExplanation").replace("{date}", until)
     : t("routineCalls.pauseExplanationOpen");
-  return source ? `${source} · ${explanation}` : explanation;
+  return source ? `${source} - ${explanation}` : explanation;
 }
 
 export default function BrainCoachMonitoring() {
