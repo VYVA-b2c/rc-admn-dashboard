@@ -6,6 +6,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LanguageProvider } from "@/contexts/LanguageContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import Login from "@/pages/Login";
 import ResetPassword from "@/pages/ResetPassword";
@@ -147,7 +148,9 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <DashboardLayout>
-                    <BrainCoachReport />
+                    <RouteErrorBoundary title="Brain Coach report could not load">
+                      <BrainCoachReport />
+                    </RouteErrorBoundary>
                   </DashboardLayout>
                 </ProtectedRoute>
               }
@@ -157,7 +160,9 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <DashboardLayout>
-                    <BrainCoachMonitoring />
+                    <RouteErrorBoundary title="Brain Coach sessions could not load">
+                      <BrainCoachMonitoring />
+                    </RouteErrorBoundary>
                   </DashboardLayout>
                 </ProtectedRoute>
               }

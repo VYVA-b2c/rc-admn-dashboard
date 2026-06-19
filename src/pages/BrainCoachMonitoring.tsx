@@ -131,7 +131,8 @@ const validTimePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
 const frequencyOptions = ["daily", "weekly", "biweekly", "monthly"] as const;
 
 function normalizeResponse(response: BrainCoachSessionResponse): BrainCoachSession[] {
-  return Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+  const list = Array.isArray(response) ? response : response.sessions ?? response.data ?? [];
+  return normalizeFallbackResponse(list as ScheduledCallFallbackItem[]);
 }
 
 function pickString(...values: unknown[]) {
@@ -224,17 +225,21 @@ function timeToMinutes(value?: string | null) {
 }
 
 function nowMinutesInTimezone(timeZone?: string | null) {
-  const formatter = new Intl.DateTimeFormat("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: timeZone || undefined,
-  });
-  const parts = formatter.formatToParts(new Date());
-  const hour = Number(parts.find((part) => part.type === "hour")?.value);
-  const minute = Number(parts.find((part) => part.type === "minute")?.value);
-  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
-  return hour * 60 + minute;
+  try {
+    const formatter = new Intl.DateTimeFormat("en-GB", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: timeZone || undefined,
+    });
+    const parts = formatter.formatToParts(new Date());
+    const hour = Number(parts.find((part) => part.type === "hour")?.value);
+    const minute = Number(parts.find((part) => part.type === "minute")?.value);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+    return hour * 60 + minute;
+  } catch {
+    return null;
+  }
 }
 
 function hasScheduledTimePassed(value?: string | null, timeZone?: string | null) {
@@ -294,7 +299,11 @@ function formatSessionTime(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 function lastSessionTime(session: BrainCoachSession) {
@@ -312,7 +321,11 @@ function lastSessionTime(session: BrainCoachSession) {
   if (actual) return actual;
   const scheduledAt = scheduledTodayAt(session.preferred_time);
   if (!scheduledAt || session.lastOutcome || session.last_outcome || session.last_status) return null;
-  return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(scheduledAt);
+  } catch {
+    return session.preferred_time ?? null;
+  }
 }
 
 function isPaused(session: Pick<BrainCoachSession, "is_paused" | "paused_until">) {
@@ -325,7 +338,11 @@ function formatPausedUntil(value?: string | null) {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  try {
+    return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+  } catch {
+    return date.toLocaleString();
+  }
 }
 
 function pauseDescription(session: BrainCoachSession, t: (key: string) => string) {
@@ -336,7 +353,7 @@ function pauseDescription(session: BrainCoachSession, t: (key: string) => string
   const explanation = until
     ? t("routineCalls.pauseExplanation").replace("{date}", until)
     : t("routineCalls.pauseExplanationOpen");
-  return source ? `${source} · ${explanation}` : explanation;
+  return source ? `${source} - ${explanation}` : explanation;
 }
 
 export default function BrainCoachMonitoring() {
@@ -508,7 +525,7 @@ export default function BrainCoachMonitoring() {
 
     const query = search.toLowerCase();
     return list.filter((session) =>
-      session.userName.toLowerCase().includes(query) ||
+      (session.userName ?? "").toLowerCase().includes(query) ||
       (session.userPhone ?? "").toLowerCase().includes(query) ||
       (session.city ?? "").toLowerCase().includes(query),
     );
@@ -615,7 +632,7 @@ export default function BrainCoachMonitoring() {
                     onClick={() => navigate(`/brain-coach/${session.user_id}`)}
                   >
                     <TableCell>
-                      <div className="font-medium text-foreground">{session.userName}</div>
+                      <div className="font-medium text-foreground">{session.userName || t("common.unknown")}</div>
                       {session.city && <div className="text-xs text-muted-foreground">{session.city}</div>}
                     </TableCell>
                     <TableCell>{session.userPhone || "-"}</TableCell>
