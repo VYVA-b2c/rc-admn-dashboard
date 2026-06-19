@@ -2419,12 +2419,13 @@ const consoleMagicLinkCache = new Map();
 const consoleMagicLinkInFlight = new Map();
 const consoleMagicLinkCacheMs = 55_000;
 
-function consoleMagicLinkKey({ email, redirectPath, language, origin }) {
+function consoleMagicLinkKey({ email, redirectPath, language, origin, organizationName }) {
   return JSON.stringify([
     normalizedEmail(email),
     loginRedirectPath(redirectPath),
     loginEmailLanguage(language),
     origin || "",
+    organizationName || "",
   ]);
 }
 
@@ -2524,9 +2525,9 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function renderVyvaEmailHeader(language = "en") {
+function renderVyvaEmailHeader(language = "en", organizationName = null) {
   const redCrossLabel =
-    language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross";
+    organizationName || (language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross");
   const poweredByLabel = "Powered by VYVA";
 
   return `
@@ -2570,6 +2571,7 @@ function renderVyvaEmailHeader(language = "en") {
 function inviteEmailCopy(language, values) {
   const organizationName = values.organizationName || null;
   const roleLabel = values.roleLabel || "team member";
+  const organizationFooter = organizationName ? `VYVA x ${organizationName} operations console` : null;
 
   if (language === "de") {
     return {
@@ -2584,7 +2586,7 @@ function inviteEmailCopy(language, values) {
       securityTitle: "Sicherheitshinweis",
       securityText: "Wenn Sie diese E-Mail nicht erwartet haben, koennen Sie sie ignorieren. Ohne Zugriff auf dieses Postfach kann sich niemand anmelden.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
-      footer: "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
+      footer: organizationFooter || "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
     };
   }
 
@@ -2601,7 +2603,7 @@ function inviteEmailCopy(language, values) {
       securityTitle: "Nota de seguridad",
       securityText: "Si no esperabas este correo, puedes ignorarlo. Nadie iniciara sesion sin acceso a esta bandeja de entrada.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
-      footer: "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
+      footer: organizationFooter || "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
     };
   }
 
@@ -2617,7 +2619,7 @@ function inviteEmailCopy(language, values) {
     securityTitle: "Security note",
     securityText: "If you were not expecting this email, you can ignore it. No one will be signed in without access to this inbox.",
     fallback: "Button not working? Copy and paste this link into your browser:",
-    footer: "Automated invitation email for authorized VYVA console users.",
+    footer: organizationFooter || "Automated invitation email for authorized VYVA console users.",
   };
 }
 
@@ -2673,7 +2675,7 @@ function renderTeamInviteEmail({ actionLink, invite }) {
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #dde3f0;border-radius:20px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
-            ${renderVyvaEmailHeader(language)}
+            ${renderVyvaEmailHeader(language, metadata.organization_name)}
             <tr>
               <td style="padding:34px 32px 8px;">
                 <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
@@ -2770,8 +2772,9 @@ function consoleMagicLinkCopy(language) {
   };
 }
 
-function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl }) {
+function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl, organizationName = null }) {
   const copy = consoleMagicLinkCopy(language);
+  const footerText = organizationName ? `VYVA x ${organizationName} operations console` : copy.footer;
   const safeActionLink = escapeHtml(actionLink);
   const safeManualUrl = manualUrl ? escapeHtml(manualUrl) : null;
   const plainLines = [
@@ -2811,7 +2814,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.10);">
-            ${renderVyvaEmailHeader(language)}
+            ${renderVyvaEmailHeader(language, organizationName)}
             <tr>
               <td style="padding:38px 38px 10px;">
                 <p style="display:inline-block;margin:0 0 16px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
@@ -2843,7 +2846,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
               </td>
             </tr>
           </table>
-          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">${escapeHtml(copy.footer)}</p>
+          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">${escapeHtml(footerText)}</p>
         </td>
       </tr>
     </table>
@@ -3215,6 +3218,7 @@ async function consoleLoginAccess(email) {
       SELECT
         p.user_id,
         p.is_platform_admin,
+        COALESCE(MAX(profile_org.name), MAX(role_org.name)) AS organization_name,
         COALESCE(MAX(profile_org.default_language), MAX(role_org.default_language)) AS default_language,
         COUNT(r.user_id) FILTER (WHERE r.role IS NOT NULL) AS role_count
       FROM public.profiles p
@@ -3234,6 +3238,7 @@ async function consoleLoginAccess(email) {
     allowed,
     userId: row?.user_id || null,
     isPlatformAdmin: isConfiguredPlatformAdmin || Boolean(row?.is_platform_admin),
+    organizationName: row?.organization_name || null,
     language: loginEmailLanguage(row?.default_language || (isConfiguredPlatformAdmin ? "en" : null)),
   };
 }
@@ -3282,7 +3287,7 @@ async function contextFromConsoleSessionToken(token) {
   return { ...context, authToken: token };
 }
 
-async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
+async function sendConsoleMagicLink({ email, redirectPath, language, origin, organizationName = null }) {
   const loginToken = createConsoleLoginToken({ email, redirectPath });
   if (!loginToken) {
     return {
@@ -3310,11 +3315,12 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
     actionLink: actionUrl.toString(),
     language,
     manualUrl,
+    organizationName,
   });
   const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
   if (custom.sent) return custom;
 
-  const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin });
+  const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin, organizationName });
   if (hosted.sent) return hosted;
 
   return {
@@ -3325,7 +3331,7 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
   };
 }
 
-async function sendHostedConsoleMagicLink({ email, redirectPath, language, origin }) {
+async function sendHostedConsoleMagicLink({ email, redirectPath, language, origin, organizationName = null }) {
   const supabase = supabaseHostedMagicLinkClient();
   if (!supabase) return { sent: false, error: "Hosted magic-link email is not configured", provider: "supabase" };
 
@@ -3340,6 +3346,7 @@ async function sendHostedConsoleMagicLink({ email, redirectPath, language, origi
         language,
         email_language: language,
         login_source: "vyva_console",
+        organization_name: organizationName,
         manual_url: manualUrl,
       },
     },
@@ -8357,6 +8364,7 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
     email,
     redirectPath: req.body?.redirectPath,
     language: loginAccess.language,
+    organizationName: loginAccess.organizationName,
     origin: requestOrigin(req),
   });
 
