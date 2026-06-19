@@ -2789,7 +2789,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
               <td style="padding:0 38px 28px;">
                 <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280;">
                   ${escapeHtml(copy.manualText)}
-                  <a href="${safeManualUrl}" style="color:#6c4df6;text-decoration:none;font-weight:700;">${escapeHtml(copy.manualButton)}</a>
+                  <a href="${safeManualUrl}" style="display:inline-block;margin-top:10px;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;line-height:1;border-radius:12px;padding:13px 18px;box-shadow:0 8px 18px rgba(108,77,246,0.22);">${escapeHtml(copy.manualButton)}</a>
                 </p>
               </td>
             </tr>`
