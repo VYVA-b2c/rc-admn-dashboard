@@ -37,6 +37,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { toast } from "@/hooks/use-toast";
 import { AssignCareProviderDialog } from "@/components/user/AssignCareProviderDialog";
 import { EditCaregiverDialog } from "@/components/user/EditCaregiverDialog";
@@ -210,6 +211,7 @@ export default function UserProfile() {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
+  const organizationId = useActiveOrganizationId();
   const copy = (key: string, values: Record<string, string | number | undefined> = {}) => interpolate(t(key), values);
 
   const [editUserOpen, setEditUserOpen] = useState(false);
@@ -231,9 +233,9 @@ export default function UserProfile() {
   const [healthPlanError, setHealthPlanError] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["vyva-user-profile", id],
+    queryKey: ["vyva-user-profile", organizationId, id],
     queryFn: () => fetchUserProfile(id!),
-    enabled: Boolean(id),
+    enabled: Boolean(id && organizationId),
     retry: false,
   });
 
@@ -256,7 +258,7 @@ export default function UserProfile() {
       });
 
       toast({ title: t("profile.medicationDeleted") });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] });
     } catch (error) {
       toast({ title: t("profile.deleteFailed"), variant: "destructive" });
     }
@@ -274,7 +276,7 @@ export default function UserProfile() {
       });
 
       toast({ title: t("careProviders.unassigned") });
-      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] });
       queryClient.invalidateQueries({ queryKey: ["gis-data"] });
       queryClient.invalidateQueries({ queryKey: ["care-providers"] });
     } catch (error) {
@@ -297,7 +299,7 @@ export default function UserProfile() {
         method: "POST",
       });
       toast({ title: regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
-      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] });
     } catch (error) {
       const message = error instanceof Error ? error.message : t("profile.healthPlanGenerationFailed");
       setHealthPlanError(message);
@@ -333,7 +335,7 @@ export default function UserProfile() {
         }),
       });
       toast({ title: t("profile.healthPlanMarkedReviewed") });
-      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] });
+      await queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] });
     } catch (error) {
       toast({
         title: t("profile.healthPlanMarkReviewedFailed"),
@@ -412,7 +414,7 @@ export default function UserProfile() {
       setAddNoteOpen(false);
       setNoteDraft("");
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", id] }),
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] }),
         queryClient.invalidateQueries({ queryKey: ["gis-data"] }),
       ]);
     } catch {

@@ -268,9 +268,103 @@ function mergeExternalCareProviderSummary(user, summary) {
   };
 }
 
-function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()) {
-  const gisUsers = Array.isArray(data?.gisUsers)
-    ? data.gisUsers.map((user) => {
+const spanishCityHints = new Set(["barcelona", "madrid", "malaga", "málaga", "marbella", "sevilla", "tarifa", "valencia", "zamora"]);
+const germanCityHints = new Set(["berlin", "chemnitz", "dresden", "erfurt", "halle", "jena", "leipzig", "zwickau"]);
+
+function normalizedCountryKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (["es", "esp", "espana", "españa", "spain"].some((term) => text.includes(term))) return "spain";
+  if (["de", "deu", "deutschland", "germany"].some((term) => text.includes(term))) return "germany";
+  return text;
+}
+
+function inferCountryKeyFromExternalUser(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const explicit = normalizedCountryKey(
+    firstValue(
+      user.country,
+      user.country_code,
+      user.countryCode,
+      user.organization_country,
+      user.organizationCountry,
+      nestedUser.country,
+      nestedUser.country_code,
+      nestedUser.countryCode,
+    ),
+  );
+  if (explicit) return explicit;
+
+  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
+  if (phone.startsWith("+34") || phone.startsWith("0034")) return "spain";
+  if (phone.startsWith("+49") || phone.startsWith("0049")) return "germany";
+
+  const city = String(firstValue(user.city, user.userCity, user.user_city, nestedUser.city) || "").trim().toLowerCase();
+  if (spanishCityHints.has(city)) return "spain";
+  if (germanCityHints.has(city)) return "germany";
+
+  const coords = Array.isArray(user.coords) ? user.coords : Array.isArray(nestedUser.coords) ? nestedUser.coords : null;
+  const latitude = coords ? Number(coords[0]) : Number(firstValue(user.latitude, user.lat, nestedUser.latitude, nestedUser.lat));
+  const longitude = coords ? Number(coords[1]) : Number(firstValue(user.longitude, user.lng, user.lon, nestedUser.longitude, nestedUser.lng, nestedUser.lon));
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    if (latitude >= 35 && latitude <= 44.5 && longitude >= -10.5 && longitude <= 5) return "spain";
+    if (latitude >= 47 && latitude <= 55.5 && longitude >= 5 && longitude <= 16) return "germany";
+  }
+
+  return null;
+}
+
+function externalUserMatchesOrganization(user, organization) {
+  if (!organization) return true;
+  const organizationCountry = normalizedCountryKey(organization.country);
+  if (!organizationCountry) return true;
+  const userCountry = inferCountryKeyFromExternalUser(user);
+  if (!userCountry) return true;
+  return userCountry === organizationCountry;
+}
+
+function filterExternalUsersForOrganization(users, context) {
+  const list = Array.isArray(users) ? users : [];
+  if (!context?.organization) return list;
+  return list.filter((user) => externalUserMatchesOrganization(user, context.organization));
+}
+
+function userIdFromExternalRoutineItem(item) {
+  return String(item?.user_id ?? item?.vyva_user_id ?? item?.user?.id ?? item?.vyva_users?.id ?? item?.client?.id ?? "").trim();
+}
+
+function externalRoutineItemMatchesOrganization(item, context) {
+  if (!context?.organization) return true;
+  const userLike = {
+    ...item,
+    id: userIdFromExternalRoutineItem(item),
+    phone: firstValue(item?.phone, item?.userPhone, item?.user_phone, item?.user?.phone, item?.vyva_users?.phone, item?.client?.phone),
+    city: firstValue(item?.city, item?.userCity, item?.user_city, item?.user?.city, item?.vyva_users?.city, item?.client?.city),
+    country: firstValue(item?.country, item?.user?.country, item?.vyva_users?.country, item?.client?.country),
+    coords: firstValue(item?.coords, item?.user?.coords, item?.vyva_users?.coords, item?.client?.coords),
+  };
+  return externalUserMatchesOrganization(userLike, context.organization);
+}
+
+function filterExternalRoutinePayloadForOrganization(payload, context) {
+  if (!context?.organization) return payload;
+  const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
+  if (!list.length) return payload;
+  const filtered = list.filter((item) => externalRoutineItemMatchesOrganization(item, context));
+  if (Array.isArray(payload)) return filtered;
+  if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.checkins)) return { ...payload, checkins: filtered };
+    if (Array.isArray(payload.data)) return { ...payload, data: filtered };
+    if (Array.isArray(payload.sessions)) return { ...payload, sessions: filtered };
+  }
+  return { checkins: filtered };
+}
+
+function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map(), context = null) {
+  const filteredGisUsers = filterExternalUsersForOrganization(data?.gisUsers, context);
+  const retainedUserIds = new Set(filteredGisUsers.map((user) => String(user?.id ?? "")).filter(Boolean));
+  const gisUsers = filteredGisUsers.map((user) => {
         const careProviderNames = Array.isArray(user.careProviderNames)
           ? user.careProviderNames
           : Array.isArray(user.caretakerNames)
@@ -285,33 +379,39 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
           primaryCaregiverName: user.primaryCaregiverName ?? careProviderNames[0] ?? null,
         };
         return mergeExternalCareProviderSummary(normalizedUser, assignmentSummaries.get(String(normalizedUser.id)));
-      })
-    : [];
+      });
 
   const activeAlerts = Array.isArray(data?.activeAlerts)
-    ? data.activeAlerts.map((alert) => ({
+    ? data.activeAlerts
+      .filter((alert) => {
+        const alertUserId = String(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id) || "");
+        return !alertUserId || !retainedUserIds.size || retainedUserIds.has(alertUserId);
+      })
+      .map((alert) => ({
         ...alert,
         id: alert.id == null ? alert.id : String(alert.id),
         vyva_user_id: alert.vyva_user_id == null ? alert.vyva_user_id : String(alert.vyva_user_id),
       }))
     : [];
-  const activeCheckins = Number(data?.checkinsEnabled ?? 0);
+  const activeCheckins = gisUsers.filter((user) => Boolean(user.checkinEnabled ?? user.checkin_enabled)).length;
   const computedWeeklyExpected =
     gisUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0) || activeCheckins * 7;
   const computedWeeklyCompleted = gisUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0);
 
   return {
-    totalUsers: Number(data?.totalUsers ?? gisUsers.length),
+    totalUsers: gisUsers.length,
     checkinsEnabled: activeCheckins,
     checkinsCompletedWeekly: Number(data?.checkinsCompletedWeekly ?? computedWeeklyCompleted),
     checkinsExpectedWeekly: Number(data?.checkinsExpectedWeekly ?? computedWeeklyExpected),
-    activeAlertCount: Number(data?.activeAlertCount ?? activeAlerts.length),
-    criticalAlertCount: Number(data?.criticalAlertCount ?? activeAlerts.filter((alert) => alert.severity === "critical").length),
+    activeAlertCount: activeAlerts.length,
+    criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
     totalSensors: Number(data?.totalSensors ?? 0),
     caregiversLinked: Number(data?.caregiversLinked ?? 0),
     gisUsers,
     activeAlerts,
-    cityDistribution: Array.isArray(data?.cityDistribution) ? data.cityDistribution : [],
+    cityDistribution: Array.isArray(data?.cityDistribution)
+      ? data.cityDistribution.filter((item) => externalUserMatchesOrganization({ city: item?.city ?? item?.name }, context?.organization))
+      : [],
   };
 }
 
@@ -8403,7 +8503,7 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries));
+      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, req.context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -8469,7 +8569,12 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices, carePlanAccess, scheduledContact));
+      const normalizedProfile = normalizeExternalProfilePayload(upstream.data);
+      if (req.context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, req.context.organization)) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+      res.json(mergeExternalProfileWithLocalAssignments(normalizedProfile, careProviders, userId, localServices, carePlanAccess, scheduledContact));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -9606,7 +9711,8 @@ app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(upstream.data, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
+      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(scopedPayload, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -9760,7 +9866,8 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload(upstream.data, "brain_coach", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
+      res.json(await overlayRoutineServicePayload(scopedPayload, "brain_coach", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -9776,7 +9883,8 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(checkinsUpstream.data) }, "brain_coach", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context);
+      res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(scopedPayload) }, "brain_coach", context));
       return;
     }
     if (!pool) {
@@ -9868,10 +9976,114 @@ function buildBrainCoachReportFromSession(session, userId) {
   };
 }
 
+function parseBrainCoachDurationMinutes(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const match = String(value ?? "").match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseBrainCoachPercent(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value <= 10 ? value * 10 : value;
+  }
+  const match = String(value ?? "").match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeCaregiverBrainCoachReport({ stats, trend, history }, fallbackUserId, fallbackUser = null) {
+  const sessions = Array.isArray(history?.sessions) ? history.sessions : [];
+  const performance = Array.isArray(trend?.trend) ? trend.trend : [];
+
+  return {
+    user: {
+      id: String(fallbackUser?.id ?? fallbackUserId ?? ""),
+      name: fallbackUser?.name ?? fallbackUser?.userName ?? null,
+      phone: fallbackUser?.phone ?? fallbackUser?.userPhone ?? null,
+      city: fallbackUser?.city ?? null,
+    },
+    summary: {
+      averageScore: Number(stats?.average_session_score ?? 0) || 0,
+      sessionsCompleted: Number(stats?.total_sessions ?? sessions.length ?? 0) || 0,
+      totalQuestions: Number(stats?.total_questions ?? sessions.reduce((sum, item) => sum + (Number(item?.Questions ?? item?.questions ?? 0) || 0), 0)) || 0,
+      streakDays: Number(stats?.streak ?? 0) || 0,
+    },
+    performance: performance.map((item) => ({
+      date: item?.date ?? item?.display_date ?? null,
+      score: parseBrainCoachPercent(item?.score),
+    })),
+    sessions: sessions.map((item, index) => ({
+      id: item?.session_id ?? item?.id ?? `brain-coach-session-${fallbackUserId}-${index}`,
+      date: item?.date ?? item?.created_at ?? item?.session_at ?? null,
+      status: item?.status ?? "completed",
+      score: parseBrainCoachPercent(item?.accuracy ?? item?.score),
+      questions: Number(item?.Questions ?? item?.questions ?? item?.question_count ?? 0) || 0,
+      durationMinutes: parseBrainCoachDurationMinutes(item?.duration ?? item?.duration_minutes),
+    })),
+  };
+}
+
+async function loadCaregiverBrainCoachReport(userId, query = {}, fallbackUser = null) {
+  const encodedUserId = encodeURIComponent(String(userId));
+  const days = Number(query.days ?? 7) || 7;
+  const reportQuery = { days };
+  const historyQuery = { days, limit: query.limit ?? 50, offset: query.offset ?? 0 };
+  const [stats, trend, history] = await Promise.all([
+    requestVyvaBackend(`/api/v1/brain-coach/brain-coach-info/${encodedUserId}`, { query: reportQuery }),
+    requestVyvaBackend(`/api/v1/brain-coach/cognitive-trend/${encodedUserId}`, { query: reportQuery }),
+    requestVyvaBackend(`/api/v1/brain-coach/session-history/${encodedUserId}`, { query: historyQuery }),
+  ]);
+
+  if (!stats?.ok && !trend?.ok && !history?.ok) return null;
+
+  return normalizeCaregiverBrainCoachReport({
+    stats: stats?.ok ? stats.data : null,
+    trend: trend?.ok ? trend.data : null,
+    history: history?.ok ? history.data : null,
+  }, userId, fallbackUser);
+}
+
+async function externalUserIdMatchesActiveOrganization(userId, context) {
+  if (!context?.organization) return true;
+  const externalId = String(userId || "").trim();
+  if (!externalId) return false;
+
+  const localMatch = await optionalRows(
+    `
+      SELECT id::text
+      FROM public.vyva_users
+      WHERE organization_id = $1
+        AND (id::text = $2 OR external_user_id = $2)
+      LIMIT 1
+    `,
+    [scopeOrganizationId(context), externalId],
+  );
+  if (localMatch[0]) return true;
+
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  if (!upstream?.ok) return true;
+  const users = Array.isArray(upstream.data?.gisUsers) ? upstream.data.gisUsers : [];
+  const user = users.find((item) => String(item?.id ?? "") === externalId);
+  if (!user) return false;
+  return externalUserMatchesOrganization(user, context.organization);
+}
+
 app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, next) => {
   try {
     const userId = String(req.params.user_id || "");
     const encodedUserId = encodeURIComponent(userId);
+    let context = null;
+    if (pool) {
+      try {
+        context = await resolveRequestContext(req);
+        req.context = context;
+      } catch {
+        context = null;
+      }
+    }
+    if (context && !(await externalUserIdMatchesActiveOrganization(userId, context))) {
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
     const candidatePaths = [
       `/api/v1/brain-coach-dashboard/users/${encodedUserId}/report`,
       `/api/v1/brain-coach-dashboard/users/${encodedUserId}/reports`,
@@ -9893,7 +10105,7 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     let sessions = [];
     try {
       const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
-      if (upstreamSessions?.ok) sessions = mapUpstreamBrainCoachSessions(upstreamSessions.data);
+      if (upstreamSessions?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(upstreamSessions.data, context));
     } catch {
       sessions = [];
     }
@@ -9901,18 +10113,23 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     if (!sessions.length) {
       try {
         const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
-        if (checkinsUpstream?.ok) sessions = mapUpstreamBrainCoachSessions(checkinsUpstream.data);
+        if (checkinsUpstream?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context));
       } catch {
         sessions = [];
       }
     }
 
-    if (!sessions.length && pool) {
-      req.context = await resolveRequestContext(req);
-      sessions = await loadBrainCoachSessions(req.context);
+    if (!sessions.length && context) {
+      sessions = await loadBrainCoachSessions(context);
     }
 
     const session = sessions.find((item) => String(item.user_id) === userId);
+    const caregiverReport = await loadCaregiverBrainCoachReport(userId, req.query, session);
+    if (caregiverReport && ((caregiverReport.sessions?.length ?? 0) > 0 || (caregiverReport.summary?.sessionsCompleted ?? 0) > 0)) {
+      res.json(caregiverReport);
+      return;
+    }
+
     res.json(buildBrainCoachReportFromSession(session, userId));
   } catch (error) {
     next(error);

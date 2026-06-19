@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import type { CareProviderOption } from "@/lib/careProviders";
@@ -27,10 +28,12 @@ export default function EmergencyContacts() {
   const [addCaregiverOpen, setAddCaregiverOpen] = useState(false);
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const organizationId = useActiveOrganizationId();
 
   const { data: providers = [], error, isLoading, refetch, isFetching } = useQuery({
-    queryKey: ["emergency-contacts"],
+    queryKey: ["emergency-contacts", organizationId],
     queryFn: fetchCareProviders,
+    enabled: Boolean(organizationId),
     retry: false,
   });
   const sourceProviders = authBypassEnabled && providers.length === 0 ? demoCareProviders : providers;

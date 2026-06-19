@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { StatCard } from "@/components/StatCard";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
@@ -366,8 +367,9 @@ export default function BrainCoachMonitoring() {
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
   const { data: currentUserContext } = useCurrentUserContext();
+  const organizationId = useActiveOrganizationId();
   const organizationTimezone = currentUserContext?.user?.organization?.timezone ?? "Europe/Berlin";
-  const canEdit = isAdmin && !authBypassEnabled();
+  const canEdit = isAdmin && !authBypassEnabled;
 
   const {
     data: sessionsData,
@@ -375,7 +377,7 @@ export default function BrainCoachMonitoring() {
     isError,
     isLoading,
   } = useQuery({
-    queryKey: ["brain-coach-monitoring"],
+    queryKey: ["brain-coach-monitoring", organizationId],
     queryFn: async (): Promise<BrainCoachSession[]> => {
       try {
         const response = await apiFetch<BrainCoachSessionResponse>("/api/v1/brain-coach-dashboard/sessions", {
@@ -383,13 +385,14 @@ export default function BrainCoachMonitoring() {
         });
         return normalizeResponse(response);
       } catch (error) {
-        if (authBypassEnabled()) return [];
+        if (authBypassEnabled) return [];
         const fallbackResponse = await apiFetch<ScheduledCallFallbackResponse>("/api/v1/checkins-dashboard/checkins?service_type=brain_coach", {
           timeoutMs: REQUEST_TIMEOUT_MS,
         });
         return normalizeFallbackResponse(fallbackResponse);
       }
     },
+    enabled: Boolean(organizationId),
     retry: false,
   });
 

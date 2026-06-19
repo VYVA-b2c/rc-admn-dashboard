@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 
@@ -126,10 +127,13 @@ async function fetchFieldStaff(): Promise<GISFieldStaff[]> {
 }
 
 export function useGISData() {
+  const organizationId = useActiveOrganizationId();
+
   return useQuery({
-    queryKey: ["gis-data"],
+    queryKey: ["gis-data", organizationId],
     refetchInterval: authBypassEnabled ? false : 30000,
     retry: false,
+    enabled: Boolean(organizationId),
     queryFn: async () => {
       const [res, offices, fieldStaff] = await Promise.all([
         fetchDashboardGISData(),

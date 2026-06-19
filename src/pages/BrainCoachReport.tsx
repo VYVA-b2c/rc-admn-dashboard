@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { apiFetch } from "@/lib/apiClient";
 import { cn } from "@/lib/utils";
 
@@ -105,13 +106,14 @@ export default function BrainCoachReport() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const organizationId = useActiveOrganizationId();
   const [range, setRange] = useState<ReportRange>(7);
   const [tab, setTab] = useState<ReportTab>("performance");
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["brain-coach-report", id, range],
+    queryKey: ["brain-coach-report", organizationId, id, range],
     queryFn: () => apiFetch<BrainCoachReportResponse>(`/api/v1/brain-coach-dashboard/users/${encodeURIComponent(id || "")}/report?days=${range}`),
-    enabled: Boolean(id),
+    enabled: Boolean(id && organizationId),
     retry: false,
   });
 

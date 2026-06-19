@@ -25,6 +25,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { toast } from "@/hooks/use-toast";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { useGISData, type GISFieldStaff, type GISUser } from "@/hooks/useGISData";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
@@ -502,10 +503,12 @@ export default function RiskQueue() {
   const [days, setDays] = useState<(typeof horizonOptions)[number]>(7);
   const [filter, setFilter] = useState<(typeof filterOptions)[number]["value"]>("all");
   const queryClient = useQueryClient();
+  const organizationId = useActiveOrganizationId();
   const operationalQuery = useGISData();
   const insightsQuery = useQuery({
-    queryKey: ["insights", days, filter],
+    queryKey: ["insights", organizationId, days, filter],
     queryFn: () => fetchInsights(days, filter),
+    enabled: Boolean(organizationId),
     retry: false,
   });
 
