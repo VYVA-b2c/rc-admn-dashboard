@@ -2467,6 +2467,7 @@ function userManualUrl(origin) {
 function teamInviteMetadata({ context, role, organization, origin }) {
   const language = inviteEmailLanguage(organization);
   const guideUrl = teamInviteGuideUrl(origin);
+  const manualUrl = userManualUrl(origin);
   const redirectUrl = teamInviteRedirectUrl(origin);
   return {
     metadata: {
@@ -2479,7 +2480,7 @@ function teamInviteMetadata({ context, role, organization, origin }) {
       organization_id: organization?.id || null,
       organization_name: organization?.name || null,
       guide_url: guideUrl,
-      manual_url: guideUrl,
+      manual_url: manualUrl,
     },
     guideUrl,
     language,
