@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
@@ -67,14 +68,15 @@ export default function PrepareCall() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const organizationId = useActiveOrganizationId();
   const copy = (key: string, values: Record<string, string | number | undefined> = {}) => interpolate(t(key), values);
   const [callStarted, setCallStarted] = useState(false);
   const [note, setNote] = useState("");
 
   const { data, isLoading } = useQuery({
-    queryKey: ["vyva-prepare-call", id],
+    queryKey: ["vyva-prepare-call", organizationId, id],
     queryFn: () => fetchPrepareCallProfile(id!),
-    enabled: Boolean(id),
+    enabled: Boolean(id && organizationId),
     retry: false,
   });
 

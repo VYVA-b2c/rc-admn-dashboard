@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Circle } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -12,6 +13,33 @@ import { ACTIVE_ORGANIZATION_STORAGE_KEY, apiFetch } from "@/lib/apiClient";
 type OrganizationsResponse = {
   organizations: OrganizationContext[];
 };
+
+const ORG_SCOPED_QUERY_ROOTS = new Set([
+  "gis-data",
+  "vyva-user-profile",
+  "vyva-prepare-call",
+  "checkin-monitoring",
+  "scheduled-call-users",
+  "checkin-weekly-adherence",
+  "med-weekly-schedule",
+  "emergency-contacts",
+  "care-providers",
+  "brain-coach-monitoring",
+  "brain-coach-report",
+  "campaigns-dashboard",
+  "campaign-call-runs",
+  "campaign-call-jobs",
+  "insights",
+  "sensor-alerts",
+  "sensor-devices",
+  "sensor-readings-recent",
+]);
+
+function isOrganizationDetailRoute(pathname: string) {
+  return /^\/users\/[^/]+/.test(pathname) ||
+    /^\/brain-coach\/[^/]+/.test(pathname) ||
+    /^\/risk-queue\/[^/]+\/prepare-call/.test(pathname);
+}
 
 function nameSeed(fullName?: string | null, email?: string | null) {
   if (fullName?.trim()) return fullName.trim();
@@ -41,6 +69,8 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { t } = useLanguage();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const organizationName = currentUser?.organization?.name || t("layout.organization");
@@ -55,7 +85,16 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
 
   const handleOrganizationChange = async (nextOrganizationId: string) => {
     localStorage.setItem(ACTIVE_ORGANIZATION_STORAGE_KEY, nextOrganizationId);
-    await queryClient.invalidateQueries();
+    queryClient.removeQueries({
+      predicate: (query) => ORG_SCOPED_QUERY_ROOTS.has(String(query.queryKey[0] ?? "")),
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["current-user-context"] }),
+      queryClient.invalidateQueries({ queryKey: ["organizations"] }),
+    ]);
+    if (isOrganizationDetailRoute(location.pathname)) {
+      navigate("/", { replace: true });
+    }
   };
 
   return (

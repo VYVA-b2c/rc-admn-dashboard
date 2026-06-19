@@ -43,6 +43,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { useGISData, type GISUser } from "@/hooks/useGISData";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch, isAuthSessionErrorMessage } from "@/lib/apiClient";
@@ -687,6 +688,7 @@ export default function Campaigns() {
   const { t, language } = useLanguage();
   const { user } = useAuth();
   const { isAdmin } = useAdminRole();
+  const organizationId = useActiveOrganizationId();
   const { data: gisData } = useGISData();
   const canDraftCampaigns = Boolean(user) && !authBypassEnabled;
   const canManageCampaigns = isAdmin && canDraftCampaigns;
@@ -880,13 +882,14 @@ export default function Campaigns() {
   };
 
   const campaignsQuery = useQuery({
-    queryKey: ["campaigns-dashboard"],
+    queryKey: ["campaigns-dashboard", organizationId],
     queryFn: async () => {
       const response = await apiFetch<CampaignsResponse>("/api/v1/campaigns-dashboard/campaigns", {
         timeoutMs: REQUEST_TIMEOUT_MS,
       });
       return response.campaigns ?? [];
     },
+    enabled: Boolean(organizationId),
     retry: false,
     staleTime: QUERY_STALE_TIME_MS,
     refetchOnWindowFocus: false,
@@ -910,8 +913,8 @@ export default function Campaigns() {
   );
 
   const runsQuery = useQuery({
-    queryKey: ["campaign-call-runs", selectedCampaignId],
-    enabled: Boolean(selectedCampaignId),
+    queryKey: ["campaign-call-runs", organizationId, selectedCampaignId],
+    enabled: Boolean(organizationId && selectedCampaignId),
     queryFn: async () => {
       const response = await apiFetch<RunsResponse>(`/api/v1/campaigns-dashboard/campaigns/${selectedCampaignId}/call-runs`, {
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -941,8 +944,8 @@ export default function Campaigns() {
   );
 
   const jobsQuery = useQuery({
-    queryKey: ["campaign-call-jobs", selectedRunId],
-    enabled: Boolean(selectedRunId),
+    queryKey: ["campaign-call-jobs", organizationId, selectedRunId],
+    enabled: Boolean(organizationId && selectedRunId),
     queryFn: async () => {
       const response = await apiFetch<JobsResponse>(`/api/v1/campaigns-dashboard/call-runs/${selectedRunId}/jobs`, {
         timeoutMs: REQUEST_TIMEOUT_MS,
@@ -1593,7 +1596,7 @@ export default function Campaigns() {
       setPreviewData(null);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["campaign-call-runs", selectedCampaignId] }),
+        queryClient.invalidateQueries({ queryKey: ["campaign-call-runs"] }),
       ]);
       if (run?.id) setSelectedRunId(run.id);
       toast({
@@ -1619,8 +1622,8 @@ export default function Campaigns() {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["campaigns-dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["campaign-call-runs", selectedCampaignId] }),
-        queryClient.invalidateQueries({ queryKey: ["campaign-call-jobs", selectedRunId] }),
+        queryClient.invalidateQueries({ queryKey: ["campaign-call-runs"] }),
+        queryClient.invalidateQueries({ queryKey: ["campaign-call-jobs"] }),
       ]);
       toast({ title: t("campaigns.call.cancelledTitle"), description: t("campaigns.call.cancelledDescription") });
     },

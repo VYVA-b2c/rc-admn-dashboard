@@ -10,6 +10,7 @@ import { AlertTriangle, ShieldAlert, CheckCircle, Activity, Search, Battery, Wif
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, AreaChart, Area, Legend,
@@ -28,9 +29,10 @@ export default function Sensors() {
   const [search, setSearch] = useState("");
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const organizationId = useActiveOrganizationId();
 
   const { data: alerts, isLoading: alertsLoading } = useQuery({
-    queryKey: ["sensor-alerts"],
+    queryKey: ["sensor-alerts", organizationId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("vyva_sensor_alerts")
@@ -39,11 +41,12 @@ export default function Sensors() {
       if (error) throw error;
       return data || [];
     },
+    enabled: Boolean(organizationId),
     refetchInterval: 15000,
   });
 
   const { data: sensors, isLoading: sensorsLoading } = useQuery({
-    queryKey: ["sensor-devices"],
+    queryKey: ["sensor-devices", organizationId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("vyva_user_sensors")
@@ -52,11 +55,12 @@ export default function Sensors() {
       if (error) throw error;
       return data || [];
     },
+    enabled: Boolean(organizationId),
     refetchInterval: 15000,
   });
 
   const { data: readings, isLoading: readingsLoading } = useQuery({
-    queryKey: ["sensor-readings-recent"],
+    queryKey: ["sensor-readings-recent", organizationId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("vyva_sensor_readings")
@@ -66,6 +70,7 @@ export default function Sensors() {
       if (error) throw error;
       return data || [];
     },
+    enabled: Boolean(organizationId),
     refetchInterval: 30000,
   });
 

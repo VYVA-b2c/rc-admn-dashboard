@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import {
@@ -146,6 +147,7 @@ export default function MedicationAdherence() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { language, t } = useLanguage();
+  const organizationId = useActiveOrganizationId();
   const [weekOffset, setWeekOffset] = useState(0);
 
   const today = new Date();
@@ -155,16 +157,16 @@ export default function MedicationAdherence() {
   const weekDays = useMemo(() => eachDayOfInterval({ start: weekStart, end: weekEnd }), [weekStart, weekEnd]);
 
   const { data: profile, isLoading: profileLoading } = useQuery({
-    queryKey: ["vyva-user-profile", id],
+    queryKey: ["vyva-user-profile", organizationId, id],
     queryFn: () => fetchProfile(id!),
-    enabled: Boolean(id),
+    enabled: Boolean(id && organizationId),
     retry: false,
   });
 
   const isPreviewProfile = Boolean(profile?.isPreviewDemo || (id && isDemoUserId(id)));
 
   const { data: schedule, isLoading: scheduleLoading } = useQuery({
-    queryKey: ["med-weekly-schedule", id, format(weekStart, "yyyy-MM-dd"), isPreviewProfile],
+    queryKey: ["med-weekly-schedule", organizationId, id, format(weekStart, "yyyy-MM-dd"), isPreviewProfile],
     queryFn: async () => {
       if (isPreviewProfile) {
         return buildDemoSchedule(profile ?? getDemoProfileById(id), weekDays, todayStart);
@@ -180,7 +182,7 @@ export default function MedicationAdherence() {
         }),
       });
     },
-    enabled: Boolean(id && (profile || isDemoUserId(id))),
+    enabled: Boolean(id && organizationId && (profile || isDemoUserId(id))),
     retry: false,
   });
 

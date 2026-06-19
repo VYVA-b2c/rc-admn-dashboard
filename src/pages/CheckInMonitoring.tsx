@@ -36,6 +36,7 @@ import { ScheduledCallDialog } from "@/components/checkins/ScheduledCallDialog";
 import { StatCard } from "@/components/StatCard";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { useCurrentUserContext } from "@/hooks/useCurrentUserContext";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
@@ -381,6 +382,7 @@ export default function CheckInMonitoring() {
   const { t } = useLanguage();
   const { isAdmin } = useAdminRole();
   const { data: currentUserContext } = useCurrentUserContext();
+  const organizationId = useActiveOrganizationId();
   const organizationTimezone = currentUserContext?.user?.organization?.timezone ?? "Europe/Berlin";
 
   const {
@@ -389,7 +391,7 @@ export default function CheckInMonitoring() {
     isError,
     isLoading,
   } = useQuery({
-    queryKey: ["checkin-monitoring"],
+    queryKey: ["checkin-monitoring", organizationId],
     queryFn: async (): Promise<ScheduledCallRow[]> => {
       try {
         const response = await apiFetch<ScheduledCallsResponse>("/api/v1/checkins-dashboard/checkins", {
@@ -408,6 +410,7 @@ export default function CheckInMonitoring() {
         }
       }
     },
+    enabled: Boolean(organizationId),
     retry: false,
   });
 
@@ -427,7 +430,7 @@ export default function CheckInMonitoring() {
   }, [checkinsError, isError, t]);
 
   const { data: users = [], isLoading: usersLoading } = useQuery({
-    queryKey: ["scheduled-call-users"],
+    queryKey: ["scheduled-call-users", organizationId],
     enabled: canCreate,
     retry: false,
     queryFn: async (): Promise<ScheduledCallUser[]> => {

@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useActiveOrganizationId } from "@/hooks/useActiveOrganizationId";
 import { toast } from "@/hooks/use-toast";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
@@ -34,6 +35,7 @@ async function fetchCareProviders(search: string, type: CareProviderType) {
 export function AssignCareProviderDialog({ open, onOpenChange, userId, userName }: AssignCareProviderDialogProps) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
+  const organizationId = useActiveOrganizationId();
   const [search, setSearch] = useState("");
   const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null);
   const [staffRole, setStaffRole] = useState("primary_field_staff");
@@ -49,9 +51,9 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
   ];
 
   const { data: providers = [], isLoading } = useQuery({
-    queryKey: ["care-providers", "field_staff", search],
+    queryKey: ["care-providers", organizationId, "field_staff", search],
     queryFn: () => fetchCareProviders(search, "field_staff"),
-    enabled: open && !authBypassEnabled,
+    enabled: open && Boolean(organizationId) && !authBypassEnabled,
     retry: false,
   });
 
@@ -98,7 +100,7 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
       toast({ title: t("careProviders.assigned") });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["gis-data"] }),
-        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile", userId] }),
+        queryClient.invalidateQueries({ queryKey: ["vyva-user-profile"] }),
         queryClient.invalidateQueries({ queryKey: ["care-providers"] }),
         queryClient.invalidateQueries({ queryKey: ["emergency-contacts"] }),
       ]);
