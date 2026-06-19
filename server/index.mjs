@@ -2863,6 +2863,24 @@ function parseEmailIdentity(value) {
   return { email: match[2].trim(), name: name || undefined };
 }
 
+function formatEmailIdentity({ email, name }) {
+  const address = String(email || "").trim();
+  if (!address) return "";
+  const displayName = String(name || "").trim();
+  if (!displayName) return address;
+  const safeName = displayName.replace(/"/g, "'");
+  return `"${safeName}" <${address}>`;
+}
+
+function brandedEmailFrom(organizationName = null) {
+  const identity = parseEmailIdentity(teamInviteEmailFrom);
+  if (!organizationName || !identity.email) return teamInviteEmailFrom;
+  return formatEmailIdentity({
+    email: identity.email,
+    name: `VYVA x ${organizationName}`,
+  });
+}
+
 async function sendEmailProviderRequest({ url, headers, body, provider }) {
   const response = await fetch(url, {
     method: "POST",
@@ -2891,12 +2909,13 @@ async function sendEmailProviderRequest({ url, headers, body, provider }) {
   return parsed;
 }
 
-async function sendRenderedTeamInviteEmail({ to, rendered }) {
+async function sendRenderedTeamInviteEmail({ to, rendered, organizationName = null }) {
   const configError = inviteEmailConfigurationError();
   if (configError) return { sent: false, error: configError, provider: null };
 
   const providers = inviteEmailProviders();
   const failures = [];
+  const fromAddress = brandedEmailFrom(organizationName);
 
   for (const provider of providers) {
     try {
@@ -2906,7 +2925,7 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
         url: "https://api.resend.com/emails",
         headers: { Authorization: `Bearer ${resendApiKey}` },
         body: {
-          from: teamInviteEmailFrom,
+          from: fromAddress,
           to: [to],
           subject: rendered.subject,
           html: rendered.html,
@@ -2920,7 +2939,7 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
         url: "https://api.postmarkapp.com/email",
         headers: { "X-Postmark-Server-Token": postmarkServerToken },
         body: {
-          From: teamInviteEmailFrom,
+          From: fromAddress,
           To: to,
           Subject: rendered.subject,
           HtmlBody: rendered.html,
@@ -3317,8 +3336,9 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin, org
     manualUrl,
     organizationName,
   });
-  const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
+  const custom = await sendRenderedTeamInviteEmail({ to: email, rendered, organizationName });
   if (custom.sent) return custom;
+  if (inviteEmailProvider()) return custom;
 
   const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin, organizationName });
   if (hosted.sent) return hosted;
@@ -3905,6 +3925,7 @@ async function createTeamMember(payload, context, options = {}) {
     inviteEmail = await sendRenderedTeamInviteEmail({
       to: member.value.email,
       rendered,
+      organizationName: invite.metadata.organization_name,
     }).catch((error) => ({
       sent: false,
       error: error?.message || "Invite email could not be sent",
