@@ -2,25 +2,26 @@
 
 Use this checklist whenever a console feature ships, changes, or is removed.
 
-## Latest Update Review: 2026-06-18.2
+## Latest Update Review: 2026-06-20
 
-- [x] Check-in adherence purpose, usage, read-only behavior, expected statuses, and common mistakes are documented.
-- [x] Last check-in status label behavior is documented for the client profile.
+- [x] Email-only login, organization-aware access, and role behavior are documented.
+- [x] Clients, Add client, CSV import, API intake, and client profile workflows are documented.
+- [x] Emergency Contacts are documented separately from Red Cross staff.
+- [x] Check-ins, Brain Coach, Medication adherence, Risk, Sensors, Campaigns, and Reports are refreshed for the current console.
 - [x] DOCX, current PDF, public PDF, archive PDF, version snapshot, changelog, and public manifest are updated.
-- [x] The new addendum page was rendered and visually checked.
-- [ ] Full screenshot recapture for Check-in adherence is still pending for the next scheduled manual refresh.
+- [ ] Full screenshot recapture is still pending for the next visual manual refresh.
 
 ## Feature Coverage
 
-- [ ] Feature purpose is documented.
-- [ ] "When to use it" is documented.
-- [ ] Step-by-step admin instructions are documented.
-- [ ] Admin, operator, and platform-admin permission impact is checked.
-- [ ] Editable fields and disabled/read-only states are explained.
-- [ ] Expected result is documented.
-- [ ] Common mistakes or validation errors are documented.
-- [ ] Related routes/sidebar labels still match the app.
-- [ ] Any backend limitations are stated clearly.
+- [x] Feature purpose is documented.
+- [x] "When to use it" is documented.
+- [x] Step-by-step admin instructions are documented.
+- [x] Admin, operator, and platform-admin permission impact is checked.
+- [x] Editable fields and disabled/read-only states are explained.
+- [x] Expected result is documented.
+- [x] Common mistakes or validation errors are documented.
+- [x] Related routes/sidebar labels still match the app.
+- [x] Any backend limitations are stated clearly.
 
 ## Screenshots
 
@@ -32,19 +33,19 @@ Use this checklist whenever a console feature ships, changes, or is removed.
 
 ## Output Files
 
-- [ ] `current/VYVA_Admin_Console_User_Manual.docx` is updated.
-- [ ] `current/VYVA_Admin_Console_User_Manual.pdf` is updated.
-- [ ] A dated copy exists in `versions/YYYY-MM-DD/`.
-- [ ] The latest public PDF is updated at `public/manuals/VYVA_Admin_Console_User_Manual.pdf`.
-- [ ] The dated public archive PDF exists in `public/manuals/archive/`.
-- [ ] `public/manuals/manual-version.json` is updated.
-- [ ] Root convenience copies are updated if the user needs them.
-- [ ] `CHANGELOG.md` has a dated entry.
+- [x] `current/VYVA_Admin_Console_User_Manual.docx` is updated.
+- [x] `current/VYVA_Admin_Console_User_Manual.pdf` is updated.
+- [x] A dated copy exists in `versions/YYYY-MM-DD/`.
+- [x] The latest public PDF is updated at `public/manuals/VYVA_Admin_Console_User_Manual.pdf`.
+- [x] The dated public archive PDF exists in `public/manuals/archive/`.
+- [x] `public/manuals/manual-version.json` is updated.
+- [x] Root convenience copies are updated if the user needs them.
+- [x] `CHANGELOG.md` has a dated entry.
 
 ## Quality Gate
 
 - [ ] PDF pages are rendered and visually checked.
 - [ ] No clipped text, overlapping content, bad page breaks, unreadable screenshots, or crowded tables.
 - [ ] Links/table of contents are checked where applicable.
-- [ ] The manual still uses English only.
-- [ ] The update did not modify app code, routes, email templates, or hosted manual links unless requested separately.
+- [x] The manual still uses English only.
+- [x] The update did not modify app code, routes, email templates, or hosted manual links unless requested separately.

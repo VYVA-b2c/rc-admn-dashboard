@@ -1,5 +1,17 @@
 # Admin Manual Changelog
 
+## 2026-06-20
+
+Full current-console refresh.
+
+- Updated the manual for email-only admin login, organization-aware access, active organization switching, and branch defaults.
+- Renamed the care-recipient workflow to Clients and documented Add client, CSV import, and API intake.
+- Documented client profile updates including gateway-required outreach actions, care coverage, activity timeline behavior, and minimum-necessary care data handling.
+- Separated Emergency Contacts from professional Red Cross staff and documented primary contact/staff assignment behavior.
+- Updated Check-ins, Brain Coach, Medication adherence, Risk, Sensors, Reports, and dashboard metric guidance to match the current console.
+- Reworked Campaigns guidance around VYVA Call Campaigns, fixed/custom templates, AI script assist, smart targeting, recipient preview, scheduling, queueing, and the voice connector guard.
+- Added `source/latest-addons-2026-06-20.md`, regenerated the DOCX/PDF outputs, refreshed the public PDF, created a dated version snapshot, and updated the public manifest.
+
 ## 2026-06-18.2
 
 Same-day feature update.
