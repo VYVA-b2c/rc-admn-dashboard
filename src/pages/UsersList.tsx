@@ -346,10 +346,6 @@ export default function UsersList() {
               {t(authBypassEnabled ? "usersList.createPreviewLocked" : "usersList.createAdminOnly")}
             </Badge>
           )}
-          <div className="flex items-center gap-2 rounded-full border border-border bg-white px-3 py-2 text-xs font-semibold text-muted-foreground shadow-sm">
-            <Users className="h-4 w-4 text-primary" />
-            {filteredRows.length} {t("usersList.peopleShown")}
-          </div>
         </div>
       </div>
 
