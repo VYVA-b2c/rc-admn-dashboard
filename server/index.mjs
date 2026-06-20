@@ -2083,6 +2083,12 @@ function scopedVyvaBackendQuery(queryParams, context) {
   return scoped;
 }
 
+function scopedVyvaBackendBody(body, context) {
+  if (body === undefined) return undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  return scopedVyvaBackendQuery(body, context);
+}
+
 function handleVyvaBackendResponse(res, upstream, successStatus) {
   if (upstream?.ok) {
     res.status(successStatus || upstream.status || 200).json(upstream.data);
@@ -6687,7 +6693,9 @@ async function loadCareProviders(filters = {}, context) {
   let rows = await queryCareProviderRows();
 
   if ((type === null || type === "caregiver") && !rows.some((row) => row.provider_type === "caregiver")) {
-    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+      query: scopedVyvaBackendQuery({}, context),
+    });
     const upstreamUsers = [
       upstream?.data?.gisUsers,
       upstream?.data?.users,
@@ -8621,7 +8629,10 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
 });
 
 app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { method: "POST", body: req.body });
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    method: "POST",
+    body: scopedVyvaBackendBody(req.body, req.context),
+  });
   if (upstream?.ok) {
     res.status(upstream.status || 201).json(upstream.data);
     return;
@@ -8863,7 +8874,7 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
 async function updateUserRoute(req, res) {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}`, {
     method: req.method,
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (upstream?.ok) {
     res.json(upstream.data);
@@ -8893,7 +8904,7 @@ app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 app.post("/api/v1/user-dashboard/users/:id/notes", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}/notes`, {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (upstream?.ok) {
     res.status(upstream.status || 201).json(upstream.data);
@@ -8962,7 +8973,7 @@ app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
   }
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/medications", {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 201)) return;
 
@@ -8975,7 +8986,7 @@ app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res
   }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8988,6 +8999,7 @@ app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, 
   }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "DELETE",
+    query: scopedVyvaBackendQuery({}, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 204)) return;
 
@@ -8997,7 +9009,7 @@ app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, 
 app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/caregivers", {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 201)) return;
 
@@ -9007,7 +9019,7 @@ app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
 app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -9017,6 +9029,7 @@ app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req
 app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
     method: "DELETE",
+    query: scopedVyvaBackendQuery({}, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 204)) return;
 
@@ -9026,7 +9039,7 @@ app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (
 app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/health/${encodeURIComponent(req.params.user_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -9036,7 +9049,7 @@ app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) =>
 app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/checkins/${encodeURIComponent(req.params.checkin_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -9046,7 +9059,7 @@ app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, re
 app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/brain-coach/${encodeURIComponent(req.params.user_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -9958,14 +9971,15 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
 
 app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
   try {
-    const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
       res.json(await overlayRoutineServicePayload(scopedPayload, "brain_coach", context));
       return;
@@ -9975,14 +9989,10 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       return;
     }
 
-    const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (checkinsUpstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context);
       res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(scopedPayload) }, "brain_coach", context));
       return;
@@ -9992,7 +10002,6 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     res.json({ sessions: await loadBrainCoachSessions(req.context) });
   } catch (error) {
     next(error);
@@ -10122,11 +10131,11 @@ function normalizeCaregiverBrainCoachReport({ stats, trend, history }, fallbackU
   };
 }
 
-async function loadCaregiverBrainCoachReport(userId, query = {}, fallbackUser = null) {
+async function loadCaregiverBrainCoachReport(userId, query = {}, fallbackUser = null, context = null) {
   const encodedUserId = encodeURIComponent(String(userId));
   const days = Number(query.days ?? 7) || 7;
-  const reportQuery = { days };
-  const historyQuery = { days, limit: query.limit ?? 50, offset: query.offset ?? 0 };
+  const reportQuery = scopedVyvaBackendQuery({ days }, context);
+  const historyQuery = scopedVyvaBackendQuery({ days, limit: query.limit ?? 50, offset: query.offset ?? 0 }, context);
   const [stats, trend, history] = await Promise.all([
     requestVyvaBackend(`/api/v1/brain-coach/brain-coach-info/${encodedUserId}`, { query: reportQuery }),
     requestVyvaBackend(`/api/v1/brain-coach/cognitive-trend/${encodedUserId}`, { query: reportQuery }),
@@ -10159,7 +10168,9 @@ async function externalUserIdMatchesActiveOrganization(userId, context) {
   );
   if (localMatch[0]) return true;
 
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
   if (!upstream?.ok) return true;
   const users = Array.isArray(upstream.data?.gisUsers) ? upstream.data.gisUsers : [];
   const user = users.find((item) => String(item?.id ?? "") === externalId);
@@ -10192,7 +10203,7 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     ];
 
     for (const path of candidatePaths) {
-      const upstream = await requestVyvaBackend(path, { query: req.query });
+      const upstream = await requestVyvaBackend(path, { query: scopedVyvaBackendQuery(req.query, context) });
       if (upstream?.ok) {
         const normalized = normalizeBrainCoachReportPayload(upstream.data, userId);
         if (normalized) {
@@ -10204,7 +10215,9 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
 
     let sessions = [];
     try {
-      const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+      const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", {
+        query: scopedVyvaBackendQuery(req.query, context),
+      });
       if (upstreamSessions?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(upstreamSessions.data, context));
     } catch {
       sessions = [];
@@ -10212,7 +10225,9 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
 
     if (!sessions.length) {
       try {
-        const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+        const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+          query: scopedVyvaBackendQuery(req.query, context),
+        });
         if (checkinsUpstream?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context));
       } catch {
         sessions = [];
@@ -10224,7 +10239,7 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     }
 
     const session = sessions.find((item) => String(item.user_id) === userId);
-    const caregiverReport = await loadCaregiverBrainCoachReport(userId, req.query, session);
+    const caregiverReport = await loadCaregiverBrainCoachReport(userId, req.query, session, context);
     if (caregiverReport && ((caregiverReport.sessions?.length ?? 0) > 0 || (caregiverReport.summary?.sessionsCompleted ?? 0) > 0)) {
       res.json(caregiverReport);
       return;
@@ -10262,9 +10277,15 @@ app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
       return;
     }
 
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+
     const upstream = await requestVyvaBackend("/api/v1/medications/weekly-schedule", {
       method: "POST",
-      body: req.body,
+      body: scopedVyvaBackendBody(req.body, context),
     });
     if (upstream?.ok) {
       res.json(upstream.data);
@@ -10279,7 +10300,6 @@ app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     if (!(await userBelongsToOrganization(userId, req.context))) {
       res.status(404).json({ error: "User not found" });
       return;
