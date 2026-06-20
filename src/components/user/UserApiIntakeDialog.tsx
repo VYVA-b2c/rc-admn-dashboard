@@ -17,12 +17,12 @@ const phoneEndpoint = "/api/v1/onboarding/phone-registration";
 const dashboardEndpoint = "/api/v1/user-dashboard/users";
 
 const payloadExample = `{
-  "organization_slug": "red-cross-leipzig",
+  "organization_slug": "red-cross-zamora",
   "first_name": "First",
   "last_name": "Last",
-  "phone": "+4915123456789",
-  "language": "de",
-  "city": "Dresden",
+  "phone": "+34600123456",
+  "language": "es",
+  "city": "Zamora",
   "health": {
     "health_conditions": ["diabetes"],
     "mobility_needs": ["walker support"]
@@ -36,7 +36,7 @@ const payloadExample = `{
   }],
   "caregivers": [{
     "caretaker_name": "Emergency contact",
-    "caretaker_phone": "+491512300000"
+    "caretaker_phone": "+34600999000"
   }]
 }`;
 

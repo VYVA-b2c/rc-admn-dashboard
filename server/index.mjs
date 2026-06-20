@@ -3474,7 +3474,6 @@ async function resolveOrganizationFromRegistration(registration) {
     registration.org,
   ));
   const name = nullIfBlank(firstValue(registration.organization_name, registration.organizationName));
-  const country = nullIfBlank(registration.country)?.toLowerCase();
   const hasExplicitOrganization = Boolean(id || slug || name);
 
   if (id) {
@@ -3486,15 +3485,10 @@ async function resolveOrganizationFromRegistration(registration) {
     return null;
   }
 
-  const inferredSlug =
-    slug ||
-    (["es", "esp"].includes(country || "") || country?.includes("spain") || country?.includes("espa") ? "red-cross-zamora" : null) ||
-    (["de", "deu"].includes(country || "") || country?.includes("germany") || country?.includes("deutsch") ? "red-cross-leipzig" : null) ||
-    inferOrganizationSlugFromPhone(registration.phone);
-  if (inferredSlug) {
+  if (slug) {
     const result = await query(
       "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE slug = $1 AND active = true LIMIT 1",
-      [inferredSlug],
+      [slug],
     );
     if (result.rows[0]) return result.rows[0];
     if (hasExplicitOrganization) return null;
@@ -8030,14 +8024,6 @@ function phoneDigits(value) {
   return nullIfBlank(value)?.replace(/\D/g, "") || null;
 }
 
-function inferOrganizationSlugFromPhone(value) {
-  const digits = phoneDigits(value);
-  if (!digits) return null;
-  if (digits.startsWith("34") || digits.startsWith("0034")) return "red-cross-zamora";
-  if (digits.startsWith("49") || digits.startsWith("0049")) return "red-cross-leipzig";
-  return null;
-}
-
 function onboardingSecret() {
   return process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_API_KEY || process.env.LOVABLE_API_KEY;
 }
@@ -8315,7 +8301,7 @@ async function ingestPhoneRegistration(payload) {
   const normalized = normalizePhoneRegistrationPayload(payload);
   if (normalized.error) return normalized;
   const organization = await resolveOrganizationFromRegistration(normalized.value);
-  if (!organization) return { error: "organization is required; send organization_slug, organization_id, country, or a +34/+49 phone number" };
+  if (!organization) return { error: "organization is required; send organization_slug, organization_id, or organization_name" };
   normalized.value.organization_id = organization.id;
   normalized.value.country = normalized.value.country || organization.country || "Germany";
   normalized.value.timezone = normalized.value.timezone || organization.timezone || "Europe/Berlin";
