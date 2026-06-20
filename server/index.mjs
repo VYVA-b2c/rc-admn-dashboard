@@ -268,9 +268,6 @@ function mergeExternalCareProviderSummary(user, summary) {
   };
 }
 
-const spanishCityHints = new Set(["barcelona", "madrid", "malaga", "málaga", "marbella", "sevilla", "tarifa", "valencia", "zamora"]);
-const germanCityHints = new Set(["berlin", "chemnitz", "dresden", "erfurt", "halle", "jena", "leipzig", "zwickau"]);
-
 function normalizedBranchKey(value) {
   const text = String(value || "").trim().toLowerCase();
   if (!text) return null;
@@ -286,7 +283,7 @@ function branchKeyFromOrganization(organization) {
 function inferBranchKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  const explicitBranch = normalizedBranchKey(
+  return normalizedBranchKey(
     firstValue(
       user.organization_slug,
       user.organizationSlug,
@@ -302,13 +299,6 @@ function inferBranchKeyFromExternalUser(user) {
       nestedUser.organizationName,
     ),
   );
-  if (explicitBranch) return explicitBranch;
-
-  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
-  if (phone.startsWith("+34") || phone.startsWith("0034")) return "zamora";
-  if (phone.startsWith("+49") || phone.startsWith("0049")) return "leipzig";
-
-  return null;
 }
 
 function normalizedCountryKey(value) {
@@ -322,7 +312,7 @@ function normalizedCountryKey(value) {
 function inferCountryKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  const explicit = normalizedCountryKey(
+  return normalizedCountryKey(
     firstValue(
       user.country,
       user.country_code,
@@ -334,25 +324,6 @@ function inferCountryKeyFromExternalUser(user) {
       nestedUser.countryCode,
     ),
   );
-  if (explicit) return explicit;
-
-  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
-  if (phone.startsWith("+34") || phone.startsWith("0034")) return "spain";
-  if (phone.startsWith("+49") || phone.startsWith("0049")) return "germany";
-
-  const city = String(firstValue(user.city, user.userCity, user.user_city, nestedUser.city) || "").trim().toLowerCase();
-  if (spanishCityHints.has(city)) return "spain";
-  if (germanCityHints.has(city)) return "germany";
-
-  const coords = Array.isArray(user.coords) ? user.coords : Array.isArray(nestedUser.coords) ? nestedUser.coords : null;
-  const latitude = coords ? Number(coords[0]) : Number(firstValue(user.latitude, user.lat, nestedUser.latitude, nestedUser.lat));
-  const longitude = coords ? Number(coords[1]) : Number(firstValue(user.longitude, user.lng, user.lon, nestedUser.longitude, nestedUser.lng, nestedUser.lon));
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    if (latitude >= 35 && latitude <= 44.5 && longitude >= -10.5 && longitude <= 5) return "spain";
-    if (latitude >= 47 && latitude <= 55.5 && longitude >= 5 && longitude <= 16) return "germany";
-  }
-
-  return null;
 }
 
 function externalUserMatchesOrganization(user, organization) {
@@ -365,8 +336,7 @@ function externalUserMatchesOrganization(user, organization) {
   const organizationCountry = normalizedCountryKey(organization.country);
   if (!organizationCountry) return true;
   const userCountry = inferCountryKeyFromExternalUser(user);
-  if (!userCountry) return true;
-  return userCountry === organizationCountry;
+  return Boolean(userCountry && userCountry === organizationCountry);
 }
 
 function filterExternalUsersForOrganization(users, context) {
@@ -430,7 +400,7 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     ? data.activeAlerts
       .filter((alert) => {
         const alertUserId = String(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id) || "");
-        return !alertUserId || !retainedUserIds.size || retainedUserIds.has(alertUserId);
+        return Boolean(alertUserId && retainedUserIds.has(alertUserId));
       })
       .map((alert) => ({
         ...alert,
@@ -439,6 +409,8 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
       }))
     : [];
   const activeCheckins = gisUsers.filter((user) => Boolean(user.checkinEnabled ?? user.checkin_enabled)).length;
+  const computedTotalSensors = gisUsers.reduce((sum, user) => sum + Number(user.sensorCount ?? user.sensor_count ?? 0), 0);
+  const computedCaregiversLinked = gisUsers.reduce((sum, user) => sum + Number(user.careProviderCount ?? user.care_provider_count ?? 0), 0);
   const computedWeeklyExpected =
     gisUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0) || activeCheckins * 7;
   const computedWeeklyCompleted = gisUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0);
@@ -459,8 +431,8 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     checkinsExpectedWeekly: Number(data?.checkinsExpectedWeekly ?? computedWeeklyExpected),
     activeAlertCount: activeAlerts.length,
     criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
-    totalSensors: Number(data?.totalSensors ?? 0),
-    caregiversLinked: Number(data?.caregiversLinked ?? 0),
+    totalSensors: computedTotalSensors,
+    caregiversLinked: computedCaregiversLinked,
     gisUsers,
     activeAlerts,
     cityDistribution: computedCityDistribution,
