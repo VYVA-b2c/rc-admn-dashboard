@@ -54,11 +54,29 @@ const publicAppUrl =
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || publicManualPath;
 const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
-const userManualUrlOverride =
+const userManualUrlOverrideRaw =
   process.env.USER_MANUAL_URL ||
   process.env.VYVA_USER_MANUAL_URL ||
   process.env.VITE_USER_MANUAL_URL ||
-  "https://redcross.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf";
+  null;
+const userManualUrlOverrides = {
+  en: userManualUrlOverrideRaw,
+  es:
+    process.env.USER_MANUAL_URL_ES ||
+    process.env.VYVA_USER_MANUAL_URL_ES ||
+    process.env.VITE_USER_MANUAL_URL_ES ||
+    null,
+  de:
+    process.env.USER_MANUAL_URL_DE ||
+    process.env.VYVA_USER_MANUAL_URL_DE ||
+    process.env.VITE_USER_MANUAL_URL_DE ||
+    null,
+};
+const userManualPaths = {
+  en: publicManualPath,
+  es: "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  de: "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+};
 const teamInviteEmailFrom =
   String(
     process.env.TEAM_INVITE_EMAIL_FROM ||
@@ -2450,21 +2468,27 @@ function inviteRoleLabel(role, language) {
 }
 
 function teamInviteGuideUrl(origin) {
-  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin));
+  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverrideRaw || teamInviteGuidePath, origin));
 }
 
 function teamInviteRedirectUrl(origin) {
   return absoluteAppUrl(teamInviteRedirectPath, origin);
 }
 
-function userManualUrl(origin) {
-  return normalizePublicGuideUrl(absoluteAppUrl(userManualUrlOverride, origin));
+function userManualUrl(origin, language = "en") {
+  const normalizedLanguage = loginEmailLanguage(language);
+  const manualPathOrUrl =
+    userManualUrlOverrides[normalizedLanguage] ||
+    (normalizedLanguage === "en" ? userManualUrlOverrideRaw : null) ||
+    userManualPaths[normalizedLanguage] ||
+    userManualPaths.en;
+  return normalizePublicGuideUrl(absoluteAppUrl(manualPathOrUrl, origin));
 }
 
 function teamInviteMetadata({ context, role, organization, origin }) {
   const language = inviteEmailLanguage(organization);
   const guideUrl = teamInviteGuideUrl(origin);
-  const manualUrl = userManualUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const redirectUrl = teamInviteRedirectUrl(origin);
   return {
     metadata: {
@@ -3325,7 +3349,7 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin, org
   actionUrl.searchParams.set("console_token", loginToken);
   if (nextPath !== "/") actionUrl.searchParams.set("next", nextPath);
 
-  const manualUrl = userManualUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const rendered = renderConsoleMagicLinkEmail({
     actionLink: actionUrl.toString(),
     language,
@@ -3352,7 +3376,7 @@ async function sendHostedConsoleMagicLink({ email, redirectPath, language, origi
   if (!supabase) return { sent: false, error: "Hosted magic-link email is not configured", provider: "supabase" };
 
   const redirectUrl = absoluteAppUrl(loginRedirectPath(redirectPath), origin);
-  const manualUrl = userManualUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: {
