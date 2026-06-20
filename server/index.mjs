@@ -294,6 +294,36 @@ function normalizedBranchKey(value) {
   return null;
 }
 
+function branchKeyFromPhone(value) {
+  const country = countryKeyFromPhone(value);
+  if (country === "germany") return "leipzig";
+  if (country === "spain") return "zamora";
+  return null;
+}
+
+function phoneFromUserLike(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  return firstValue(
+    user.phone,
+    user.userPhone,
+    user.user_phone,
+    user.phone_number,
+    user.phoneNumber,
+    user.mobile,
+    user.mobile_phone,
+    user.mobilePhone,
+    nestedUser.phone,
+    nestedUser.userPhone,
+    nestedUser.user_phone,
+    nestedUser.phone_number,
+    nestedUser.phoneNumber,
+    nestedUser.mobile,
+    nestedUser.mobile_phone,
+    nestedUser.mobilePhone,
+  );
+}
+
 function branchKeyFromOrganization(organization) {
   return normalizedBranchKey(firstValue(organization?.slug, organization?.name));
 }
@@ -301,7 +331,7 @@ function branchKeyFromOrganization(organization) {
 function inferBranchKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  return normalizedBranchKey(
+  const explicitBranch = normalizedBranchKey(
     firstValue(
       user.organization_slug,
       user.organizationSlug,
@@ -317,6 +347,7 @@ function inferBranchKeyFromExternalUser(user) {
       nestedUser.organizationName,
     ),
   );
+  return explicitBranch || branchKeyFromPhone(phoneFromUserLike(user));
 }
 
 function normalizedCountryKey(value) {
@@ -330,7 +361,7 @@ function normalizedCountryKey(value) {
 function inferCountryKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  return normalizedCountryKey(
+  const explicitCountry = normalizedCountryKey(
     firstValue(
       user.country,
       user.country_code,
@@ -342,13 +373,19 @@ function inferCountryKeyFromExternalUser(user) {
       nestedUser.countryCode,
     ),
   );
+  return explicitCountry || countryKeyFromPhone(phoneFromUserLike(user));
 }
 
 function externalUserMatchesOrganization(user, organization) {
   if (!organization) return true;
   const organizationBranch = branchKeyFromOrganization(organization);
   if (organizationBranch) {
-    return inferBranchKeyFromExternalUser(user) === organizationBranch;
+    const userBranch = inferBranchKeyFromExternalUser(user);
+    if (userBranch) return userBranch === organizationBranch;
+
+    const organizationCountry = normalizedCountryKey(organization.country);
+    const userCountry = inferCountryKeyFromExternalUser(user);
+    return Boolean(organizationCountry && userCountry && userCountry === organizationCountry);
   }
 
   const organizationCountry = normalizedCountryKey(organization.country);
@@ -8131,8 +8168,9 @@ function phoneDigits(value) {
 function countryKeyFromPhone(value) {
   const digits = phoneDigits(value);
   if (!digits) return null;
-  if (digits.startsWith("34")) return "spain";
-  if (digits.startsWith("49")) return "germany";
+  const normalized = digits.startsWith("00") ? digits.slice(2) : digits;
+  if (normalized.startsWith("34")) return "spain";
+  if (normalized.startsWith("49")) return "germany";
   return null;
 }
 
