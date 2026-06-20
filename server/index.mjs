@@ -2591,55 +2591,55 @@ function renderVyvaEmailHeader(language = "en", organizationName = null) {
 function inviteEmailCopy(language, values) {
   const organizationName = values.organizationName || null;
   const roleLabel = values.roleLabel || "team member";
-  const organizationFooter = organizationName ? `VYVA x ${organizationName} operations console` : null;
+  const organizationFooter = organizationName ? `${organizationName} operations console` : null;
 
   if (language === "de") {
     return {
-      subject: "Ihre Einladung zur VYVA Konsole",
+      subject: "Ihre Einladung zur Rotes Kreuz Operationskonsole",
       eyebrow: "Teameinladung",
-      heading: "Willkommen bei VYVA",
+      heading: "Zugang zur Operationskonsole",
       intro: `Sie wurden${organizationName ? ` fuer ${organizationName}` : ""} als ${roleLabel} hinzugefuegt. Nutzen Sie den sicheren Link unten, um die Konsole zu oeffnen.`,
-      button: "VYVA oeffnen",
-      guideTitle: "Interaktiver Guide",
-      guideText: "Nach der Anmeldung koennen Sie den Guide oeffnen, um sich in der Konsole zu orientieren.",
-      guideButton: "Guide oeffnen",
+      button: "Konsole oeffnen",
+      guideTitle: "Benutzerhandbuch",
+      guideText: "Bei Bedarf hilft das Benutzerhandbuch bei der Orientierung in der Konsole.",
+      guideButton: "Handbuch oeffnen",
       securityTitle: "Sicherheitshinweis",
       securityText: "Wenn Sie diese E-Mail nicht erwartet haben, koennen Sie sie ignorieren. Ohne Zugriff auf dieses Postfach kann sich niemand anmelden.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
-      footer: organizationFooter || "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
+      footer: organizationFooter || "Automatische Einladungs-E-Mail fuer autorisierte Konsolennutzer.",
     };
   }
 
   if (language === "es") {
     return {
-      subject: "Tu invitacion a la consola VYVA",
+      subject: "Tu invitacion a la consola de operaciones de Cruz Roja",
       eyebrow: "Invitacion de equipo",
-      heading: "Bienvenido a VYVA",
+      heading: "Acceso a la consola de operaciones",
       intro: `Te agregaron${organizationName ? ` a ${organizationName}` : ""} como ${roleLabel}. Usa el enlace seguro de abajo para abrir la consola.`,
-      button: "Abrir VYVA",
-      guideTitle: "Guia interactiva",
-      guideText: "Despues de iniciar sesion, puedes abrir la guia para orientarte en la consola.",
-      guideButton: "Abrir guia",
+      button: "Abrir consola",
+      guideTitle: "Manual de usuario",
+      guideText: "Si necesitas ayuda, el manual de usuario te orienta dentro de la consola.",
+      guideButton: "Abrir manual",
       securityTitle: "Nota de seguridad",
       securityText: "Si no esperabas este correo, puedes ignorarlo. Nadie iniciara sesion sin acceso a esta bandeja de entrada.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
-      footer: organizationFooter || "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
+      footer: organizationFooter || "Correo automatico de invitacion para usuarios autorizados de la consola.",
     };
   }
 
   return {
-    subject: "Your VYVA console invitation",
+    subject: "Your Red Cross Operations Console invitation",
     eyebrow: "Team invite",
-    heading: "Welcome to VYVA",
+    heading: "Operations Console access",
     intro: `You were added${organizationName ? ` to ${organizationName}` : ""} as ${roleLabel}. Use the secure link below to open the console.`,
-    button: "Open VYVA",
-    guideTitle: "Interactive guide",
-    guideText: "After signing in, open the guide for help getting oriented in the console.",
-    guideButton: "Open guide",
+    button: "Open console",
+    guideTitle: "User manual",
+    guideText: "The user manual is available if you need help getting oriented in the console.",
+    guideButton: "Open manual",
     securityTitle: "Security note",
     securityText: "If you were not expecting this email, you can ignore it. No one will be signed in without access to this inbox.",
     fallback: "Button not working? Copy and paste this link into your browser:",
-    footer: organizationFooter || "Automated invitation email for authorized VYVA console users.",
+    footer: organizationFooter || "Automated invitation email for authorized console users.",
   };
 }
 
@@ -2744,57 +2744,57 @@ function renderTeamInviteEmail({ actionLink, invite }) {
 function consoleMagicLinkCopy(language) {
   if (language === "de") {
     return {
-      subject: "Ihr sicherer VYVA Login-Link",
-      eyebrow: "Sicherer Zugang",
-      heading: "Bei VYVA anmelden",
+      subject: "Ihr Zugang zur Rotes Kreuz Operationskonsole",
+      eyebrow: "Einmaliger Link",
+      heading: "Rotes Kreuz Operationskonsole",
       intro:
-        "Oeffnen Sie die VYVA Operationskonsole mit diesem sicheren Einmal-Link.",
-      button: "Bei VYVA anmelden",
+        "Oeffnen Sie die Konsole mit diesem sicheren Link.",
+      button: "Konsole oeffnen",
       manualTitle: "Benutzerhandbuch",
-      manualText: "Das Benutzerhandbuch ist verfuegbar, falls Sie Hilfe bei der Orientierung in der Konsole brauchen.",
+      manualText: "Das Benutzerhandbuch ist verfuegbar, falls Sie Hilfe bei der Orientierung brauchen.",
       manualButton: "Handbuch oeffnen",
       securityText: "Wenn Sie diese E-Mail nicht angefordert haben, koennen Sie sie einfach ignorieren.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
-      footer: "VYVA x Rotes Kreuz Operationskonsole",
+      footer: "Rotes Kreuz Operationskonsole",
     };
   }
 
   if (language === "es") {
     return {
-      subject: "Tu enlace seguro de acceso a VYVA",
-      eyebrow: "Acceso seguro",
-      heading: "Iniciar sesion en VYVA",
+      subject: "Tu acceso a la consola de operaciones de Cruz Roja",
+      eyebrow: "Enlace de un solo uso",
+      heading: "Consola de operaciones de Cruz Roja",
       intro:
-        "Abre la consola de operaciones VYVA con este enlace seguro de un solo uso.",
-      button: "Abrir VYVA",
+        "Abre la consola con este enlace seguro.",
+      button: "Abrir consola",
       manualTitle: "Manual de usuario",
-      manualText: "El manual de usuario esta disponible si necesitas ayuda para orientarte en la consola.",
+      manualText: "El manual de usuario esta disponible si necesitas ayuda para orientarte.",
       manualButton: "Abrir manual",
       securityText: "Si no solicitaste este correo, puedes ignorarlo.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
-      footer: "VYVA x Cruz Roja consola de operaciones",
+      footer: "Consola de operaciones de Cruz Roja",
     };
   }
 
   return {
-    subject: "Your secure VYVA sign-in link",
-    eyebrow: "Secure access",
-    heading: "Sign in to VYVA",
+    subject: "Your Red Cross Operations Console access link",
+    eyebrow: "One-time link",
+    heading: "Red Cross Operations Console",
     intro:
-      "Open the VYVA operations console with this secure one-time link.",
-    button: "Open VYVA",
+      "Open the console with this secure link.",
+    button: "Open console",
     manualTitle: "User manual",
-    manualText: "The user manual is available if you need help getting oriented in the console.",
+    manualText: "The user manual is available if you need help getting oriented.",
     manualButton: "Open manual",
     securityText: "If you did not request this email, you can safely ignore it.",
     fallback: "Button not working? Copy and paste this link into your browser:",
-    footer: "VYVA x Red Cross operations console",
+    footer: "Red Cross Operations Console",
   };
 }
 
 function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl, organizationName = null }) {
   const copy = consoleMagicLinkCopy(language);
-  const footerText = organizationName ? `VYVA x ${organizationName} operations console` : copy.footer;
+  const footerText = organizationName ? `${organizationName} operations console` : copy.footer;
   const safeActionLink = escapeHtml(actionLink);
   const safeManualUrl = manualUrl ? escapeHtml(manualUrl) : null;
   const plainLines = [
