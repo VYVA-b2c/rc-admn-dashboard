@@ -1819,16 +1819,17 @@ function normalizeLivingContextValue(value) {
   return null;
 }
 
-async function fetchExternalUserProfileForShadow(externalUserId) {
+async function fetchExternalUserProfileForShadow(externalUserId, context = null) {
   const userInfo = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
-    query: {
+    query: scopedVyvaBackendQuery({
       user_id: externalUserId,
-      organization_name: "Red Cross",
-    },
+    }, context),
   });
   if (userInfo?.ok) return normalizeExternalProfilePayload(userInfo.data);
 
-  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
   const match = Array.isArray(dashboard?.data?.gisUsers)
     ? dashboard.data.gisUsers.find((user) => String(user?.id) === String(externalUserId))
     : null;
@@ -1953,7 +1954,7 @@ async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context
 
   const existingShadowId = await loadLocalUserIdForExternalUser(userId, context, client);
   if (existingShadowId) {
-    const externalData = await fetchExternalUserProfileForShadow(userId).catch(() => null);
+    const externalData = await fetchExternalUserProfileForShadow(userId, context).catch(() => null);
     const onboardingCaregivers = externalCaregiversForShadow(externalData);
     if (onboardingCaregivers.length) {
       await replaceCaregiversWithClient(client, existingShadowId, onboardingCaregivers, organizationId);
@@ -1961,7 +1962,7 @@ async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context
     return { value: existingShadowId };
   }
 
-  const externalData = await fetchExternalUserProfileForShadow(userId);
+  const externalData = await fetchExternalUserProfileForShadow(userId, context);
   if (!externalData?.user) return { notFound: true };
 
   const shadowUser = normalizedExternalShadowUser(userId, externalData, context.organization);
@@ -2063,6 +2064,23 @@ async function requestVyvaBackend(pathname, { method = "GET", query: queryParams
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function scopedVyvaBackendQuery(queryParams, context) {
+  const scoped = { ...(queryParams || {}) };
+  const organization = context?.organization;
+  if (!organization) return scoped;
+
+  if (organization.name && !scoped.organization_name && !scoped.organizationName) {
+    scoped.organization_name = organization.name;
+  }
+  if (organization.id && !scoped.organization_id && !scoped.organizationId) {
+    scoped.organization_id = organization.id;
+  }
+  if (organization.slug && !scoped.organization_slug && !scoped.organizationSlug) {
+    scoped.organization_slug = organization.slug;
+  }
+  return scoped;
 }
 
 function handleVyvaBackendResponse(res, upstream, successStatus) {
@@ -5463,13 +5481,12 @@ function latestScheduledSessionContactFromPayload(payload, userId) {
   return latestScheduledContact(candidates);
 }
 
-async function loadLatestScheduledSessionContact(userId) {
+async function loadLatestScheduledSessionContact(userId, context = null) {
   const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
-    query: {
+    query: scopedVyvaBackendQuery({
       user_id: userId,
       service_type: "all",
-      organization_name: "Red Cross",
-    },
+    }, context),
   });
   if (!upstream?.ok) return null;
   return latestScheduledSessionContactFromPayload(upstream.data, userId);
@@ -5978,7 +5995,7 @@ async function overlayRoutineServicePayload(payload, serviceType, context) {
   );
   const missingContactIds = uniqueUserIds.filter((userId) => !listContactMap.has(userId));
   const fallbackContacts = await Promise.all(
-    missingContactIds.map(async (userId) => [userId, await loadLatestScheduledSessionContact(userId)]),
+    missingContactIds.map(async (userId) => [userId, await loadLatestScheduledSessionContact(userId, context)]),
   );
   for (const [userId, contact] of fallbackContacts) {
     if (contact?.at) listContactMap.set(userId, contact);
@@ -8570,21 +8587,23 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
 
 app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
   try {
-    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
       let assignmentSummaries = new Map();
-      if (pool) {
-        try {
-          req.context = await resolveRequestContext(req);
-          const externalIds = Array.isArray(upstream.data?.gisUsers)
-            ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
-            : [];
-          assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, req.context);
-        } catch (error) {
-          if (error.status && error.status !== 401) throw error;
-        }
+      if (context) {
+        const externalIds = Array.isArray(upstream.data?.gisUsers)
+          ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
+          : [];
+        assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
       }
-      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, req.context));
+      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -8595,7 +8614,6 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
       dbUnavailable(res);
       return;
     }
-    req.context = await resolveRequestContext(req);
     res.json(await loadDashboardUsers(req.context));
   } catch (error) {
     next(error);
@@ -8628,30 +8646,29 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(400).json({ error: "user_id is required" });
       return;
     }
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
-      query: {
+      query: scopedVyvaBackendQuery({
         ...req.query,
         user_id: userId,
-        organization_name: "Red Cross",
-      },
+      }, context),
     });
     if (upstream?.ok) {
       let careProviders = [];
       let localServices = { checkins: null, brainCoach: null };
       let carePlanAccess = null;
-      const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
-      if (pool) {
-        try {
-          req.context = await resolveRequestContext(req);
-          careProviders = await loadExternalUserCareProviders(userId, req.context);
-          localServices = await loadExternalUserLocalServices(userId, req.context);
-          carePlanAccess = await loadExternalUserCarePlanAccess(userId, req.context);
-        } catch (error) {
-          if (error.status && error.status !== 401) throw error;
-        }
+      const scheduledContact = await loadLatestScheduledSessionContact(userId, context).catch(() => null);
+      if (context) {
+        careProviders = await loadExternalUserCareProviders(userId, context);
+        localServices = await loadExternalUserLocalServices(userId, context);
+        carePlanAccess = await loadExternalUserCarePlanAccess(userId, context);
       }
       const normalizedProfile = normalizeExternalProfilePayload(upstream.data);
-      if (req.context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, req.context.organization)) {
+      if (context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, context.organization)) {
         res.status(404).json({ error: "User not found" });
         return;
       }
@@ -8666,13 +8683,12 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(upstream?.status || 404).json(upstream?.data || { error: "User not found" });
       return;
     }
-    req.context = await resolveRequestContext(req);
     const data = await loadUserInfo(userId, req.context);
     if (!data) {
       res.status(404).json({ error: "User not found" });
       return;
     }
-    const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
+    const scheduledContact = await loadLatestScheduledSessionContact(userId, req.context).catch(() => null);
     res.json(applyScheduledSessionContact(data, latestScheduledContact(
       scheduledContact,
       latestScheduledContactFromServices({
@@ -9784,14 +9800,15 @@ app.post("/api/insights/suggestions/:id/dismiss", asyncRoute(async (req, res) =>
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
     const mode = String(req.query.service_type || "").toLowerCase() === "brain_coach" ? "brain_coach" : "standard";
-    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
       res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(scopedPayload, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
       return;
@@ -9804,7 +9821,6 @@ app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
       dbUnavailable(res);
       return;
     }
-    req.context = await resolveRequestContext(req);
     res.json({ checkins: await loadCheckins(req.context) });
   } catch (error) {
     next(error);
@@ -9890,13 +9906,17 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
       res.status(400).json({ error: "user_id, date_start, and date_end are required" });
       return;
     }
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
 
     const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
-      query: {
+      query: scopedVyvaBackendQuery({
         user_id: userId,
         service_type: "all",
-        organization_name: "Red Cross",
-      },
+      }, context),
     });
     if (upstream?.ok) {
       const payload = filterUpstreamCheckins(upstream.data, "standard");
@@ -9918,7 +9938,6 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     if (!(await userBelongsToOrganization(userId, req.context))) {
       res.status(404).json({ error: "User not found" });
       return;
