@@ -80,7 +80,7 @@ export function UserApiIntakeDialog({ open, onOpenChange }: UserApiIntakeDialogP
           >
             <CodeBlock
               label={t("userApi.headersTitle")}
-              value={`Authorization: Bearer <ONBOARDING_API_KEY>\n# or\nx-api-key: <ONBOARDING_API_KEY>`}
+              value={`Authorization: Bearer <ONBOARDING_API_KEY>\n# or\nx-api-key: <ONBOARDING_API_KEY>\n\n# Optional override when phone country is not enough\nx-organization-slug: red-cross-zamora`}
             />
           </EndpointPanel>
 

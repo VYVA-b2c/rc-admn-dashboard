@@ -3503,8 +3503,34 @@ async function resolveOrganizationFromRegistration(registration) {
     return null;
   }
 
-  const activeOrgs = await query("SELECT COUNT(*)::int AS count FROM public.organizations WHERE active = true");
-  if (Number(activeOrgs.rows[0]?.count || 0) > 1) return null;
+  const addressBranchKey = normalizedBranchKey(firstValue(
+    registration.city,
+    registration.town,
+    registration.locality,
+    registration.address,
+    registration.street,
+  ));
+  const activeOrganizations = await query(
+    "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE active = true",
+  );
+  if (addressBranchKey) {
+    const matches = activeOrganizations.rows.filter((organization) => branchKeyFromOrganization(organization) === addressBranchKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  const countryKey = normalizedCountryKey(registration.country);
+  if (countryKey) {
+    const matches = activeOrganizations.rows.filter((organization) => normalizedCountryKey(organization.country) === countryKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  const phoneCountryKey = countryKeyFromPhone(registration.phone);
+  if (phoneCountryKey) {
+    const matches = activeOrganizations.rows.filter((organization) => normalizedCountryKey(organization.country) === phoneCountryKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  if (activeOrganizations.rows.length > 1) return null;
 
   return defaultOrganization();
 }
@@ -8024,6 +8050,14 @@ function phoneDigits(value) {
   return nullIfBlank(value)?.replace(/\D/g, "") || null;
 }
 
+function countryKeyFromPhone(value) {
+  const digits = phoneDigits(value);
+  if (!digits) return null;
+  if (digits.startsWith("34")) return "spain";
+  if (digits.startsWith("49")) return "germany";
+  return null;
+}
+
 function onboardingSecret() {
   return process.env.ONBOARDING_API_KEY || process.env.WEBHOOK_API_KEY || process.env.LOVABLE_API_KEY;
 }
@@ -9050,7 +9084,13 @@ async function phoneRegistrationRoute(req, res) {
     return;
   }
 
-  const result = await ingestPhoneRegistration(req.body);
+  const payload = objectValue(req.body);
+  const organizationHints = {
+    organization_id: nullIfBlank(firstValue(payload.organization_id, payload.organizationId, req.get("x-organization-id"), req.query.organization_id, req.query.organizationId)),
+    organization_slug: nullIfBlank(firstValue(payload.organization_slug, payload.organizationSlug, req.get("x-organization-slug"), req.query.organization_slug, req.query.organizationSlug)),
+    organization_name: nullIfBlank(firstValue(payload.organization_name, payload.organizationName, req.get("x-organization-name"), req.query.organization_name, req.query.organizationName)),
+  };
+  const result = await ingestPhoneRegistration({ ...payload, ...Object.fromEntries(Object.entries(organizationHints).filter(([, value]) => value)) });
   if (result.error) {
     res.status(400).json({ error: result.error });
     return;
