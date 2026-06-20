@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,8 @@ interface EditHealthPlanDialogProps {
   onOpenChange: (open: boolean) => void;
   vyvaUserId: string;
   plan: OperationalHealthPlan | null;
+  initialFocusSection?: keyof HealthPlanFormState | null;
+  contextHint?: string | null;
 }
 
 type HealthPlanFormState = {
@@ -30,17 +32,43 @@ function joinItems(items?: HealthPlanSectionItem[] | null) {
   return Array.isArray(items) ? items.map((item) => item.text).filter(Boolean).join("\n") : "";
 }
 
-function parseItems(value: string) {
+function parseItems(value: string, existingItems?: HealthPlanSectionItem[] | null) {
+  const preservedItems = Array.isArray(existingItems) ? existingItems.filter((item) => item?.text) : [];
   return value
     .split("\n")
-    .map((item, index) => item.trim() ? { id: `item-${index + 1}`, text: item.trim() } : null)
+    .map((item, index) => {
+      if (!item.trim()) return null;
+      const preserved = preservedItems[index];
+      return {
+        id: preserved?.id || `item-${index + 1}`,
+        text: item.trim(),
+        source_signal_ids: preserved?.source_signal_ids,
+        priority: preserved?.priority ?? null,
+        due_window: preserved?.due_window ?? null,
+        evidence_freshness: preserved?.evidence_freshness ?? null,
+        evidence_conflict: preserved?.evidence_conflict ?? null,
+        last_verified_at: preserved?.last_verified_at ?? null,
+        recheck_after_hours: preserved?.recheck_after_hours ?? null,
+        recheck_due_at: preserved?.recheck_due_at ?? null,
+        owner_label: preserved?.owner_label ?? null,
+        completion_proof: preserved?.completion_proof ?? null,
+        escalation_if_not_done: preserved?.escalation_if_not_done ?? null,
+        source_task_code: preserved?.source_task_code ?? null,
+        staff_disposition: preserved?.staff_disposition ?? null,
+        staff_disposition_note: preserved?.staff_disposition_note ?? null,
+        staff_disposition_updated_at: preserved?.staff_disposition_updated_at ?? null,
+        staff_disposition_updated_by: preserved?.staff_disposition_updated_by ?? null,
+        staff_disposition_updated_by_email: preserved?.staff_disposition_updated_by_email ?? null,
+      };
+    })
     .filter(Boolean) as HealthPlanSectionItem[];
 }
 
-export function EditHealthPlanDialog({ open, onOpenChange, vyvaUserId, plan }: EditHealthPlanDialogProps) {
+export function EditHealthPlanDialog({ open, onOpenChange, vyvaUserId, plan, initialFocusSection = null, contextHint = null }: EditHealthPlanDialogProps) {
   const queryClient = useQueryClient();
   const { t } = useLanguage();
   const [saving, setSaving] = useState(false);
+  const sectionRefs = useRef<Partial<Record<keyof HealthPlanFormState, HTMLTextAreaElement | null>>>({});
   const [form, setForm] = useState<HealthPlanFormState>({
     summary_text: "",
     goals_json: "",
@@ -62,6 +90,16 @@ export function EditHealthPlanDialog({ open, onOpenChange, vyvaUserId, plan }: E
     });
   }, [open, plan]);
 
+  useEffect(() => {
+    if (!open || !initialFocusSection) return;
+    const timer = window.setTimeout(() => {
+      const target = sectionRefs.current[initialFocusSection];
+      target?.focus();
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [initialFocusSection, open]);
+
   const update = (key: keyof HealthPlanFormState, value: string) => setForm((current) => ({ ...current, [key]: value }));
 
   const handleSave = async () => {
@@ -79,11 +117,11 @@ export function EditHealthPlanDialog({ open, onOpenChange, vyvaUserId, plan }: E
           language: plan.language,
           review_status: "draft",
           summary_text: form.summary_text.trim(),
-          goals_json: parseItems(form.goals_json),
-          daily_support_json: parseItems(form.daily_support_json),
-          monitoring_json: parseItems(form.monitoring_json),
-          escalation_json: parseItems(form.escalation_json),
-          caregiver_guidance_json: parseItems(form.caregiver_guidance_json),
+          goals_json: parseItems(form.goals_json, plan.goals_json),
+          daily_support_json: parseItems(form.daily_support_json, plan.daily_support_json),
+          monitoring_json: parseItems(form.monitoring_json, plan.monitoring_json),
+          escalation_json: parseItems(form.escalation_json, plan.escalation_json),
+          caregiver_guidance_json: parseItems(form.caregiver_guidance_json, plan.caregiver_guidance_json),
         }),
       });
       toast({ title: t("profile.healthPlanSaved") });
@@ -119,10 +157,18 @@ export function EditHealthPlanDialog({ open, onOpenChange, vyvaUserId, plan }: E
           <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             {t("profile.healthPlanEditResetsReview")}
           </div>
+          {contextHint ? (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-foreground">
+              {contextHint}
+            </div>
+          ) : null}
           {sections.map((section) => (
             <div key={section.key} className="space-y-1.5">
               <Label>{t(section.labelKey)}</Label>
               <Textarea
+                ref={(element) => {
+                  sectionRefs.current[section.key] = element;
+                }}
                 value={form[section.key]}
                 onChange={(event) => update(section.key, event.target.value)}
                 rows={section.rows}

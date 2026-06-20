@@ -30,6 +30,8 @@ const isProduction =
 
 const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
+const devHmrHost = String(process.env.VITE_HMR_HOST || process.env.HMR_HOST || "127.0.0.1").trim() || "127.0.0.1";
+const devHmrPort = Number(process.env.VITE_HMR_PORT || process.env.HMR_PORT || (port + 1));
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
 const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
 const externalUserSource = "api.vyva.io";
@@ -99,7 +101,10 @@ const openAiApiKey =
 const openAiBaseUrl = String(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim().replace(/\/$/, "");
 const healthPlanOpenAiModel =
   String(process.env.HEALTH_PLAN_OPENAI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim() || "gpt-4o-mini";
+const healthPlanReviewerOpenAiModel =
+  String(process.env.HEALTH_PLAN_REVIEWER_OPENAI_MODEL || healthPlanOpenAiModel).trim() || healthPlanOpenAiModel;
 const healthPlanGeneratorVersion = "health-plan-v1";
+const isVitest = Boolean(process.env.VITEST);
 const consoleSessionSecret =
   String(process.env.SESSION_SECRET || process.env.AUTH_SESSION_SECRET || process.env.CONSOLE_SESSION_SECRET || "").trim() ||
   (!isProduction ? "dev-vyva-console-session-secret" : null);
@@ -230,12 +235,107 @@ function mergeExternalCareProviderSummary(user, summary) {
     careProviderNames: localNames.length ? localNames : upstreamNames,
     primaryCaregiverName: summary.primaryCaregiverName ?? user.primaryCaregiverName ?? null,
     primaryProfessionalName: summary.primaryProfessionalName ?? user.primaryProfessionalName ?? null,
+    healthPlanAudit: summary.healthPlanAudit ?? user.healthPlanAudit ?? null,
   };
 }
 
-function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()) {
-  const gisUsers = Array.isArray(data?.gisUsers)
-    ? data.gisUsers.map((user) => {
+const spanishCityHints = new Set(["barcelona", "madrid", "malaga", "málaga", "marbella", "sevilla", "tarifa", "valencia", "zamora"]);
+const germanCityHints = new Set(["berlin", "chemnitz", "dresden", "erfurt", "halle", "jena", "leipzig", "zwickau"]);
+
+function normalizedCountryKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (["es", "esp", "espana", "españa", "spain"].some((term) => text.includes(term))) return "spain";
+  if (["de", "deu", "deutschland", "germany"].some((term) => text.includes(term))) return "germany";
+  return text;
+}
+
+function inferCountryKeyFromExternalUser(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const explicit = normalizedCountryKey(
+    firstValue(
+      user.country,
+      user.country_code,
+      user.countryCode,
+      user.organization_country,
+      user.organizationCountry,
+      nestedUser.country,
+      nestedUser.country_code,
+      nestedUser.countryCode,
+    ),
+  );
+  if (explicit) return explicit;
+
+  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
+  if (phone.startsWith("+34") || phone.startsWith("0034")) return "spain";
+  if (phone.startsWith("+49") || phone.startsWith("0049")) return "germany";
+
+  const city = String(firstValue(user.city, user.userCity, user.user_city, nestedUser.city) || "").trim().toLowerCase();
+  if (spanishCityHints.has(city)) return "spain";
+  if (germanCityHints.has(city)) return "germany";
+
+  const coords = Array.isArray(user.coords) ? user.coords : Array.isArray(nestedUser.coords) ? nestedUser.coords : null;
+  const latitude = coords ? Number(coords[0]) : Number(firstValue(user.latitude, user.lat, nestedUser.latitude, nestedUser.lat));
+  const longitude = coords ? Number(coords[1]) : Number(firstValue(user.longitude, user.lng, user.lon, nestedUser.longitude, nestedUser.lng, nestedUser.lon));
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    if (latitude >= 35 && latitude <= 44.5 && longitude >= -10.5 && longitude <= 5) return "spain";
+    if (latitude >= 47 && latitude <= 55.5 && longitude >= 5 && longitude <= 16) return "germany";
+  }
+
+  return null;
+}
+
+function externalUserMatchesOrganization(user, organization) {
+  if (!organization) return true;
+  const organizationCountry = normalizedCountryKey(organization.country);
+  if (!organizationCountry) return true;
+  const userCountry = inferCountryKeyFromExternalUser(user);
+  if (!userCountry) return true;
+  return userCountry === organizationCountry;
+}
+
+function filterExternalUsersForOrganization(users, context) {
+  const list = Array.isArray(users) ? users : [];
+  if (!context?.organization) return list;
+  return list.filter((user) => externalUserMatchesOrganization(user, context.organization));
+}
+
+function userIdFromExternalRoutineItem(item) {
+  return String(item?.user_id ?? item?.vyva_user_id ?? item?.user?.id ?? item?.vyva_users?.id ?? item?.client?.id ?? "").trim();
+}
+
+function externalRoutineItemMatchesOrganization(item, context) {
+  if (!context?.organization) return true;
+  const userLike = {
+    ...item,
+    id: userIdFromExternalRoutineItem(item),
+    phone: firstValue(item?.phone, item?.userPhone, item?.user_phone, item?.user?.phone, item?.vyva_users?.phone, item?.client?.phone),
+    city: firstValue(item?.city, item?.userCity, item?.user_city, item?.user?.city, item?.vyva_users?.city, item?.client?.city),
+    country: firstValue(item?.country, item?.user?.country, item?.vyva_users?.country, item?.client?.country),
+    coords: firstValue(item?.coords, item?.user?.coords, item?.vyva_users?.coords, item?.client?.coords),
+  };
+  return externalUserMatchesOrganization(userLike, context.organization);
+}
+
+function filterExternalRoutinePayloadForOrganization(payload, context) {
+  if (!context?.organization) return payload;
+  const list = extractUpstreamList(payload, ["checkins", "data", "sessions"]);
+  if (!list.length) return payload;
+  const filtered = list.filter((item) => externalRoutineItemMatchesOrganization(item, context));
+  if (Array.isArray(payload)) return filtered;
+  if (payload && typeof payload === "object") {
+    if (Array.isArray(payload.checkins)) return { ...payload, checkins: filtered };
+    if (Array.isArray(payload.data)) return { ...payload, data: filtered };
+    if (Array.isArray(payload.sessions)) return { ...payload, sessions: filtered };
+  }
+  return { checkins: filtered };
+}
+
+function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map(), context = null) {
+  const filteredGisUsers = filterExternalUsersForOrganization(data?.gisUsers, context);
+  const retainedUserIds = new Set(filteredGisUsers.map((user) => String(user?.id ?? "")).filter(Boolean));
+  const gisUsers = filteredGisUsers.map((user) => {
         const careProviderNames = Array.isArray(user.careProviderNames)
           ? user.careProviderNames
           : Array.isArray(user.caretakerNames)
@@ -250,11 +350,15 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
           primaryCaregiverName: user.primaryCaregiverName ?? careProviderNames[0] ?? null,
         };
         return mergeExternalCareProviderSummary(normalizedUser, assignmentSummaries.get(String(normalizedUser.id)));
-      })
-    : [];
+      });
 
   const activeAlerts = Array.isArray(data?.activeAlerts)
-    ? data.activeAlerts.map((alert) => ({
+    ? data.activeAlerts
+      .filter((alert) => {
+        const alertUserId = String(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id) || "");
+        return !alertUserId || !retainedUserIds.size || retainedUserIds.has(alertUserId);
+      })
+      .map((alert) => ({
         ...alert,
         id: alert.id == null ? alert.id : String(alert.id),
         vyva_user_id: alert.vyva_user_id == null ? alert.vyva_user_id : String(alert.vyva_user_id),
@@ -262,15 +366,17 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     : [];
 
   return {
-    totalUsers: Number(data?.totalUsers ?? gisUsers.length),
+    totalUsers: gisUsers.length,
     checkinsEnabled: Number(data?.checkinsEnabled ?? 0),
-    activeAlertCount: Number(data?.activeAlertCount ?? activeAlerts.length),
-    criticalAlertCount: Number(data?.criticalAlertCount ?? activeAlerts.filter((alert) => alert.severity === "critical").length),
+    activeAlertCount: activeAlerts.length,
+    criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
     totalSensors: Number(data?.totalSensors ?? 0),
     caregiversLinked: Number(data?.caregiversLinked ?? 0),
     gisUsers,
     activeAlerts,
-    cityDistribution: Array.isArray(data?.cityDistribution) ? data.cityDistribution : [],
+    cityDistribution: Array.isArray(data?.cityDistribution)
+      ? data.cityDistribution.filter((item) => externalUserMatchesOrganization({ city: item?.city ?? item?.name }, context?.organization))
+      : [],
   };
 }
 
@@ -343,15 +449,20 @@ async function loadExternalAssignmentSummaries(externalIds, context) {
         COUNT(a.id)::int AS care_provider_count,
         MAX(c.full_name) FILTER (WHERE a.provider_type = 'caregiver' AND a.is_primary = true) AS primary_caregiver_name,
         MAX(fs.full_name) FILTER (WHERE a.provider_type = 'field_staff' AND a.is_primary = true) AS primary_professional_name,
-        ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(c.full_name, fs.full_name)), NULL) AS care_provider_names
+        ARRAY_REMOVE(ARRAY_AGG(DISTINCT COALESCE(c.full_name, fs.full_name)), NULL) AS care_provider_names,
+        hp.review_status,
+        hp.generator_provider,
+        hp.generated_at,
+        hp.source_signals_json
       FROM public.vyva_users u
       LEFT JOIN public.vyva_user_care_provider_assignments a ON a.vyva_user_id = u.id
       LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
       LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
+      LEFT JOIN public.vyva_user_health_plans hp ON hp.vyva_user_id = u.id AND hp.organization_id = u.organization_id
       WHERE u.organization_id = $1
         AND u.external_source = $2
         AND u.external_user_id = ANY($3::text[])
-      GROUP BY u.external_user_id
+      GROUP BY u.external_user_id, hp.review_status, hp.generator_provider, hp.generated_at, hp.source_signals_json
     `,
     [organizationId, externalUserSource, ids],
   );
@@ -363,6 +474,7 @@ async function loadExternalAssignmentSummaries(externalIds, context) {
       careProviderNames: Array.isArray(row.care_provider_names) ? row.care_provider_names : [],
       primaryCaregiverName: row.primary_caregiver_name || null,
       primaryProfessionalName: row.primary_professional_name || null,
+      healthPlanAudit: buildDashboardHealthPlanAuditSummary(row),
     },
   ]));
 }
@@ -423,13 +535,1389 @@ function normalizeHealthPlanSectionItems(value) {
       const sourceSignalIds = Array.isArray(record?.source_signal_ids)
         ? record.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
         : [];
+      const priority = normalizeHealthPlanItemPriority(
+        firstValue(record?.priority, record?.urgency, record?.severity),
+        null,
+      );
+      const dueWindow = normalizeHealthPlanDueWindow(
+        firstValue(record?.due_window, record?.urgency_window, record?.window),
+        null,
+      );
+      const evidenceFreshness = normalizeHealthPlanRecommendationFreshness(
+        firstValue(record?.evidence_freshness, record?.evidenceFreshness, record?.freshness),
+        null,
+      );
+      const evidenceConflict = normalizeHealthPlanRecommendationConflict(
+        firstValue(record?.evidence_conflict, record?.evidenceConflict, record?.conflict),
+        null,
+      );
+      const lastVerifiedAt = normalizeTimestampValue(
+        firstValue(record?.last_verified_at, record?.lastVerifiedAt, record?.verified_at, record?.last_confirmed_at),
+      );
+      const evidenceReviewReasonSource =
+        firstValue(record?.evidence_review_reason_codes, record?.evidenceReviewReasonCodes, record?.review_reason_codes, record?.reviewReasonCodes);
+      const evidenceReviewSignalLabelSource =
+        firstValue(record?.evidence_review_signal_labels, record?.evidenceReviewSignalLabels, record?.review_signal_labels, record?.reviewSignalLabels);
+      const evidenceReviewState = normalizeHealthPlanRecommendationReviewState(
+        firstValue(record?.evidence_review_state, record?.evidenceReviewState, record?.review_state, record?.reviewState),
+        null,
+      );
+      const evidenceReviewReasonCodes = Array.isArray(evidenceReviewReasonSource)
+        ? [...new Set(evidenceReviewReasonSource.map((item) => nullIfBlank(item)).filter(Boolean))]
+        : [];
+      const evidenceReviewSignalLabels = Array.isArray(evidenceReviewSignalLabelSource)
+        ? [...new Set(evidenceReviewSignalLabelSource.map((item) => nullIfBlank(item)).filter(Boolean))]
+        : [];
+      const evidenceReviewSummary = nullIfBlank(
+        firstValue(record?.evidence_review_summary, record?.evidenceReviewSummary, record?.review_summary, record?.reviewSummary),
+      );
+      const recommendationRationaleSignalLabelSource =
+        firstValue(
+          record?.recommendation_rationale_signal_labels,
+          record?.recommendationRationaleSignalLabels,
+          record?.rationale_signal_labels,
+          record?.rationaleSignalLabels,
+        );
+      const recommendationRationaleState = normalizeHealthPlanRecommendationRationaleState(
+        firstValue(
+          record?.recommendation_rationale_state,
+          record?.recommendationRationaleState,
+          record?.rationale_state,
+          record?.rationaleState,
+        ),
+        null,
+      );
+      const recommendationRationaleSignalLabels = Array.isArray(recommendationRationaleSignalLabelSource)
+        ? [...new Set(recommendationRationaleSignalLabelSource.map((item) => nullIfBlank(item)).filter(Boolean))]
+        : [];
+      const recommendationRationaleSummary = nullIfBlank(
+        firstValue(
+          record?.recommendation_rationale_summary,
+          record?.recommendationRationaleSummary,
+          record?.rationale_summary,
+          record?.rationaleSummary,
+        ),
+      );
+      const recommendationProvenanceStrength = normalizeHealthPlanRecommendationProvenanceStrength(
+        firstValue(
+          record?.recommendation_provenance_strength,
+          record?.recommendationProvenanceStrength,
+          record?.provenance_strength,
+          record?.provenanceStrength,
+        ),
+        null,
+      );
+      const recommendationProvenanceScore = Number(
+        firstValue(
+          record?.recommendation_provenance_score,
+          record?.recommendationProvenanceScore,
+          record?.provenance_score,
+          record?.provenanceScore,
+        ),
+      );
+      const recommendationProvenanceReasonSource =
+        firstValue(
+          record?.recommendation_provenance_reason_codes,
+          record?.recommendationProvenanceReasonCodes,
+          record?.provenance_reason_codes,
+          record?.provenanceReasonCodes,
+        );
+      const recommendationProvenanceSummary = nullIfBlank(
+        firstValue(
+          record?.recommendation_provenance_summary,
+          record?.recommendationProvenanceSummary,
+          record?.provenance_summary,
+          record?.provenanceSummary,
+        ),
+      );
+      const recommendationProvenanceReasonCodes = Array.isArray(recommendationProvenanceReasonSource)
+        ? [...new Set(recommendationProvenanceReasonSource.map((item) => nullIfBlank(item)).filter(Boolean))]
+        : [];
+      const recommendationUseMode = normalizeHealthPlanRecommendationUseMode(
+        firstValue(
+          record?.recommendation_use_mode,
+          record?.recommendationUseMode,
+          record?.use_mode,
+          record?.useMode,
+        ),
+        null,
+      );
+      const recommendationUseReasonSource =
+        firstValue(
+          record?.recommendation_use_reason_codes,
+          record?.recommendationUseReasonCodes,
+          record?.use_reason_codes,
+          record?.useReasonCodes,
+        );
+      const recommendationUseSummary = nullIfBlank(
+        firstValue(
+          record?.recommendation_use_summary,
+          record?.recommendationUseSummary,
+          record?.use_summary,
+          record?.useSummary,
+        ),
+      );
+      const recommendationUseReasonCodes = Array.isArray(recommendationUseReasonSource)
+        ? [...new Set(recommendationUseReasonSource.map((item) => nullIfBlank(item)).filter(Boolean))]
+        : [];
+      const recheckAfterHours = normalizeRecommendationRecheckHours(
+        firstValue(record?.recheck_after_hours, record?.recheckAfterHours, record?.refresh_after_hours),
+        null,
+      );
+      const recheckDueAt = normalizeTimestampValue(
+        firstValue(record?.recheck_due_at, record?.recheckDueAt, record?.refresh_due_at),
+      );
+      const ownerLabel = nullIfBlank(firstValue(record?.owner_label, record?.ownerLabel, record?.owner));
+      const completionProof = nullIfBlank(
+        firstValue(record?.completion_proof, record?.completionProof, record?.proof_hint, record?.proofHint),
+      );
+      const escalationIfNotDone = nullIfBlank(
+        firstValue(record?.escalation_if_not_done, record?.escalationIfNotDone, record?.fallback, record?.if_not_done),
+      );
+      const sourceTaskCode = nullIfBlank(firstValue(record?.source_task_code, record?.sourceTaskCode, record?.task_code));
+      const staffDisposition = normalizeHealthPlanRecommendationDisposition(
+        firstValue(record?.staff_disposition, record?.staffDisposition, record?.disposition),
+        null,
+      );
+      const staffDispositionNote = nullIfBlank(
+        firstValue(record?.staff_disposition_note, record?.staffDispositionNote, record?.disposition_note, record?.note),
+      );
+      const staffDispositionUpdatedAt = normalizeTimestampValue(
+        firstValue(
+          record?.staff_disposition_updated_at,
+          record?.staffDispositionUpdatedAt,
+          record?.disposition_updated_at,
+          record?.updated_at,
+        ),
+      );
+      const staffDispositionUpdatedBy = nullIfBlank(
+        firstValue(
+          record?.staff_disposition_updated_by,
+          record?.staffDispositionUpdatedBy,
+          record?.disposition_updated_by,
+          record?.updated_by,
+        ),
+      );
+      const staffDispositionUpdatedByEmail = normalizedEmail(
+        firstValue(
+          record?.staff_disposition_updated_by_email,
+          record?.staffDispositionUpdatedByEmail,
+          record?.disposition_updated_by_email,
+          record?.updated_by_email,
+        ),
+      ) || null;
       return {
         id,
         text,
         ...(sourceSignalIds.length ? { source_signal_ids: sourceSignalIds } : {}),
+        ...(priority ? { priority } : {}),
+        ...(dueWindow ? { due_window: dueWindow } : {}),
+        ...(evidenceFreshness ? { evidence_freshness: evidenceFreshness } : {}),
+        ...(evidenceConflict ? { evidence_conflict: evidenceConflict } : {}),
+        ...(lastVerifiedAt ? { last_verified_at: lastVerifiedAt } : {}),
+        ...(evidenceReviewState ? { evidence_review_state: evidenceReviewState } : {}),
+        ...(evidenceReviewReasonCodes.length ? { evidence_review_reason_codes: evidenceReviewReasonCodes } : {}),
+        ...(evidenceReviewSignalLabels.length ? { evidence_review_signal_labels: evidenceReviewSignalLabels } : {}),
+        ...(evidenceReviewSummary ? { evidence_review_summary: evidenceReviewSummary } : {}),
+        ...(recommendationRationaleState ? { recommendation_rationale_state: recommendationRationaleState } : {}),
+        ...(recommendationRationaleSignalLabels.length ? { recommendation_rationale_signal_labels: recommendationRationaleSignalLabels } : {}),
+        ...(recommendationRationaleSummary ? { recommendation_rationale_summary: recommendationRationaleSummary } : {}),
+        ...(recommendationProvenanceStrength ? { recommendation_provenance_strength: recommendationProvenanceStrength } : {}),
+        ...(Number.isFinite(recommendationProvenanceScore) ? { recommendation_provenance_score: Math.max(0, Math.min(100, Math.round(recommendationProvenanceScore))) } : {}),
+        ...(recommendationProvenanceReasonCodes.length ? { recommendation_provenance_reason_codes: recommendationProvenanceReasonCodes } : {}),
+        ...(recommendationProvenanceSummary ? { recommendation_provenance_summary: recommendationProvenanceSummary } : {}),
+        ...(recommendationUseMode ? { recommendation_use_mode: recommendationUseMode } : {}),
+        ...(recommendationUseReasonCodes.length ? { recommendation_use_reason_codes: recommendationUseReasonCodes } : {}),
+        ...(recommendationUseSummary ? { recommendation_use_summary: recommendationUseSummary } : {}),
+        ...(recheckAfterHours != null ? { recheck_after_hours: recheckAfterHours } : {}),
+        ...(recheckDueAt ? { recheck_due_at: recheckDueAt } : {}),
+        ...(ownerLabel ? { owner_label: ownerLabel } : {}),
+        ...(completionProof ? { completion_proof: completionProof } : {}),
+        ...(escalationIfNotDone ? { escalation_if_not_done: escalationIfNotDone } : {}),
+        ...(sourceTaskCode ? { source_task_code: sourceTaskCode } : {}),
+        ...(staffDisposition ? { staff_disposition: staffDisposition } : {}),
+        ...(staffDispositionNote ? { staff_disposition_note: staffDispositionNote } : {}),
+        ...(staffDispositionUpdatedAt ? { staff_disposition_updated_at: staffDispositionUpdatedAt } : {}),
+        ...(staffDispositionUpdatedBy ? { staff_disposition_updated_by: staffDispositionUpdatedBy } : {}),
+        ...(staffDispositionUpdatedByEmail ? { staff_disposition_updated_by_email: staffDispositionUpdatedByEmail } : {}),
       };
     })
     .filter(Boolean);
+}
+
+function normalizeHealthPlanItemPriority(value, fallback = "medium") {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "high" || normalized === "medium" || normalized === "low") return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanDueWindow(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "same_day" || normalized === "within_24h") return normalized;
+  if (normalized === "same-day" || normalized === "same day" || normalized === "today" || normalized === "urgent" || normalized === "immediately") {
+    return "same_day";
+  }
+  if (normalized === "24h" || normalized === "within 24 hours" || normalized === "within-24h" || normalized === "next 24 hours") {
+    return "within_24h";
+  }
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationFreshness(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "live" || normalized === "recent" || normalized === "stale" || normalized === "unknown" || normalized === "mixed") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationConflict(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "clear" || normalized === "conflicted" || normalized === "freshness_gap") return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationReviewState(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "ready" || normalized === "verify_first" || normalized === "urgent_review") return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationRationaleState(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "explicit" || normalized === "inferred" || normalized === "thin" || normalized === "missing") return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationProvenanceStrength(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "strong" || normalized === "moderate" || normalized === "caution" || normalized === "weak") return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanRecommendationUseMode(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "ready_with_judgment" || normalized === "verify_before_use" || normalized === "staff_review_only") return normalized;
+  return fallback;
+}
+
+function normalizeRecommendationRecheckHours(value, fallback = null) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return fallback;
+  return Math.round(numeric * 10) / 10;
+}
+
+function normalizeHealthPlanRecommendationDisposition(value, fallback = null) {
+  const normalized = nullIfBlank(value)?.toLowerCase();
+  if (normalized === "confirmed" || normalized === "deferred" || normalized === "escalated") return normalized;
+  return fallback;
+}
+
+function mergeHealthPlanSectionDispositionMetadata(
+  nextItems,
+  previousItems,
+  { userId = null, email = null, changedAt = new Date() } = {},
+) {
+  const normalizedNext = normalizeHealthPlanSectionItems(nextItems);
+  const normalizedPrevious = normalizeHealthPlanSectionItems(previousItems);
+  const previousById = new Map(
+    normalizedPrevious
+      .map((item) => [nullIfBlank(item?.id), item])
+      .filter(([id]) => Boolean(id)),
+  );
+  const changedAtIso = normalizeTimestampValue(changedAt?.toISOString?.() ? changedAt.toISOString() : changedAt) || new Date().toISOString();
+
+  return normalizedNext.map((item, index) => {
+    const previous = previousById.get(nullIfBlank(item?.id)) || normalizedPrevious[index] || null;
+    const nextDisposition = normalizeHealthPlanRecommendationDisposition(item?.staff_disposition, null);
+    const previousDisposition = normalizeHealthPlanRecommendationDisposition(previous?.staff_disposition, null);
+    const nextNote = nullIfBlank(item?.staff_disposition_note);
+    const previousNote = nullIfBlank(previous?.staff_disposition_note);
+    const dispositionChanged = nextDisposition !== previousDisposition || nextNote !== previousNote;
+    const updatedAt = dispositionChanged
+      ? changedAtIso
+      : normalizeTimestampValue(firstValue(item?.staff_disposition_updated_at, previous?.staff_disposition_updated_at));
+    const updatedBy = dispositionChanged
+      ? nullIfBlank(userId)
+      : nullIfBlank(firstValue(item?.staff_disposition_updated_by, previous?.staff_disposition_updated_by));
+    const updatedByEmail = dispositionChanged
+      ? normalizedEmail(email) || null
+      : normalizedEmail(firstValue(item?.staff_disposition_updated_by_email, previous?.staff_disposition_updated_by_email)) || null;
+
+    return {
+      ...item,
+      ...(nextDisposition ? { staff_disposition: nextDisposition } : {}),
+      ...(nextNote ? { staff_disposition_note: nextNote } : {}),
+      ...(updatedAt ? { staff_disposition_updated_at: updatedAt } : {}),
+      ...(updatedBy ? { staff_disposition_updated_by: updatedBy } : {}),
+      ...(updatedByEmail ? { staff_disposition_updated_by_email: updatedByEmail } : {}),
+    };
+  });
+}
+
+function deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const refs = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  const signalMap = new Map(normalizeHealthPlanSourceSignals(sourceSignals).map((signal) => [nullIfBlank(signal?.id), signal]));
+  const criticalSignalIds = new Set(
+    Array.isArray(contextSnapshot?.critical_signal_ids)
+      ? contextSnapshot.critical_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
+      : [],
+  );
+  const sectionGuidance = normalizeHealthPlanSectionGuidance(contextSnapshot?.section_guidance)?.[sectionName];
+  const sectionResponseExpectation = normalizeHealthPlanDueWindow(
+    firstValue(
+      sectionGuidance?.urgency_window,
+      contextSnapshot?.generation_assessment?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      contextSnapshot?.policy?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+    ),
+    "within_24h",
+  );
+  const matchingSignals = refs.map((signalId) => signalMap.get(signalId)).filter(Boolean);
+  const hasCriticalSignal = refs.some((signalId) => criticalSignalIds.has(signalId));
+  const highestStrength = matchingSignals.some((signal) => normalizeHealthPlanSignalStrength(signal?.strength, "medium") === "high")
+    ? "high"
+    : matchingSignals.some((signal) => normalizeHealthPlanSignalStrength(signal?.strength, "medium") === "medium")
+      ? "medium"
+      : "low";
+  const verificationLed = sectionGuidance?.evidence_posture === "verify_first" || sectionName === "monitoring";
+  const priority = normalizeHealthPlanItemPriority(item?.priority, (
+    hasCriticalSignal
+    || highestStrength === "high"
+    || (sectionName === "escalation" && highestStrength !== "low")
+      ? "high"
+      : verificationLed || highestStrength === "medium" || refs.length >= 2 || sectionName === "daily_support"
+        ? "medium"
+        : "low"
+  ));
+  const dueWindow = normalizeHealthPlanDueWindow(item?.due_window, (
+    priority === "high" || sectionName === "escalation"
+      ? "same_day"
+      : sectionResponseExpectation === "same_day" && (sectionName === "monitoring" || sectionName === "daily_support" || sectionName === "goals")
+        ? "same_day"
+        : "within_24h"
+  ));
+  return { priority, due_window: dueWindow };
+}
+
+function enrichHealthPlanSectionItemActionability(items, sectionName, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationActionability(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionItemActionability(plan.goals_json, "goals", sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionItemActionability(plan.daily_support_json, "daily_support", sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionItemActionability(plan.monitoring_json, "monitoring", sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionItemActionability(plan.escalation_json, "escalation", sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionItemActionability(plan.caregiver_guidance_json, "caregiver_guidance", sourceSignals, contextSnapshot),
+  };
+}
+
+function deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals = [], contextSnapshot = null) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  const linkedSignals = normalizeHealthPlanSourceSignals(sourceSignals).filter((signal) => signalIds.includes(nullIfBlank(signal?.id)));
+  const liveCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "live").length;
+  const recentCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "recent").length;
+  const staleCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "stale").length;
+  const unknownCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "unknown").length;
+  const linkedSignalIdSet = new Set(signalIds);
+  const touchesConflictSignal = linkedSignalIdSet.has("evidence-predictive-live-mismatch") || linkedSignalIdSet.has("evidence-passive-signal-conflict");
+  const evidenceDigest = normalizeHealthPlanEvidenceDigest(contextSnapshot?.evidence_digest);
+  const freshnessGapIds = new Set([
+    ...(Array.isArray(evidenceDigest?.stale_signal_ids) ? evidenceDigest.stale_signal_ids : []),
+    ...(Array.isArray(evidenceDigest?.unknown_freshness_signal_ids) ? evidenceDigest.unknown_freshness_signal_ids : []),
+    ...(
+      Array.isArray(contextSnapshot?.next_confirmations)
+        ? contextSnapshot.next_confirmations.flatMap((entry) => Array.isArray(entry?.signal_ids) ? entry.signal_ids : [])
+        : []
+    ),
+  ].map((signalId) => nullIfBlank(signalId)).filter(Boolean));
+  const touchesFreshnessGap = Boolean(evidenceDigest?.freshness_gap) && signalIds.some((signalId) => freshnessGapIds.has(signalId));
+
+  const evidence_freshness = normalizeHealthPlanRecommendationFreshness(item?.evidence_freshness, (
+    linkedSignals.length === 0
+      ? "unknown"
+      : (liveCount > 0 && (staleCount > 0 || unknownCount > 0))
+        || (recentCount > 0 && staleCount > 0)
+        ? "mixed"
+        : liveCount > 0 && recentCount === 0 && staleCount === 0 && unknownCount === 0
+          ? "live"
+          : (liveCount > 0 || recentCount > 0) && staleCount === 0 && unknownCount === 0
+            ? "recent"
+            : staleCount > 0 && liveCount === 0 && recentCount === 0
+              ? "stale"
+              : "unknown"
+  ));
+
+  const evidence_conflict = normalizeHealthPlanRecommendationConflict(item?.evidence_conflict, (
+    touchesConflictSignal
+      ? "conflicted"
+      : touchesFreshnessGap || evidence_freshness === "stale" || evidence_freshness === "mixed" || evidence_freshness === "unknown"
+        ? "freshness_gap"
+        : "clear"
+  ));
+
+  return {
+    evidence_freshness,
+    evidence_conflict,
+  };
+}
+
+function enrichHealthPlanSectionTrustMetadata(items, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationTrustMetadata(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionTrustMetadata(plan.goals_json, sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionTrustMetadata(plan.daily_support_json, sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionTrustMetadata(plan.monitoring_json, sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionTrustMetadata(plan.escalation_json, sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionTrustMetadata(plan.caregiver_guidance_json, sourceSignals, contextSnapshot),
+  };
+}
+
+const healthPlanRecommendationUrgentSignalIds = new Set([
+  "alert-active",
+  "execution-stalled",
+  "outcome-handoff-open",
+  "outcome-incident-open",
+  "plan-memory-receipt-gap",
+  "evidence-predictive-live-mismatch",
+  "evidence-passive-signal-conflict",
+]);
+
+const healthPlanRecommendationReviewSignalIds = new Set([
+  "execution-contact-path-weak",
+  "execution-followthrough-open",
+  "execution-care-circle-route-open",
+  "execution-same-channel-repeated",
+  "plan-memory-stalled-tactics",
+  "plan-memory-review-actions",
+  "plan-memory-evidence-drift",
+  "context-live-profile-only",
+]);
+
+function healthPlanRecommendationReviewSummaryText(state, signalLabels = [], verificationText = null) {
+  const joinedLabels = signalLabels.length ? signalLabels.join(", ") : "the linked evidence";
+  if (state === "urgent_review") {
+    return verificationText
+      ? `Urgent review: ${verificationText}`
+      : `Urgent review before relying on this recommendation because ${joinedLabels} still point to an unresolved operational risk.`;
+  }
+  if (state === "verify_first") {
+    return verificationText
+      ? `Verify first: ${verificationText}`
+      : `Verify first against a fresh touchpoint because ${joinedLabels} are not fully settled yet.`;
+  }
+  return `Ready to act with the current linked evidence from ${joinedLabels}.`;
+}
+
+function healthPlanRecommendationHasRationaleCue(text) {
+  return textMatchesAny(String(text || ""), [
+    /\bbecause\b/i,
+    /\bgiven\b/i,
+    /\bdue to\b/i,
+    /\bin response to\b/i,
+    /\bwhile\b/i,
+    /\bso that\b/i,
+    /\bto keep\b/i,
+    /\bto reduce\b/i,
+    /\bagainst the\b/i,
+    /\baround\b.{0,40}\b(alert|risk|medication|sensor|contact|routine|consent|care circle)\b/i,
+  ]);
+}
+
+function healthPlanRecommendationCategoryRationale(category) {
+  switch (normalizeHealthPlanSignalCategory(category, "context")) {
+    case "alert":
+      return "This matters now because active alerts or reachability concerns still need live follow-up.";
+    case "medication":
+      return "This matters now because medication adherence or reminder drift can still change today's care picture.";
+    case "sensor":
+      return "This matters now because passive device reliability may be hiding a real care concern.";
+    case "service":
+      return "This matters now because today's support routine is part of the live picture and still needs confirmation.";
+    case "risk":
+    case "forecast":
+      return "This matters now because the current risk outlook should shape what the team verifies or escalates today.";
+    default:
+      return "This matters now because ownership, sharing boundaries, or current context still affect how the next safe step should happen.";
+  }
+}
+
+function deriveHealthPlanRecommendationRationale(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  if (!signalIds.length) {
+    return {
+      recommendation_rationale_state: "missing",
+      recommendation_rationale_signal_labels: [],
+      recommendation_rationale_summary: "This recommendation still needs a clear current reason before staff rely on it.",
+    };
+  }
+
+  const normalizedSignals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const signalLookup = new Map(
+    normalizedSignals
+      .map((signal) => [nullIfBlank(signal?.id), signal])
+      .filter(([signalId]) => Boolean(signalId)),
+  );
+  const linkedSignals = signalIds
+    .map((signalId) => signalLookup.get(signalId))
+    .filter(Boolean);
+  const signalLabels = [...new Set(linkedSignals.map((signal) => nullIfBlank(signal?.label)).filter(Boolean))].slice(0, 3);
+  const sectionEvidenceBundles = normalizeHealthPlanSectionEvidenceBundles(contextSnapshot?.section_evidence_bundles);
+  const sectionSignalCards = Array.isArray(sectionEvidenceBundles?.[sectionName]?.signal_cards)
+    ? sectionEvidenceBundles[sectionName].signal_cards
+    : [];
+  const cardLookup = new Map(
+    sectionSignalCards
+      .map((card) => [nullIfBlank(card?.id), card])
+      .filter(([signalId]) => Boolean(signalId)),
+  );
+  const whyItMatters = signalIds
+    .map((signalId) => cardLookup.get(signalId))
+    .map((card) => nullIfBlank(card?.why_it_matters))
+    .filter(Boolean);
+
+  let rationaleSummary = whyItMatters.slice(0, 2).join(" ");
+  if (!rationaleSummary) {
+    const representativeSignal = linkedSignals.find((signal) => normalizeHealthPlanSignalStrength(signal?.strength, "medium") !== "low") || linkedSignals[0] || null;
+    rationaleSummary = representativeSignal
+      ? healthPlanRecommendationCategoryRationale(representativeSignal.category)
+      : null;
+  }
+
+  return {
+    recommendation_rationale_state: healthPlanRecommendationHasRationaleCue(item?.text) ? "explicit" : rationaleSummary ? "inferred" : "thin",
+    recommendation_rationale_signal_labels: signalLabels,
+    recommendation_rationale_summary: rationaleSummary || "This recommendation should be tied more clearly to the current care picture.",
+  };
+}
+
+function enrichHealthPlanSectionRecommendationRationale(items, sectionName, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationRationale(item, sectionName, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationRationale(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionRecommendationRationale(plan.goals_json, "goals", sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionRecommendationRationale(plan.daily_support_json, "daily_support", sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionRecommendationRationale(plan.monitoring_json, "monitoring", sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionRecommendationRationale(plan.escalation_json, "escalation", sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionRecommendationRationale(plan.caregiver_guidance_json, "caregiver_guidance", sourceSignals, contextSnapshot),
+  };
+}
+
+function deriveHealthPlanRecommendationEvidenceReview(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  if (!signalIds.length) {
+    return {
+      evidence_review_state: "urgent_review",
+      evidence_review_reason_codes: ["missing_evidence"],
+      evidence_review_signal_labels: [],
+      evidence_review_summary: "Urgent review before relying on this recommendation because it is not linked to any supporting evidence.",
+    };
+  }
+
+  const normalizedSignals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const signalLookup = new Map(
+    normalizedSignals
+      .map((signal) => [nullIfBlank(signal?.id), signal])
+      .filter(([signalId]) => Boolean(signalId)),
+  );
+  const linkedSignals = signalIds
+    .map((signalId) => signalLookup.get(signalId))
+    .filter(Boolean);
+  const signalLabels = [...new Set(linkedSignals.map((signal) => nullIfBlank(signal?.label)).filter(Boolean))].slice(0, 3);
+  const liveCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "live").length;
+  const recentCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "recent").length;
+  const staleCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "stale").length;
+  const highCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalStrength(signal?.strength, "medium") === "high").length;
+  const linkedSignalIdSet = new Set(signalIds);
+  const matchingConfirmations = Array.isArray(contextSnapshot?.next_confirmations)
+    ? contextSnapshot.next_confirmations.filter((entry) =>
+        Array.isArray(entry?.signal_ids)
+          ? entry.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean).some((signalId) => linkedSignalIdSet.has(signalId))
+          : false,
+      )
+    : [];
+  const evidenceBundle = normalizeHealthPlanSectionEvidenceBundles(contextSnapshot?.section_evidence_bundles)?.[sectionName];
+  const bundleUnresolvedIds = new Set(
+    [
+      ...(Array.isArray(evidenceBundle?.unresolved_signal_ids) ? evidenceBundle.unresolved_signal_ids : []),
+      ...(Array.isArray(evidenceBundle?.stale_signal_ids) ? evidenceBundle.stale_signal_ids : []),
+    ]
+      .map((signalId) => nullIfBlank(signalId))
+      .filter(Boolean),
+  );
+  const touchesUrgentSignal = [...linkedSignalIdSet].some((signalId) => healthPlanRecommendationUrgentSignalIds.has(signalId));
+  const touchesReviewSignal = [...linkedSignalIdSet].some((signalId) => healthPlanRecommendationReviewSignalIds.has(signalId));
+  const touchesCriticalSignal = Array.isArray(contextSnapshot?.critical_signal_ids)
+    ? contextSnapshot.critical_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean).some((signalId) => linkedSignalIdSet.has(signalId))
+    : false;
+  const touchesBundleUnresolved = [...linkedSignalIdSet].some((signalId) => bundleUnresolvedIds.has(signalId));
+  const evidenceConflict = normalizeHealthPlanRecommendationConflict(item?.evidence_conflict, null);
+  const evidenceFreshness = normalizeHealthPlanRecommendationFreshness(item?.evidence_freshness, null);
+  const sectionNeedsCarefulFollowThrough = sectionName === "monitoring" || sectionName === "escalation";
+  const familyBoundaryOpen = Boolean(
+    contextSnapshot?.policy
+    && contextSnapshot.policy.family_sharing_allowed === false
+    && linkedSignalIdSet.has("consent-family-sharing"),
+  );
+  const staleOnly = staleCount > 0 && liveCount === 0 && recentCount === 0;
+  let state = "ready";
+  const reasonCodes = [];
+  let verificationText = null;
+
+  if (touchesUrgentSignal || (touchesCriticalSignal && sectionNeedsCarefulFollowThrough) || (highCount > 0 && matchingConfirmations.length > 0)) {
+    state = "urgent_review";
+    if (touchesUrgentSignal) reasonCodes.push("urgent_signal_linked");
+    if (touchesCriticalSignal) reasonCodes.push("critical_signal_linked");
+    if (matchingConfirmations.length > 0) reasonCodes.push("followthrough_open");
+    verificationText = matchingConfirmations[0]?.text || "A named follow-through step or closure proof is still needed before staff rely on this.";
+  } else if (
+    staleOnly
+    || staleCount > 0
+    || touchesReviewSignal
+    || matchingConfirmations.length > 0
+    || touchesBundleUnresolved
+    || evidenceConflict === "conflicted"
+    || evidenceConflict === "freshness_gap"
+    || familyBoundaryOpen
+    || evidenceFreshness === "mixed"
+    || evidenceFreshness === "unknown"
+  ) {
+    state = "verify_first";
+    if (staleCount > 0 || evidenceFreshness === "mixed" || evidenceFreshness === "unknown") reasonCodes.push("stale_inputs");
+    if (touchesReviewSignal) reasonCodes.push("review_signal_linked");
+    if (matchingConfirmations.length > 0) reasonCodes.push("fresh_check_needed");
+    if (touchesBundleUnresolved) reasonCodes.push("section_evidence_open");
+    if (evidenceConflict === "conflicted") reasonCodes.push("conflicting_evidence");
+    if (familyBoundaryOpen) reasonCodes.push("sharing_boundary_open");
+    verificationText = matchingConfirmations[0]?.text
+      || (familyBoundaryOpen
+        ? "Confirm the current sharing boundary before treating this guidance as wider-share ready."
+        : "Verify this recommendation against a fresh touchpoint before treating it as current.");
+  } else {
+    reasonCodes.push("grounded");
+  }
+
+  return {
+    evidence_review_state: state,
+    evidence_review_reason_codes: [...new Set(reasonCodes)],
+    evidence_review_signal_labels: signalLabels,
+    evidence_review_summary: healthPlanRecommendationReviewSummaryText(state, signalLabels, verificationText),
+  };
+}
+
+function healthPlanRecommendationProvenanceSummaryText(strength, reasons = [], signalLabels = []) {
+  const labelsText = signalLabels.length ? signalLabels.join(", ") : "the linked care signals";
+  if (strength === "strong") {
+    if (reasons.includes("supported_history")) return `Strong backing: ${labelsText} are fresh enough and line up with tactic patterns that have already helped before.`;
+    if (reasons.includes("high_priority_signal")) return `Strong backing: ${labelsText} include high-priority live signals with a clear operational route.`;
+    return `Strong backing: ${labelsText} provide timely enough evidence for staff to act on this recommendation with confidence.`;
+  }
+  if (strength === "moderate") {
+    if (reasons.includes("mixed_freshness")) return `Moderate backing: ${labelsText} are useful, but part of the evidence is aging or mixed, so staff should keep the verification step visible.`;
+    return `Moderate backing: ${labelsText} support this recommendation, but the plan should still keep proof and follow-through explicit.`;
+  }
+  if (strength === "caution") {
+    if (reasons.includes("conflicted_evidence")) return `Use with caution: ${labelsText} point in a useful direction, but conflicting or incomplete evidence means staff should verify before relying too heavily on it.`;
+    if (reasons.includes("historical_caution")) return `Use with caution: ${labelsText} connect to tactic patterns that previously stalled or now look contradicted, so the next proof step matters.`;
+    return `Use with caution: ${labelsText} support this recommendation only partially, so verification and follow-through should stay explicit.`;
+  }
+  return `Weak backing: ${labelsText} do not yet give enough current proof to rely on this recommendation without a fresh check or stronger operational route.`;
+}
+
+function deriveHealthPlanRecommendationProvenanceMetadata(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  const normalizedSignals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const signalLookup = new Map(
+    normalizedSignals
+      .map((signal) => [nullIfBlank(signal?.id), signal])
+      .filter(([signalId]) => Boolean(signalId)),
+  );
+  const linkedSignals = signalIds.map((signalId) => signalLookup.get(signalId)).filter(Boolean);
+  const signalLabels = [...new Set(linkedSignals.map((signal) => nullIfBlank(signal?.label)).filter(Boolean))].slice(0, 3);
+  const trustMetadata = deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot);
+  const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(
+    { ...item, ...trustMetadata },
+    sectionName,
+    sourceSignals,
+    contextSnapshot,
+  );
+  const rationale = deriveHealthPlanRecommendationRationale(
+    { ...item, ...trustMetadata },
+    sectionName,
+    sourceSignals,
+    contextSnapshot,
+  );
+  const linkedPriorityScores = linkedSignals.map((signal) => healthPlanSignalPriorityScore(signal)).filter((score) => Number.isFinite(score));
+  const avgPriorityScore = linkedPriorityScores.length
+    ? Math.round(linkedPriorityScores.reduce((sum, score) => sum + score, 0) / linkedPriorityScores.length)
+    : 0;
+  const liveCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "live").length;
+  const recentCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "recent").length;
+  const staleCount = linkedSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "stale").length;
+  const highPriorityCount = linkedPriorityScores.filter((score) => score >= 55).length;
+  const usefulnessReasonCodes = [...new Set(
+    linkedSignals.flatMap((signal) => Array.isArray(signal?.usefulness_reason_codes) ? signal.usefulness_reason_codes : []).map((code) => nullIfBlank(code)).filter(Boolean),
+  )];
+  const supportedHistory = usefulnessReasonCodes.some((code) => [
+    "historically_effective_pattern",
+    "family_outcomes_reliably_helpful",
+    "family_outcomes_recently_helping",
+    "family_outcomes_recently_recovered",
+    "family_receipts_confirmed",
+    "outcome_improvement_verified",
+    "outcome_improvement_mixed",
+  ].includes(code));
+  const cautionHistory = usefulnessReasonCodes.some((code) => [
+    "historically_effective_now_contradicted",
+    "historically_stalled_pattern",
+    "family_outcomes_repeatedly_stalled",
+    "family_outcomes_recently_stalled",
+    "family_outcomes_recently_slipping",
+    "family_receipts_open",
+    "family_receipts_escalated",
+    "family_receipts_mixed",
+    "outcome_improvement_inferred",
+    "outcome_improvement_stale",
+  ].includes(code));
+  const evidenceFreshness = normalizeHealthPlanRecommendationFreshness(firstValue(item?.evidence_freshness, trustMetadata.evidence_freshness), "unknown");
+  const evidenceConflict = normalizeHealthPlanRecommendationConflict(firstValue(item?.evidence_conflict, trustMetadata.evidence_conflict), "clear");
+  const reviewState = normalizeHealthPlanRecommendationReviewState(firstValue(item?.evidence_review_state, evidenceReview.evidence_review_state), "verify_first");
+  const rationaleState = normalizeHealthPlanRecommendationRationaleState(firstValue(item?.recommendation_rationale_state, rationale.recommendation_rationale_state), "thin");
+  const reasonCodes = [];
+  let score = 52;
+
+  if (!signalIds.length) {
+    return {
+      recommendation_provenance_strength: "weak",
+      recommendation_provenance_score: 12,
+      recommendation_provenance_reason_codes: ["missing_evidence"],
+      recommendation_provenance_summary: "Weak backing: this recommendation is not yet tied to enough current evidence to rely on safely.",
+    };
+  }
+
+  if (evidenceFreshness === "live") {
+    score += 12;
+    reasonCodes.push("fresh_live_evidence");
+  } else if (evidenceFreshness === "recent") {
+    score += 7;
+    reasonCodes.push("recent_evidence");
+  } else if (evidenceFreshness === "mixed") {
+    score -= 6;
+    reasonCodes.push("mixed_freshness");
+  } else if (evidenceFreshness === "stale") {
+    score -= 16;
+    reasonCodes.push("stale_evidence");
+  } else {
+    score -= 12;
+    reasonCodes.push("unknown_freshness");
+  }
+
+  if (evidenceConflict === "conflicted") {
+    score -= 14;
+    reasonCodes.push("conflicted_evidence");
+  } else if (evidenceConflict === "freshness_gap") {
+    score -= 8;
+    reasonCodes.push("freshness_gap");
+  } else {
+    reasonCodes.push("clear_evidence_path");
+  }
+
+  if (reviewState === "ready") {
+    score += 10;
+    reasonCodes.push("review_ready");
+  } else if (reviewState === "verify_first") {
+    score -= 8;
+    reasonCodes.push("verify_first");
+  } else {
+    score -= 18;
+    reasonCodes.push("urgent_review");
+  }
+
+  if (rationaleState === "explicit") {
+    score += 8;
+    reasonCodes.push("explicit_rationale");
+  } else if (rationaleState === "inferred") {
+    score += 3;
+    reasonCodes.push("inferred_rationale");
+  } else if (rationaleState === "thin") {
+    score -= 7;
+    reasonCodes.push("thin_rationale");
+  } else {
+    score -= 12;
+    reasonCodes.push("missing_rationale");
+  }
+
+  if (highPriorityCount > 0 || avgPriorityScore >= 58) {
+    score += 7;
+    reasonCodes.push("high_priority_signal");
+  } else if (avgPriorityScore >= 45) {
+    score += 3;
+    reasonCodes.push("operationally_relevant_signal");
+  }
+
+  if (supportedHistory) {
+    score += 8;
+    reasonCodes.push("supported_history");
+  }
+  if (cautionHistory) {
+    score -= 10;
+    reasonCodes.push("historical_caution");
+  }
+  if (supportedHistory && (evidenceFreshness === "live" || evidenceFreshness === "recent") && reviewState === "ready" && evidenceConflict === "clear") {
+    score += 5;
+    reasonCodes.push("history_and_live_alignment");
+  }
+  if (liveCount > 0 && recentCount > 0) {
+    score += 2;
+    reasonCodes.push("crosschecked_fresh_signals");
+  }
+  if (staleCount > 0 && liveCount === 0 && recentCount === 0) {
+    score -= 5;
+    reasonCodes.push("stale_only_evidence");
+  }
+
+  const boundedScore = Math.max(0, Math.min(100, Math.round(score)));
+  const strength =
+    boundedScore >= 78
+      ? "strong"
+      : boundedScore >= 58
+        ? "moderate"
+        : boundedScore >= 38
+          ? "caution"
+          : "weak";
+
+  return {
+    recommendation_provenance_strength: strength,
+    recommendation_provenance_score: boundedScore,
+    recommendation_provenance_reason_codes: [...new Set(reasonCodes)],
+    recommendation_provenance_summary: healthPlanRecommendationProvenanceSummaryText(strength, reasonCodes, signalLabels),
+  };
+}
+
+function healthPlanRecommendationUseSummaryText(mode, {
+  evidenceReviewSummary = null,
+  provenanceSummary = null,
+  staffDisposition = null,
+  urgentTiming = false,
+} = {}) {
+  if (mode === "staff_review_only") {
+    if (staffDisposition === "escalated") {
+      return "Staff review only: this recommendation has already been escalated, so keep it in staff-only handling until the stronger route lands and is recorded.";
+    }
+    if (staffDisposition === "deferred" && urgentTiming) {
+      return "Staff review only: this recommendation is still deferred even though the timing is urgent, so staff should re-evaluate the route before relying on it.";
+    }
+    return evidenceReviewSummary
+      ? `Staff review only: ${evidenceReviewSummary}`
+      : provenanceSummary
+        ? `Staff review only: ${provenanceSummary}`
+        : "Staff review only until the team has clearer live proof or a stronger operational route.";
+  }
+  if (mode === "verify_before_use") {
+    if (staffDisposition === "deferred") {
+      return "Verify before use: staff already deferred this step, so the next fresh check should confirm whether it still fits the live picture.";
+    }
+    return evidenceReviewSummary
+      ? `Verify before use: ${evidenceReviewSummary}`
+      : provenanceSummary
+        ? `Verify before use: ${provenanceSummary}`
+        : "Verify before use against one fresh touchpoint before treating this as settled guidance.";
+  }
+  if (staffDisposition === "confirmed") {
+    return "Ready to use with staff judgment: a staff confirmation is already logged and the linked evidence is grounded enough to support the next step.";
+  }
+  return provenanceSummary
+    ? `Ready to use with staff judgment: ${provenanceSummary}`
+    : "Ready to use with staff judgment and routine follow-through.";
+}
+
+function deriveHealthPlanRecommendationUseGuidance(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(item, sectionName, sourceSignals, contextSnapshot);
+  const provenance = deriveHealthPlanRecommendationProvenanceMetadata(item, sectionName, sourceSignals, contextSnapshot);
+  const reviewState = normalizeHealthPlanRecommendationReviewState(
+    firstValue(item?.evidence_review_state, evidenceReview.evidence_review_state),
+    "verify_first",
+  );
+  const provenanceStrength = normalizeHealthPlanRecommendationProvenanceStrength(
+    firstValue(item?.recommendation_provenance_strength, provenance.recommendation_provenance_strength),
+    "caution",
+  );
+  const staffDisposition = normalizeHealthPlanRecommendationDisposition(item?.staff_disposition, null);
+  const dueWindow = normalizeHealthPlanDueWindow(item?.due_window, null);
+  const priority = normalizeHealthPlanItemPriority(item?.priority, null);
+  const urgentTiming = dueWindow === "same_day" || priority === "high" || sectionName === "escalation";
+  const reasonCodes = [];
+  let mode = "ready_with_judgment";
+
+  if (reviewState === "urgent_review" || provenanceStrength === "weak") {
+    mode = "staff_review_only";
+    if (reviewState === "urgent_review") reasonCodes.push("urgent_review_required");
+    if (provenanceStrength === "weak") reasonCodes.push("weak_provenance");
+  } else if (reviewState === "verify_first" || provenanceStrength === "caution") {
+    mode = "verify_before_use";
+    if (reviewState === "verify_first") reasonCodes.push("fresh_verification_required");
+    if (provenanceStrength === "caution") reasonCodes.push("caution_provenance");
+  } else {
+    reasonCodes.push("grounded_enough_to_use");
+  }
+
+  if (staffDisposition === "escalated") {
+    mode = "staff_review_only";
+    reasonCodes.push("staff_escalated");
+  } else if (staffDisposition === "deferred") {
+    if (mode === "ready_with_judgment") mode = "verify_before_use";
+    if (urgentTiming && mode !== "ready_with_judgment") mode = "staff_review_only";
+    reasonCodes.push("staff_deferred");
+  } else if (staffDisposition === "confirmed") {
+    reasonCodes.push("staff_confirmed");
+  }
+
+  if (urgentTiming) reasonCodes.push("urgent_timing");
+
+  return {
+    recommendation_use_mode: mode,
+    recommendation_use_reason_codes: [...new Set(reasonCodes)],
+    recommendation_use_summary: healthPlanRecommendationUseSummaryText(mode, {
+      evidenceReviewSummary: evidenceReview.evidence_review_summary,
+      provenanceSummary: provenance.recommendation_provenance_summary,
+      staffDisposition,
+      urgentTiming,
+    }),
+  };
+}
+
+function healthPlanRecommendationHasInlineGuardrailCue(item, promptInput = null) {
+  const text = String(item?.text || "");
+  return textMatchesAny(text, [
+    ...healthPlanRequirementMatchers("respect_sharing_boundary", promptInput),
+    /\bverify\b/i,
+    /\bconfirm\b/i,
+    /\brefresh\b/i,
+    /\bre-?check\b/i,
+    /\bonly if\b/i,
+    /\buntil\b/i,
+    /\bunless\b/i,
+    /\bbefore\b.{0,40}\bconfirm/i,
+    /\bbefore\b.{0,40}\bverify/i,
+    /\bstaff-led\b/i,
+    /\bstaff only\b/i,
+    /\bapproved providers\b/i,
+    /\bfresh receipt\b/i,
+    /\blive check\b/i,
+  ]);
+}
+
+function healthPlanRecommendationInlineGuardrailText(language = "en", sectionName = "daily_support", inlineState = "verify_inline", reasonCodes = []) {
+  const contradictionFocused = Array.isArray(reasonCodes) && reasonCodes.some((code) => [
+    "historical_caution",
+    "conflicted_evidence",
+    "freshness_gap",
+    "weak_provenance",
+  ].includes(code));
+  const boundaryFocused = Array.isArray(reasonCodes) && reasonCodes.includes("sharing_boundary_open");
+
+  if (sectionName === "caregiver_guidance") {
+    if (boundaryFocused || inlineState === "staff_only_inline") {
+      return language === "de"
+        ? "Diese Orientierung nur innerhalb des Teams oder mit freigegebenen Bezugspersonen nutzen, bis der heutige Live-Check bestaetigt, dass sie noch passt."
+        : language === "es"
+          ? "Usa esta orientacion solo dentro del equipo o con proveedores aprobados hasta que la comprobacion real de hoy confirme que sigue encajando."
+          : "Use this guidance only within staff or approved providers until today's live check confirms it still fits.";
+    }
+    return language === "de"
+      ? "Diese Orientierung nur weitergeben, wenn der heutige Live-Check bestaetigt, dass sie noch zum aktuellen Bild passt."
+      : language === "es"
+        ? "Comparte esta orientacion solo si la comprobacion real de hoy confirma que sigue encajando con la situacion actual."
+        : "Share this guidance only if today's live check confirms it still fits the current situation.";
+  }
+
+  if (inlineState === "staff_only_inline") {
+    return language === "de"
+      ? "Diesen Schritt als teamgefuehrte Orientierung behandeln, bis ein frischer Nachweis oder ein staerkerer Weg bestaetigt, dass er noch passt."
+      : language === "es"
+        ? "Trata este paso como una orientacion liderada por el equipo hasta que una prueba fresca o una ruta mas fuerte confirmen que sigue encajando."
+        : "Treat this step as staff-led guidance until a fresh proof step or stronger route confirms it still fits.";
+  }
+
+  if (contradictionFocused) {
+    return language === "de"
+      ? "Diesen Schritt nur weiterfuehren, wenn der heutige Live-Check bestaetigt, dass er trotz widerspruechlicher oder alterer Evidenz noch passt."
+      : language === "es"
+        ? "Mantén este paso solo si la comprobacion real de hoy confirma que sigue encajando pese a la evidencia contradictoria o envejecida."
+        : "Keep this step only if today's live check confirms it still fits despite the older or conflicting evidence.";
+  }
+
+  return language === "de"
+    ? "Diesen Schritt nur weiterfuehren, wenn der heutige Live-Check bestaetigt, dass er noch zum aktuellen Pflegebild passt."
+    : language === "es"
+      ? "Mantén este paso solo si la comprobacion real de hoy confirma que sigue encajando con la situacion actual."
+      : "Keep this step only if today's live check confirms it still fits the current care picture.";
+}
+
+function deriveHealthPlanRecommendationInlineGuardrail(item, sectionName, sourceSignals = [], contextSnapshot = null) {
+  const useGuidance = deriveHealthPlanRecommendationUseGuidance(item, sectionName, sourceSignals, contextSnapshot);
+  const provenance = deriveHealthPlanRecommendationProvenanceMetadata(item, sectionName, sourceSignals, contextSnapshot);
+  const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(item, sectionName, sourceSignals, contextSnapshot);
+  const linkedSignalIds = Array.isArray(item?.source_signal_ids)
+    ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
+    : [];
+  const useMode = normalizeHealthPlanRecommendationUseMode(
+    firstValue(item?.recommendation_use_mode, useGuidance.recommendation_use_mode),
+    "verify_before_use",
+  );
+  const provenanceStrength = normalizeHealthPlanRecommendationProvenanceStrength(
+    firstValue(item?.recommendation_provenance_strength, provenance.recommendation_provenance_strength),
+    "caution",
+  );
+  const reviewState = normalizeHealthPlanRecommendationReviewState(
+    firstValue(item?.evidence_review_state, evidenceReview.evidence_review_state),
+    "verify_first",
+  );
+  const linkedSignals = normalizeHealthPlanSourceSignals(sourceSignals).filter((signal) =>
+    linkedSignalIds.includes(nullIfBlank(signal?.id)),
+  );
+  const usefulnessReasonCodes = [...new Set(
+    linkedSignals.flatMap((signal) => Array.isArray(signal?.usefulness_reason_codes) ? signal.usefulness_reason_codes : []).map((code) => nullIfBlank(code)).filter(Boolean),
+  )];
+
+  const reasonCodes = [...new Set([
+    ...(Array.isArray(useGuidance?.recommendation_use_reason_codes) ? useGuidance.recommendation_use_reason_codes : []),
+    ...(Array.isArray(provenance?.recommendation_provenance_reason_codes) ? provenance.recommendation_provenance_reason_codes : []),
+    ...(Array.isArray(evidenceReview?.evidence_review_reason_codes) ? evidenceReview.evidence_review_reason_codes : []),
+    ...usefulnessReasonCodes,
+  ])];
+  const contradictionFocused = usefulnessReasonCodes.some((code) => [
+    "historically_effective_now_contradicted",
+    "historically_stalled_pattern",
+    "family_outcomes_repeatedly_stalled",
+    "family_outcomes_recently_stalled",
+    "family_outcomes_recently_slipping",
+    "family_receipts_open",
+    "family_receipts_escalated",
+    "family_receipts_mixed",
+    "family_receipts_stale",
+    "outcome_improvement_inferred",
+    "outcome_improvement_stale",
+  ].includes(code));
+  const boundaryFocused = reasonCodes.includes("sharing_boundary_open");
+  const reviewSignalDriven = reasonCodes.some((code) => [
+    "urgent_review_required",
+    "review_signal_linked",
+    "followthrough_open",
+    "section_evidence_open",
+    "conflicting_evidence",
+    "stale_inputs",
+  ].includes(code));
+  const explicitReviewSignalLinked = linkedSignalIds.some((signalId) => healthPlanRecommendationReviewSignalIds.has(signalId));
+  const lowProofContextLinked = linkedSignals.some((signal) => {
+    const signalId = nullIfBlank(signal?.id);
+    const category = nullIfBlank(signal?.category);
+    const freshness = normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown");
+    return (
+      signalId === "context-live-profile-only"
+      || ((category === "context" || category === "care-circle") && freshness === "unknown")
+    );
+  });
+  const structuralShareabilityUncertainty = contradictionFocused
+    || boundaryFocused
+    || explicitReviewSignalLinked
+    || lowProofContextLinked;
+
+  let inlineState = "clear";
+  if (sectionName === "caregiver_guidance") {
+    if (boundaryFocused && (useMode === "staff_review_only" || provenanceStrength === "weak")) {
+      inlineState = "staff_only_inline";
+    } else if (boundaryFocused || contradictionFocused) {
+      inlineState = "verify_inline";
+    }
+  } else if (sectionName === "goals" || sectionName === "daily_support") {
+    if ((useMode === "staff_review_only" || provenanceStrength === "weak") && structuralShareabilityUncertainty && reviewSignalDriven) {
+      inlineState = "staff_only_inline";
+    } else if (
+      contradictionFocused
+      || (reviewSignalDriven && structuralShareabilityUncertainty)
+      || ((useMode === "verify_before_use" || provenanceStrength === "caution" || reviewState !== "ready") && boundaryFocused)
+    ) {
+      inlineState = "verify_inline";
+    }
+  }
+
+  return {
+    inline_guardrail_state: inlineState,
+    inline_guardrail_reason_codes: reasonCodes,
+    inline_guardrail_summary:
+      inlineState === "clear"
+        ? null
+        : healthPlanRecommendationInlineGuardrailText(
+          normalizeLanguage(contextSnapshot?.language, "en"),
+          sectionName,
+          inlineState,
+          reasonCodes,
+        ),
+  };
+}
+
+function enrichHealthPlanSectionRecommendationUseGuidance(items, sectionName, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationUseGuidance(item, sectionName, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationUseGuidance(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionRecommendationUseGuidance(plan.goals_json, "goals", sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionRecommendationUseGuidance(plan.daily_support_json, "daily_support", sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionRecommendationUseGuidance(plan.monitoring_json, "monitoring", sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionRecommendationUseGuidance(plan.escalation_json, "escalation", sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionRecommendationUseGuidance(plan.caregiver_guidance_json, "caregiver_guidance", sourceSignals, contextSnapshot),
+  };
+}
+
+function enrichHealthPlanSectionEvidenceReview(items, sectionName, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationEvidenceReview(item, sectionName, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationEvidenceReview(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionEvidenceReview(plan.goals_json, "goals", sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionEvidenceReview(plan.daily_support_json, "daily_support", sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionEvidenceReview(plan.monitoring_json, "monitoring", sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionEvidenceReview(plan.escalation_json, "escalation", sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionEvidenceReview(plan.caregiver_guidance_json, "caregiver_guidance", sourceSignals, contextSnapshot),
+  };
+}
+
+function enrichHealthPlanSectionRecommendationProvenance(items, sectionName, sourceSignals = [], contextSnapshot = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationProvenanceMetadata(item, sectionName, sourceSignals, contextSnapshot),
+  }));
+}
+
+function enrichHealthPlanRecommendationProvenance(plan) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionRecommendationProvenance(plan.goals_json, "goals", sourceSignals, contextSnapshot),
+    daily_support_json: enrichHealthPlanSectionRecommendationProvenance(plan.daily_support_json, "daily_support", sourceSignals, contextSnapshot),
+    monitoring_json: enrichHealthPlanSectionRecommendationProvenance(plan.monitoring_json, "monitoring", sourceSignals, contextSnapshot),
+    escalation_json: enrichHealthPlanSectionRecommendationProvenance(plan.escalation_json, "escalation", sourceSignals, contextSnapshot),
+    caregiver_guidance_json: enrichHealthPlanSectionRecommendationProvenance(plan.caregiver_guidance_json, "caregiver_guidance", sourceSignals, contextSnapshot),
+  };
+}
+
+function deriveHealthPlanRecommendationRecheckPolicy(item, sourceSignals = [], contextSnapshot = null) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  const linkedSignals = normalizeHealthPlanSourceSignals(sourceSignals).filter((signal) => signalIds.includes(nullIfBlank(signal?.id)));
+  const signalLooksLike = (signal, pattern) => {
+    const haystack = `${nullIfBlank(signal?.id) || ""} ${nullIfBlank(signal?.label) || ""} ${nullIfBlank(signal?.detail) || ""}`.toLowerCase();
+    return pattern.test(haystack);
+  };
+  const categorySet = new Set(linkedSignals.map((signal) => normalizeHealthPlanSignalCategory(signal?.category, "context")));
+  const linkedSignalIdSet = new Set(signalIds);
+  const criticalSignalIds = new Set(
+    Array.isArray(contextSnapshot?.critical_signal_ids)
+      ? contextSnapshot.critical_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
+      : [],
+  );
+  const responseWindow = normalizeHealthPlanDueWindow(
+    firstValue(
+      item?.due_window,
+      contextSnapshot?.generation_assessment?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      contextSnapshot?.policy?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+    ),
+    "within_24h",
+  );
+  const conflictState = normalizeHealthPlanRecommendationConflict(item?.evidence_conflict, null);
+  const freshnessState = normalizeHealthPlanRecommendationFreshness(item?.evidence_freshness, null);
+  const reviewState = normalizeHealthPlanRecommendationReviewState(item?.evidence_review_state, null);
+  const touchesConflictSignal = linkedSignalIdSet.has("evidence-predictive-live-mismatch") || linkedSignalIdSet.has("evidence-passive-signal-conflict");
+  const touchesCriticalSignal = [...linkedSignalIdSet].some((signalId) => criticalSignalIds.has(signalId));
+  const touchesAlert = categorySet.has("alert") || linkedSignals.some((signal) => signalLooksLike(signal, /\balert|incident|unreachable|welfare\b/i));
+  const touchesRisk = categorySet.has("risk") || categorySet.has("forecast") || linkedSignals.some((signal) => signalLooksLike(signal, /\brisk|forecast|score\b/i));
+  const touchesMedication = categorySet.has("medication") || linkedSignals.some((signal) => signalLooksLike(signal, /\bmedic|dose|pill|reminder|adherence\b/i));
+  const touchesSensor = categorySet.has("sensor") || linkedSignals.some((signal) => signalLooksLike(signal, /\bsensor|device|battery|watch|pendant\b/i));
+  const touchesService = categorySet.has("service") || linkedSignals.some((signal) => signalLooksLike(signal, /\bcheck-?in|brain coach|routine|touchpoint|session\b/i));
+  const touchesCareCircle = categorySet.has("care-circle") || linkedSignals.some((signal) => signalLooksLike(signal, /\bconsent|care circle|caregiver|family|sharing\b/i));
+  const sameDay = responseWindow === "same_day";
+
+  if (conflictState === "conflicted" || touchesConflictSignal) {
+    return {
+      recheck_after_hours: sameDay ? 1 : 3,
+      recheck_policy_code: "conflict_reconciliation",
+      recheck_policy_summary: "Conflicting signals should be reconciled quickly before the recommendation is treated as settled.",
+    };
+  }
+  if (reviewState === "urgent_review" && (touchesAlert || touchesRisk || touchesCriticalSignal)) {
+    return {
+      recheck_after_hours: sameDay ? 1 : 4,
+      recheck_policy_code: "urgent_critical_followup",
+      recheck_policy_summary: "Critical alert or risk-linked guidance should stay on a short review loop until a fresh live receipt lands.",
+    };
+  }
+  if (reviewState === "urgent_review") {
+    return {
+      recheck_after_hours: sameDay ? 2 : 4,
+      recheck_policy_code: "urgent_followthrough_receipt",
+      recheck_policy_summary: "Urgent follow-through guidance should be rechecked quickly until ownership or closure is recorded.",
+    };
+  }
+  if (
+    conflictState === "freshness_gap"
+    || freshnessState === "stale"
+    || freshnessState === "mixed"
+    || freshnessState === "unknown"
+    || reviewState === "verify_first"
+  ) {
+    if (touchesAlert || touchesRisk || touchesMedication || touchesSensor || touchesCriticalSignal) {
+      return {
+        recheck_after_hours: sameDay ? 2 : 6,
+        recheck_policy_code: "stale_high_priority_refresh",
+        recheck_policy_summary: "High-priority evidence with a freshness gap should be refreshed sooner than routine support guidance.",
+      };
+    }
+    if (touchesCareCircle) {
+      return {
+        recheck_after_hours: sameDay ? 4 : 10,
+        recheck_policy_code: "care_circle_confirmation",
+        recheck_policy_summary: "Care-circle or sharing-boundary guidance should be rechecked once consent and owner state are confirmed.",
+      };
+    }
+  }
+  if (touchesAlert || touchesRisk) {
+    return {
+      recheck_after_hours: sameDay ? 2 : 6,
+      recheck_policy_code: "critical_signal_watch",
+      recheck_policy_summary: "Live alert and risk-linked guidance should refresh on a tighter cadence than general routine support.",
+    };
+  }
+  if (touchesMedication || touchesSensor) {
+    return {
+      recheck_after_hours: sameDay ? 3 : 8,
+      recheck_policy_code: "care_routine_verification",
+      recheck_policy_summary: "Medication and sensor-linked guidance should be revisited sooner than broad routine planning.",
+    };
+  }
+  if (touchesService) {
+    return {
+      recheck_after_hours: sameDay ? 4 : 12,
+      recheck_policy_code: "service_routine_refresh",
+      recheck_policy_summary: "Routine service guidance can stay on a broader refresh window unless fresher risk says otherwise.",
+    };
+  }
+  if (touchesCareCircle) {
+    return {
+      recheck_after_hours: sameDay ? 4 : 12,
+      recheck_policy_code: "care_circle_watch",
+      recheck_policy_summary: "Care-circle guidance should stay visible until ownership and sharing assumptions are rechecked.",
+    };
+  }
+  return {
+    recheck_after_hours: sameDay ? 3 : 12,
+    recheck_policy_code: "general_live_refresh",
+    recheck_policy_summary: "General support guidance should still be refreshed, but on a broader cadence than critical evidence.",
+  };
+}
+
+function deriveHealthPlanRecommendationVerificationTiming(item, sourceSignals = [], contextSnapshot = null, now = new Date()) {
+  const signalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+  const signalMap = new Map(
+    normalizeHealthPlanSourceSignals(sourceSignals)
+      .map((signal) => [nullIfBlank(signal?.id), signal]),
+  );
+  const observedAts = signalIds
+    .map((signalId) => normalizeTimestampValue(signalMap.get(signalId)?.observed_at))
+    .filter(Boolean);
+  const lastVerifiedAt = normalizeTimestampValue(item?.last_verified_at) || latestTimestamp(observedAts);
+  const responseWindow = normalizeHealthPlanDueWindow(
+    firstValue(
+      item?.due_window,
+      contextSnapshot?.generation_assessment?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      contextSnapshot?.policy?.response_expectation === "same-day review" ? "same_day" : "within_24h",
+    ),
+    "within_24h",
+  );
+  const recheckPolicy = deriveHealthPlanRecommendationRecheckPolicy(item, sourceSignals, contextSnapshot);
+  const fallbackHours = Number.isFinite(Number(recheckPolicy?.recheck_after_hours))
+    ? Number(recheckPolicy.recheck_after_hours)
+    : responseWindow === "same_day"
+      ? 3
+      : 12;
+  const recheckAfterHours = normalizeRecommendationRecheckHours(item?.recheck_after_hours, fallbackHours);
+  const recheckDueAt = normalizeTimestampValue(item?.recheck_due_at)
+    || (
+      lastVerifiedAt && recheckAfterHours != null
+        ? new Date(new Date(lastVerifiedAt).getTime() + (recheckAfterHours * 60 * 60 * 1000)).toISOString()
+        : null
+    );
+  return {
+    last_verified_at: lastVerifiedAt,
+    recheck_after_hours: recheckAfterHours,
+    recheck_due_at: recheckDueAt,
+  };
+}
+
+function enrichHealthPlanSectionVerificationTiming(items, sourceSignals = [], contextSnapshot = null, now = new Date()) {
+  return normalizeHealthPlanSectionItems(items).map((item) => ({
+    ...item,
+    ...deriveHealthPlanRecommendationVerificationTiming(item, sourceSignals, contextSnapshot, now),
+  }));
+}
+
+function enrichHealthPlanRecommendationVerificationTiming(plan, now = new Date()) {
+  if (!plan || typeof plan !== "object") return plan;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionVerificationTiming(plan.goals_json, sourceSignals, contextSnapshot, now),
+    daily_support_json: enrichHealthPlanSectionVerificationTiming(plan.daily_support_json, sourceSignals, contextSnapshot, now),
+    monitoring_json: enrichHealthPlanSectionVerificationTiming(plan.monitoring_json, sourceSignals, contextSnapshot, now),
+    escalation_json: enrichHealthPlanSectionVerificationTiming(plan.escalation_json, sourceSignals, contextSnapshot, now),
+    caregiver_guidance_json: enrichHealthPlanSectionVerificationTiming(plan.caregiver_guidance_json, sourceSignals, contextSnapshot, now),
+  };
 }
 
 function slugToken(value, fallback = "item") {
@@ -465,15 +1953,437 @@ function normalizeHealthPlanSourceSignals(value) {
       const detail = nullIfBlank(firstValue(record?.detail, record?.description, record?.summary));
       const category = normalizeHealthPlanSignalCategory(record?.category);
       const id = nullIfBlank(record?.id) || `${category}-${slugToken(label, `signal-${index + 1}`)}`;
+      const strength = normalizeHealthPlanSignalStrength(record?.strength);
+      const observedAt = normalizeTimestampValue(firstValue(record?.observed_at, record?.observedAt));
+      const freshnessInput = firstValue(record?.freshness, record?.freshness_bucket);
+      const freshness = normalizeHealthPlanSignalFreshness(
+        freshnessInput,
+        observedAt ? inferHealthPlanSignalFreshness(observedAt, { category, strength }) : "unknown",
+      );
       return {
         id,
         label,
         ...(detail ? { detail } : {}),
         category,
-        strength: normalizeHealthPlanSignalStrength(record?.strength),
+        strength,
+        observed_at: observedAt,
+        freshness,
+        ...(Number.isFinite(Number(firstValue(record?.priority_score, record?.priorityScore)))
+          ? { priority_score: Math.max(0, Math.round(Number(firstValue(record?.priority_score, record?.priorityScore)))) }
+          : {}),
+        ...(Array.isArray(firstValue(record?.priority_reason_codes, record?.priorityReasonCodes))
+          ? {
+              priority_reason_codes: [
+                ...new Set(firstValue(record?.priority_reason_codes, record?.priorityReasonCodes).map((code) => nullIfBlank(code)).filter(Boolean)),
+              ],
+            }
+          : {}),
+        ...(Number.isFinite(Number(firstValue(record?.usefulness_score_delta, record?.usefulnessScoreDelta)))
+          ? { usefulness_score_delta: Math.round(Number(firstValue(record?.usefulness_score_delta, record?.usefulnessScoreDelta))) }
+          : {}),
+        ...(Array.isArray(firstValue(record?.usefulness_reason_codes, record?.usefulnessReasonCodes))
+          ? {
+              usefulness_reason_codes: [
+                ...new Set(firstValue(record?.usefulness_reason_codes, record?.usefulnessReasonCodes).map((code) => nullIfBlank(code)).filter(Boolean)),
+              ],
+            }
+          : {}),
+        ...(Array.isArray(firstValue(record?.supported_tactic_families, record?.supportedTacticFamilies))
+          ? {
+              supported_tactic_families: [
+                ...new Set(firstValue(record?.supported_tactic_families, record?.supportedTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+              ],
+            }
+          : {}),
+        ...(Array.isArray(firstValue(record?.contradicted_tactic_families, record?.contradictedTacticFamilies))
+          ? {
+              contradicted_tactic_families: [
+                ...new Set(firstValue(record?.contradicted_tactic_families, record?.contradictedTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+              ],
+            }
+          : {}),
+        ...(Array.isArray(firstValue(record?.stalled_tactic_families, record?.stalledTacticFamilies))
+          ? {
+              stalled_tactic_families: [
+                ...new Set(firstValue(record?.stalled_tactic_families, record?.stalledTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+              ],
+            }
+          : {}),
       };
     })
     .filter(Boolean);
+}
+
+function normalizeHealthPlanSignalFreshness(value, fallback = "unknown") {
+  const normalized = nullIfBlank(value);
+  if (["live", "recent", "stale", "unknown"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanGenerationConfidence(value, fallback = "medium") {
+  const normalized = nullIfBlank(value);
+  if (["high", "medium", "low"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanGenerationReadiness(value, fallback = "review_before_share") {
+  const normalized = nullIfBlank(value);
+  if (["ready_for_review", "review_before_share", "review_and_enrich"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanGenerationAssessmentReasons(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      const record = objectValue(item);
+      const detail = nullIfBlank(firstValue(record?.detail, record?.description, record?.text, record?.message));
+      const code = slugToken(firstValue(record?.code, record?.id), `reason-${index + 1}`);
+      const severity = normalizeHealthPlanSignalStrength(firstValue(record?.severity, record?.state), "medium");
+      if (!detail) return null;
+      return { code, severity, detail };
+    })
+    .filter(Boolean);
+}
+
+function normalizeHealthPlanGenerationAssessment(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const reasons = normalizeHealthPlanGenerationAssessmentReasons(record.reasons);
+  const mediumReasons = reasons.filter((reason) => reason.severity === "medium").length;
+  const fallbackConfidence = reasons.some((reason) => reason.severity === "high")
+    ? "low"
+    : mediumReasons > 0
+      ? "medium"
+      : "high";
+  const confidence = normalizeHealthPlanGenerationConfidence(record.confidence, fallbackConfidence);
+  const fallbackReadiness = confidence === "low"
+    ? "review_and_enrich"
+    : confidence === "medium"
+      ? "review_before_share"
+      : "ready_for_review";
+  const parseCount = (input) => {
+    const value = Number(input);
+    return Number.isFinite(value) && value >= 0 ? Math.round(value) : 0;
+  };
+  const parseConfidence = (input) => {
+    const value = Number(input);
+    if (!Number.isFinite(value)) return null;
+    return Math.max(0, Math.min(1, value));
+  };
+  return {
+    confidence,
+    readiness: normalizeHealthPlanGenerationReadiness(record.readiness, fallbackReadiness),
+    source_signal_count: parseCount(record.source_signal_count),
+    critical_signal_count: parseCount(record.critical_signal_count),
+    care_provider_count: parseCount(record.care_provider_count),
+    live_signal_count: parseCount(record.live_signal_count),
+    stale_signal_count: parseCount(record.stale_signal_count),
+    unknown_freshness_signal_count: parseCount(record.unknown_freshness_signal_count),
+    predictive_available: Boolean(record.predictive_available),
+    predictive_confidence: parseConfidence(record.predictive_confidence),
+    response_expectation: nullIfBlank(record.response_expectation),
+    freshest_signal_at: normalizeTimestampValue(record.freshest_signal_at),
+    stalest_signal_at: normalizeTimestampValue(record.stalest_signal_at),
+    trust_gate_state: ["eligible", "review_only", "fallback_only"].includes(nullIfBlank(record.trust_gate_state))
+      ? nullIfBlank(record.trust_gate_state)
+      : null,
+    trust_gate_reason_codes: Array.isArray(record.trust_gate_reason_codes)
+      ? [...new Set(record.trust_gate_reason_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    trust_gate_summary_text: nullIfBlank(record.trust_gate_summary_text),
+    trust_gate_operator_action: nullIfBlank(record.trust_gate_operator_action),
+    reasons,
+  };
+}
+
+function normalizeHealthPlanEvidenceDigest(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const normalizeIds = (input) => (
+    Array.isArray(input)
+      ? [...new Set(input.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : []
+  );
+  return {
+    summary_text: nullIfBlank(firstValue(record.summary_text, record.summary)),
+    usefulness_summary_text: nullIfBlank(firstValue(record.usefulness_summary_text, record.usefulness_summary, record.history_summary)),
+    top_priority_signal_ids: normalizeIds(record.top_priority_signal_ids),
+    top_priority_signals: normalizeHealthPlanSourceSignals(firstValue(record.top_priority_signals, record.topPrioritySignals)),
+    historically_supported_signal_ids: normalizeIds(firstValue(record.historically_supported_signal_ids, record.supported_signal_ids)),
+    historically_caution_signal_ids: normalizeIds(firstValue(record.historically_caution_signal_ids, record.caution_signal_ids)),
+    live_signal_ids: normalizeIds(record.live_signal_ids),
+    stale_signal_ids: normalizeIds(record.stale_signal_ids),
+    unknown_freshness_signal_ids: normalizeIds(record.unknown_freshness_signal_ids),
+    freshness_gap: Boolean(record.freshness_gap),
+    freshest_signal_at: normalizeTimestampValue(record.freshest_signal_at),
+    stalest_signal_at: normalizeTimestampValue(record.stalest_signal_at),
+  };
+}
+
+function normalizeHealthPlanEvidencePack(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const normalizeIds = (input) => (
+    Array.isArray(input)
+      ? [...new Set(input.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : []
+  );
+  return {
+    focus_summary_text: nullIfBlank(firstValue(record.focus_summary_text, record.focus_summary, record.summary_text)),
+    caution_summary_text: nullIfBlank(firstValue(record.caution_summary_text, record.caution_summary, record.warning_text)),
+    primary_signal_ids: normalizeIds(firstValue(record.primary_signal_ids, record.primary_signals)),
+    action_signal_ids: normalizeIds(firstValue(record.action_signal_ids, record.action_signals, record.decision_signal_ids, record.decision_signals)),
+    verification_signal_ids: normalizeIds(firstValue(record.verification_signal_ids, record.verification_signals)),
+    stabilizing_signal_ids: normalizeIds(firstValue(record.stabilizing_signal_ids, record.stabilizing_signals, record.routine_signal_ids, record.routine_signals)),
+    caution_signal_ids: normalizeIds(firstValue(record.caution_signal_ids, record.caution_signals, record.guardrail_signal_ids, record.guardrail_signals)),
+    background_signal_ids: normalizeIds(firstValue(record.background_signal_ids, record.background_signals)),
+    deemphasized_signal_ids: normalizeIds(firstValue(record.deemphasized_signal_ids, record.deemphasized_signals, record.de_emphasized_signal_ids)),
+    primary_signals: normalizeHealthPlanSourceSignals(firstValue(record.primary_signals, record.primary_signal_cards)),
+    action_signals: normalizeHealthPlanSourceSignals(firstValue(record.action_signals, record.action_signal_cards, record.decision_signals, record.decision_signal_cards)),
+    verification_signals: normalizeHealthPlanSourceSignals(firstValue(record.verification_signals, record.verification_signal_cards)),
+    stabilizing_signals: normalizeHealthPlanSourceSignals(firstValue(record.stabilizing_signals, record.stabilizing_signal_cards, record.routine_signals, record.routine_signal_cards)),
+    caution_signals: normalizeHealthPlanSourceSignals(firstValue(record.caution_signals, record.caution_signal_cards, record.guardrail_signals, record.guardrail_signal_cards)),
+    background_signals: normalizeHealthPlanSourceSignals(firstValue(record.background_signals, record.background_signal_cards)),
+    deemphasized_signals: normalizeHealthPlanSourceSignals(firstValue(record.deemphasized_signals, record.deemphasized_signal_cards, record.de_emphasized_signals)),
+  };
+}
+
+function normalizeHealthPlanSectionGuidanceEntry(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const focusText = nullIfBlank(firstValue(record.focus_text, record.focus, record.text));
+  const whyNow = nullIfBlank(firstValue(record.why_now, record.reason, record.detail));
+  const cautionText = nullIfBlank(firstValue(record.caution_text, record.caution, record.guardrail));
+  const evidenceGapText = nullIfBlank(firstValue(record.evidence_gap_text, record.evidence_gap, record.gap_text));
+  const successCriteria = nullIfBlank(firstValue(record.success_criteria, record.success_text, record.completion_proof));
+  const evidencePosture = nullIfBlank(firstValue(record.evidence_posture, record.posture, record.mode));
+  const urgencyWindow = nullIfBlank(firstValue(record.urgency_window, record.due_window, record.window));
+  const signalIds = Array.isArray(record.signal_ids)
+    ? [...new Set(record.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  if (!focusText && !whyNow && !cautionText && !evidenceGapText && !successCriteria && !signalIds.length) return null;
+  return {
+    focus_text: focusText,
+    why_now: whyNow,
+    caution_text: cautionText,
+    evidence_gap_text: evidenceGapText,
+    success_criteria: successCriteria,
+    evidence_posture:
+      evidencePosture === "verify_first" || evidencePosture === "act_now" || evidencePosture === "boundary_limited"
+        ? evidencePosture
+        : null,
+    urgency_window:
+      urgencyWindow === "same_day" || urgencyWindow === "within_24h"
+        ? urgencyWindow
+        : null,
+    signal_ids: signalIds,
+  };
+}
+
+function normalizeHealthPlanSectionGuidance(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    summary: normalizeHealthPlanSectionGuidanceEntry(record.summary),
+    goals: normalizeHealthPlanSectionGuidanceEntry(record.goals),
+    daily_support: normalizeHealthPlanSectionGuidanceEntry(record.daily_support),
+    monitoring: normalizeHealthPlanSectionGuidanceEntry(record.monitoring),
+    escalation: normalizeHealthPlanSectionGuidanceEntry(record.escalation),
+    caregiver_guidance: normalizeHealthPlanSectionGuidanceEntry(record.caregiver_guidance),
+  };
+}
+
+function normalizeHealthPlanSectionEvidenceSignalCard(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const id = nullIfBlank(record.id);
+  const label = nullIfBlank(record.label);
+  if (!id || !label) return null;
+  return {
+    id,
+    label,
+    category: normalizeHealthPlanSignalCategory(record.category),
+    strength: normalizeHealthPlanSignalStrength(record.strength),
+    freshness: normalizeHealthPlanSignalFreshness(record.freshness, "unknown"),
+    observed_at: normalizeTimestampValue(firstValue(record.observed_at, record.observedAt)),
+    detail: nullIfBlank(record.detail),
+    why_it_matters: nullIfBlank(firstValue(record.why_it_matters, record.whyItMatters)),
+    ...(Number.isFinite(Number(firstValue(record?.priority_score, record?.priorityScore)))
+      ? { priority_score: Math.max(0, Math.round(Number(firstValue(record?.priority_score, record?.priorityScore)))) }
+      : {}),
+    ...(Array.isArray(firstValue(record?.priority_reason_codes, record?.priorityReasonCodes))
+      ? {
+          priority_reason_codes: [
+            ...new Set(firstValue(record?.priority_reason_codes, record?.priorityReasonCodes).map((code) => nullIfBlank(code)).filter(Boolean)),
+          ],
+        }
+      : {}),
+    ...(Number.isFinite(Number(firstValue(record?.usefulness_score_delta, record?.usefulnessScoreDelta)))
+      ? { usefulness_score_delta: Math.round(Number(firstValue(record?.usefulness_score_delta, record?.usefulnessScoreDelta))) }
+      : {}),
+    ...(Array.isArray(firstValue(record?.usefulness_reason_codes, record?.usefulnessReasonCodes))
+      ? {
+          usefulness_reason_codes: [
+            ...new Set(firstValue(record?.usefulness_reason_codes, record?.usefulnessReasonCodes).map((code) => nullIfBlank(code)).filter(Boolean)),
+          ],
+        }
+      : {}),
+    ...(Array.isArray(firstValue(record?.supported_tactic_families, record?.supportedTacticFamilies))
+      ? {
+          supported_tactic_families: [
+            ...new Set(firstValue(record?.supported_tactic_families, record?.supportedTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+          ],
+        }
+      : {}),
+    ...(Array.isArray(firstValue(record?.contradicted_tactic_families, record?.contradictedTacticFamilies))
+      ? {
+          contradicted_tactic_families: [
+            ...new Set(firstValue(record?.contradicted_tactic_families, record?.contradictedTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+          ],
+        }
+      : {}),
+    ...(Array.isArray(firstValue(record?.stalled_tactic_families, record?.stalledTacticFamilies))
+      ? {
+          stalled_tactic_families: [
+            ...new Set(firstValue(record?.stalled_tactic_families, record?.stalledTacticFamilies).map((family) => nullIfBlank(family)).filter(Boolean)),
+          ],
+        }
+      : {}),
+  };
+}
+
+function normalizeHealthPlanSectionEvidenceBundleEntry(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const normalizeIds = (input) => (
+    Array.isArray(input)
+      ? [...new Set(input.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : []
+  );
+  const signalCards = Array.isArray(record.signal_cards)
+    ? record.signal_cards.map((item) => normalizeHealthPlanSectionEvidenceSignalCard(item)).filter(Boolean)
+    : [];
+  const coverageTargets = Array.isArray(record.coverage_targets)
+    ? record.coverage_targets.map((item) => {
+      const target = objectValue(item);
+      if (!target) return null;
+      const code = nullIfBlank(target.code) || slugToken(firstValue(target.label, target.description, target.summary), "coverage-target");
+      const label = nullIfBlank(firstValue(target.label, target.description, target.summary));
+      const signalIds = normalizeIds(firstValue(target.signal_ids, target.signals));
+      const match = firstValue(target.match, target.mode) === "all" ? "all" : "any";
+      if (!code || !signalIds.length) return null;
+      return {
+        code,
+        label,
+        match,
+        signal_ids: signalIds,
+      };
+    }).filter(Boolean)
+    : [];
+  const summaryText = nullIfBlank(firstValue(record.summary_text, record.summary));
+  const whyNow = nullIfBlank(firstValue(record.why_now, record.reason));
+  const verificationFocus = nullIfBlank(firstValue(record.verification_focus, record.verification));
+  const signalIds = normalizeIds(record.signal_ids);
+  const primarySignalIds = normalizeIds(firstValue(record.primary_signal_ids, record.primary_signals));
+  const staleSignalIds = normalizeIds(firstValue(record.stale_signal_ids, record.stale_signals));
+  const unresolvedSignalIds = normalizeIds(firstValue(record.unresolved_signal_ids, record.unresolved_signals));
+  const mustCoverCodes = normalizeIds(firstValue(record.must_cover_codes, record.must_cover));
+  const minimumDistinctSignalCount = Number(firstValue(record.minimum_distinct_signal_count, record.minimum_signals));
+  const minimumDistinctCategoryCount = Number(firstValue(record.minimum_distinct_category_count, record.minimum_categories));
+  if (
+    !summaryText
+    && !whyNow
+    && !verificationFocus
+    && !signalIds.length
+    && !primarySignalIds.length
+    && !coverageTargets.length
+    && !signalCards.length
+  ) {
+    return null;
+  }
+  return {
+    summary_text: summaryText,
+    why_now: whyNow,
+    verification_focus: verificationFocus,
+    signal_ids: signalIds,
+    primary_signal_ids: primarySignalIds,
+    stale_signal_ids: staleSignalIds,
+    unresolved_signal_ids: unresolvedSignalIds,
+    must_cover_codes: mustCoverCodes,
+    coverage_targets: coverageTargets,
+    minimum_distinct_signal_count: Number.isFinite(minimumDistinctSignalCount) && minimumDistinctSignalCount > 0
+      ? Math.max(1, Math.round(minimumDistinctSignalCount))
+      : undefined,
+    minimum_distinct_category_count: Number.isFinite(minimumDistinctCategoryCount) && minimumDistinctCategoryCount > 0
+      ? Math.max(1, Math.round(minimumDistinctCategoryCount))
+      : undefined,
+    signal_cards: signalCards,
+  };
+}
+
+function normalizeHealthPlanSectionEvidenceBundles(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  return {
+    summary: normalizeHealthPlanSectionEvidenceBundleEntry(record.summary),
+    goals: normalizeHealthPlanSectionEvidenceBundleEntry(record.goals),
+    daily_support: normalizeHealthPlanSectionEvidenceBundleEntry(record.daily_support),
+    monitoring: normalizeHealthPlanSectionEvidenceBundleEntry(record.monitoring),
+    escalation: normalizeHealthPlanSectionEvidenceBundleEntry(record.escalation),
+    caregiver_guidance: normalizeHealthPlanSectionEvidenceBundleEntry(record.caregiver_guidance),
+  };
+}
+
+function normalizeHealthPlanGenerationContract(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const normalizeIds = (input) => (
+    Array.isArray(input)
+      ? [...new Set(input.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : []
+  );
+  const normalizeTextList = (input) => (
+    Array.isArray(input)
+      ? [...new Set(input.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : []
+  );
+  const planMode = nullIfBlank(record.plan_mode);
+  const normalized = {
+    plan_mode: ["stabilize", "verify_and_refresh", "change_course", "sustain"].includes(planMode)
+      ? planMode
+      : null,
+    summary_required_signal_ids: normalizeIds(record.summary_required_signal_ids),
+    monitoring_required_signal_ids: normalizeIds(record.monitoring_required_signal_ids),
+    escalation_required_signal_ids: normalizeIds(record.escalation_required_signal_ids),
+    summary_obligations: normalizeTextList(record.summary_obligations),
+    monitoring_obligations: normalizeTextList(record.monitoring_obligations),
+    escalation_obligations: normalizeTextList(record.escalation_obligations),
+    must_acknowledge_material_change: Boolean(record.must_acknowledge_material_change),
+    must_acknowledge_freshness_gap: Boolean(record.must_acknowledge_freshness_gap),
+    must_acknowledge_conflict: Boolean(record.must_acknowledge_conflict),
+    must_name_alternate_route: Boolean(record.must_name_alternate_route),
+    must_name_stronger_next_move: Boolean(record.must_name_stronger_next_move),
+    must_name_completion_receipt: Boolean(record.must_name_completion_receipt),
+  };
+  if (
+    !normalized.plan_mode
+    && !normalized.summary_required_signal_ids.length
+    && !normalized.monitoring_required_signal_ids.length
+    && !normalized.escalation_required_signal_ids.length
+    && !normalized.summary_obligations.length
+    && !normalized.monitoring_obligations.length
+    && !normalized.escalation_obligations.length
+    && !normalized.must_acknowledge_material_change
+    && !normalized.must_acknowledge_freshness_gap
+    && !normalized.must_acknowledge_conflict
+    && !normalized.must_name_alternate_route
+    && !normalized.must_name_stronger_next_move
+    && !normalized.must_name_completion_receipt
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
 function normalizeHealthPlanActionType(value, fallback = "edited") {
@@ -482,69 +2392,4767 @@ function normalizeHealthPlanActionType(value, fallback = "edited") {
   return fallback;
 }
 
+function normalizeHealthPlanChangeSummary(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const changeKind = nullIfBlank(value.change_kind) || "update";
+  const actionType = normalizeHealthPlanActionType(value.action_type, "edited");
+  const changedSections = Array.isArray(value.changed_sections)
+    ? [...new Set(value.changed_sections.map((section) => nullIfBlank(section)).filter(Boolean))]
+    : [];
+  const signalsAdded = Array.isArray(value.signals_added)
+    ? [...new Set(value.signals_added.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  const signalsRemoved = Array.isArray(value.signals_removed)
+    ? [...new Set(value.signals_removed.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  const sourceSignalsAdded = Array.isArray(value.source_signals_added)
+    ? [...new Set(value.source_signals_added.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  const sourceSignalsRemoved = Array.isArray(value.source_signals_removed)
+    ? [...new Set(value.source_signals_removed.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  const reviewTransition = nullIfBlank(value.review_transition);
+  const confidenceTransition = nullIfBlank(value.generation_confidence_transition);
+  const contentFingerprint = nullIfBlank(value.content_fingerprint);
+  const evidenceFingerprint = nullIfBlank(value.evidence_fingerprint);
+  const reviewFingerprint = nullIfBlank(value.review_fingerprint);
+  const entries = Array.isArray(value.entries)
+    ? value.entries
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+        const code = nullIfBlank(entry.code);
+        if (!code) return null;
+        return {
+          code,
+          sections: Array.isArray(entry.sections)
+            ? [...new Set(entry.sections.map((section) => nullIfBlank(section)).filter(Boolean))]
+            : undefined,
+          signal_ids: Array.isArray(entry.signal_ids)
+            ? [...new Set(entry.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+            : undefined,
+          from: nullIfBlank(entry.from),
+          to: nullIfBlank(entry.to),
+          count: Number.isFinite(Number(entry.count)) ? Number(entry.count) : undefined,
+        };
+      })
+      .filter(Boolean)
+    : [];
+
+  return {
+    change_kind: changeKind,
+    action_type: actionType,
+    changed_sections: changedSections,
+    signals_added: signalsAdded,
+    signals_removed: signalsRemoved,
+    source_signals_added: sourceSignalsAdded,
+    source_signals_removed: sourceSignalsRemoved,
+    review_transition: reviewTransition,
+    generation_confidence_transition: confidenceTransition,
+    content_fingerprint: contentFingerprint,
+    evidence_fingerprint: evidenceFingerprint,
+    review_fingerprint: reviewFingerprint,
+    entries,
+  };
+}
+
+function normalizeHealthPlanReviewAttestation(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    approved_for_sharing: Boolean(value.approved_for_sharing),
+    checked_at: normalizeTimestampValue(value.checked_at),
+    response_expectation: nullIfBlank(value.response_expectation),
+    checklist_codes: Array.isArray(value.checklist_codes)
+      ? [...new Set(value.checklist_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    open_issue_codes: Array.isArray(value.open_issue_codes)
+      ? [...new Set(value.open_issue_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    reason_codes: Array.isArray(value.reason_codes)
+      ? [...new Set(value.reason_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    operator_confirmation_codes: Array.isArray(value.operator_confirmation_codes)
+      ? [...new Set(value.operator_confirmation_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    reviewer_note: nullIfBlank(value.reviewer_note),
+    generation_confidence: normalizeHealthPlanGenerationConfidence(value.generation_confidence, null),
+    audit_status: nullIfBlank(value.audit_status),
+    review_status: nullIfBlank(value.review_status),
+    blocking_issue_codes: Array.isArray(value.blocking_issue_codes)
+      ? [...new Set(value.blocking_issue_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    watch_issue_codes: Array.isArray(value.watch_issue_codes)
+      ? [...new Set(value.watch_issue_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    approval_gate_state: nullIfBlank(value.approval_gate_state),
+    coordination_state: nullIfBlank(value.coordination_state),
+    quality_score: Number.isFinite(Number(value.quality_score)) ? Number(value.quality_score) : null,
+    quality_trust_level: nullIfBlank(value.quality_trust_level),
+  };
+}
+
+function normalizeHealthPlanAutomatedReviewVerdict(value, fallback = "revise") {
+  const normalized = nullIfBlank(value);
+  if (["pass", "revise", "block"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanAutomatedReviewShareability(value, fallback = "staff_only") {
+  const normalized = nullIfBlank(value);
+  if (["shareable", "staff_only"].includes(normalized)) return normalized;
+  return fallback;
+}
+
+function normalizeHealthPlanAutomatedReviewRubricScores(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const normalizeScore = (input) => {
+    const numeric = Number(input);
+    if (!Number.isFinite(numeric)) return null;
+    return Math.max(0, Math.min(100, Math.round(numeric)));
+  };
+  const scores = {
+    grounding: normalizeScore(value.grounding),
+    actionability: normalizeScore(value.actionability),
+    timeliness: normalizeScore(value.timeliness),
+    safety: normalizeScore(value.safety),
+    shareability: normalizeScore(value.shareability),
+    overall: normalizeScore(value.overall),
+  };
+  return Object.values(scores).every((score) => score != null) ? scores : null;
+}
+
+function weakHealthPlanReviewDimensions(rubricScores) {
+  const scores = normalizeHealthPlanAutomatedReviewRubricScores(rubricScores);
+  if (!scores) return [];
+  return Object.entries(scores)
+    .filter(([dimension, score]) => dimension !== "overall" && Number.isFinite(score) && score < 60)
+    .sort((left, right) => left[1] - right[1])
+    .map(([dimension]) => dimension);
+}
+
+function normalizeHealthPlanAutomatedReview(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return {
+    verdict: normalizeHealthPlanAutomatedReviewVerdict(value.verdict),
+    checked_at: normalizeTimestampValue(value.checked_at),
+    summary_text: nullIfBlank(firstValue(value.summary_text, value.summary, value.detail)),
+    grounded_signal_ids: Array.isArray(value.grounded_signal_ids)
+      ? [...new Set(value.grounded_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+    strengths: Array.isArray(value.strengths)
+      ? value.strengths.map((item) => nullIfBlank(firstValue(item?.text, item?.detail, item))).filter(Boolean)
+      : [],
+    concerns: normalizeHealthPlanGenerationAssessmentReasons(value.concerns),
+    required_actions: Array.isArray(value.required_actions)
+      ? value.required_actions.map((item) => nullIfBlank(firstValue(item?.text, item?.detail, item))).filter(Boolean)
+      : [],
+    shareability: normalizeHealthPlanAutomatedReviewShareability(value.shareability),
+    rubric_scores: normalizeHealthPlanAutomatedReviewRubricScores(firstValue(value.rubric_scores, value.rubricScores)),
+    provider: nullIfBlank(firstValue(value.provider, value.generator_provider)),
+    model: nullIfBlank(firstValue(value.model, value.generator_model)),
+    version: nullIfBlank(firstValue(value.version, value.generator_version)),
+    audit_status: nullIfBlank(value.audit_status),
+    review_status: nullIfBlank(value.review_status),
+  };
+}
+
+function normalizeHealthPlanPlanMemoryFamilyOutcome(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const family = nullIfBlank(value.family);
+  const outcome = nullIfBlank(value.outcome);
+  const detail = nullIfBlank(value.detail);
+  const reasonCode = nullIfBlank(firstValue(value.reason_code, value.reasonCode));
+  const fromVersion = Number(value.from_version);
+  const comparedToVersion = Number(firstValue(value.compared_to_version, value.to_version, value.toVersion));
+  if (!family || (outcome !== "helped" && outcome !== "stalled")) return null;
+  return {
+    family,
+    outcome,
+    reason_code: reasonCode,
+    detail,
+    from_version: Number.isFinite(fromVersion) ? fromVersion : null,
+    compared_to_version: Number.isFinite(comparedToVersion) ? comparedToVersion : null,
+  };
+}
+
+function normalizeHealthPlanPlanMemoryFamilyOutcomeLearningEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const family = nullIfBlank(value.family);
+  const latestOutcome = nullIfBlank(firstValue(value.latest_outcome, value.latestOutcome));
+  const consistencyState = nullIfBlank(firstValue(value.consistency_state, value.consistencyState));
+  const recencyState = nullIfBlank(firstValue(value.recency_state, value.recencyState));
+  if (!family) return null;
+  return {
+    family,
+    helped_count: Number.isFinite(Number(value.helped_count)) ? Number(value.helped_count) : 0,
+    stalled_count: Number.isFinite(Number(value.stalled_count)) ? Number(value.stalled_count) : 0,
+    recent_helped_count: Number.isFinite(Number(firstValue(value.recent_helped_count, value.recentHelpedCount)))
+      ? Number(firstValue(value.recent_helped_count, value.recentHelpedCount))
+      : 0,
+    recent_stalled_count: Number.isFinite(Number(firstValue(value.recent_stalled_count, value.recentStalledCount)))
+      ? Number(firstValue(value.recent_stalled_count, value.recentStalledCount))
+      : 0,
+    latest_outcome:
+      latestOutcome === "helped" || latestOutcome === "stalled"
+        ? latestOutcome
+        : null,
+    consistency_state:
+      consistencyState === "reliably_helpful"
+      || consistencyState === "repeatedly_stalled"
+      || consistencyState === "mixed"
+      || consistencyState === "single_signal"
+        ? consistencyState
+        : null,
+    recency_state:
+      recencyState === "recently_helping"
+      || recencyState === "recently_stalled"
+      || recencyState === "recently_slipping"
+      || recencyState === "recently_recovered"
+        ? recencyState
+        : null,
+    detail: nullIfBlank(value.detail),
+  };
+}
+
+function normalizeHealthPlanPlanMemoryFamilyExecutionLearningEntry(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const family = nullIfBlank(value.family);
+  const learningState = nullIfBlank(firstValue(value.learning_state, value.learningState));
+  if (!family) return null;
+  return {
+    family,
+    tracked_count: Number.isFinite(Number(value.tracked_count)) ? Number(value.tracked_count) : 0,
+    confirmed_count: Number.isFinite(Number(value.confirmed_count)) ? Number(value.confirmed_count) : 0,
+    deferred_count: Number.isFinite(Number(value.deferred_count)) ? Number(value.deferred_count) : 0,
+    escalated_count: Number.isFinite(Number(value.escalated_count)) ? Number(value.escalated_count) : 0,
+    open_count: Number.isFinite(Number(value.open_count)) ? Number(value.open_count) : 0,
+    latest_updated_at: normalizeTimestampValue(firstValue(value.latest_updated_at, value.latestUpdatedAt)),
+    learning_state:
+      learningState === "validated"
+      || learningState === "needs_followthrough"
+      || learningState === "needs_stronger_route"
+      || learningState === "mixed"
+        ? learningState
+        : null,
+    detail: nullIfBlank(value.detail),
+  };
+}
+
+function normalizeHealthPlanPlanMemoryTacticContradiction(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const family = nullIfBlank(value.family);
+  const reasonCode = nullIfBlank(firstValue(value.reason_code, value.reasonCode));
+  const detail = nullIfBlank(value.detail);
+  if (!family) return null;
+  return {
+    family,
+    reason_code: reasonCode,
+    detail,
+  };
+}
+
+function normalizeHealthPlanPlanMemoryRecommendationReceiptItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const id = nullIfBlank(value.id);
+  const section = nullIfBlank(value.section);
+  const text = nullIfBlank(value.text);
+  const note = nullIfBlank(firstValue(value.note, value.staff_disposition_note));
+  const updatedAt = normalizeTimestampValue(firstValue(value.updated_at, value.staff_disposition_updated_at));
+  if (!id || !section || !text) return null;
+  return {
+    id,
+    section,
+    text,
+    ...(note ? { note } : {}),
+    ...(updatedAt ? { updated_at: updatedAt } : {}),
+  };
+}
+
+function normalizeHealthPlanPlanMemoryRecommendationReceipts(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const status = nullIfBlank(value.status);
+  const normalizeItems = (items) =>
+    Array.isArray(items)
+      ? items
+        .map((item) => normalizeHealthPlanPlanMemoryRecommendationReceiptItem(item))
+        .filter(Boolean)
+      : [];
+  return {
+    status:
+      status === "clear" || status === "attention_needed" || status === "escalated" || status === "mixed"
+        ? status
+        : null,
+    tracked_count: Number.isFinite(Number(value.tracked_count)) ? Number(value.tracked_count) : 0,
+    confirmed_count: Number.isFinite(Number(value.confirmed_count)) ? Number(value.confirmed_count) : 0,
+    deferred_count: Number.isFinite(Number(value.deferred_count)) ? Number(value.deferred_count) : 0,
+    escalated_count: Number.isFinite(Number(value.escalated_count)) ? Number(value.escalated_count) : 0,
+    open_count: Number.isFinite(Number(value.open_count)) ? Number(value.open_count) : 0,
+    latest_updated_at: normalizeTimestampValue(value.latest_updated_at),
+    reason_codes: Array.isArray(value.reason_codes)
+      ? [...new Set(value.reason_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    confirmed_items: normalizeItems(value.confirmed_items),
+    deferred_items: normalizeItems(value.deferred_items),
+    escalated_items: normalizeItems(value.escalated_items),
+    open_items: normalizeItems(value.open_items),
+  };
+}
+
+function healthPlanTrackedRecommendationItems(plan) {
+  if (!plan || typeof plan !== "object") return [];
+  const sections = [
+    ["goals", normalizeHealthPlanSectionItems(plan?.goals_json)],
+    ["daily_support", normalizeHealthPlanSectionItems(plan?.daily_support_json)],
+    ["monitoring", normalizeHealthPlanSectionItems(plan?.monitoring_json)],
+    ["escalation", normalizeHealthPlanSectionItems(plan?.escalation_json)],
+    ["caregiver_guidance", normalizeHealthPlanSectionItems(plan?.caregiver_guidance_json)],
+  ];
+  const items = [];
+  for (const [section, entries] of sections) {
+    for (const item of entries) {
+      const disposition = normalizeHealthPlanRecommendationDisposition(item?.staff_disposition, null);
+      const tracked = Boolean(
+        disposition
+        || section === "monitoring"
+        || section === "escalation"
+        || nullIfBlank(item?.source_task_code)
+        || nullIfBlank(item?.owner_label)
+        || nullIfBlank(item?.completion_proof)
+        || nullIfBlank(item?.escalation_if_not_done)
+        || normalizeHealthPlanItemPriority(item?.priority, null)
+        || normalizeHealthPlanDueWindow(item?.due_window, null),
+      );
+      if (!tracked) continue;
+      items.push({
+        id: nullIfBlank(item?.id) || `${section}-${items.length + 1}`,
+        section,
+        text: nullIfBlank(item?.text) || "Untitled recommendation",
+        disposition,
+        note: nullIfBlank(item?.staff_disposition_note),
+        updated_at: normalizeTimestampValue(item?.staff_disposition_updated_at),
+      });
+    }
+  }
+  return items;
+}
+
+function buildHealthPlanRecommendationReceiptSummary(plan) {
+  const trackedItems = healthPlanTrackedRecommendationItems(plan);
+  if (!trackedItems.length) return null;
+  const confirmedItems = trackedItems.filter((item) => item.disposition === "confirmed");
+  const deferredItems = trackedItems.filter((item) => item.disposition === "deferred");
+  const escalatedItems = trackedItems.filter((item) => item.disposition === "escalated");
+  const openItems = trackedItems.filter((item) => !item.disposition);
+  const latestUpdatedAt = latestTimestamp(trackedItems.map((item) => item.updated_at));
+  const reasonCodes = [];
+  if (confirmedItems.length) reasonCodes.push("recommendations_confirmed");
+  if (deferredItems.length) reasonCodes.push("recommendations_deferred");
+  if (escalatedItems.length) reasonCodes.push("recommendations_escalated");
+  if (openItems.length) reasonCodes.push("recommendations_unconfirmed");
+  const status =
+    escalatedItems.length > 0
+      ? "escalated"
+      : deferredItems.length > 0 || openItems.length > 0
+        ? "attention_needed"
+        : confirmedItems.length === trackedItems.length
+          ? "clear"
+          : "mixed";
+  const pickItems = (items) => items.slice(0, 4).map((item) => ({
+    id: item.id,
+    section: item.section,
+    text: item.text,
+    ...(item.note ? { note: item.note } : {}),
+    ...(item.updated_at ? { updated_at: item.updated_at } : {}),
+  }));
+  return {
+    status,
+    tracked_count: trackedItems.length,
+    confirmed_count: confirmedItems.length,
+    deferred_count: deferredItems.length,
+    escalated_count: escalatedItems.length,
+    open_count: openItems.length,
+    latest_updated_at: latestUpdatedAt,
+    reason_codes: reasonCodes,
+    confirmed_items: pickItems(confirmedItems),
+    deferred_items: pickItems(deferredItems),
+    escalated_items: pickItems(escalatedItems),
+    open_items: pickItems(openItems),
+  };
+}
+
+function normalizeHealthPlanPlanMemoryRecommendationSnapshotItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const comparisonKey = nullIfBlank(firstValue(value.comparison_key, value.comparisonKey, value.key));
+  const section = nullIfBlank(value.section);
+  const text = nullIfBlank(value.text);
+  if (!comparisonKey || !section || !text) return null;
+  return {
+    comparison_key: comparisonKey,
+    section,
+    text,
+    source_task_code: nullIfBlank(firstValue(value.source_task_code, value.sourceTaskCode)),
+    source_signal_ids: Array.isArray(value.source_signal_ids)
+      ? [...new Set(value.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+    tactic_families: Array.isArray(value.tactic_families)
+      ? [...new Set(value.tactic_families.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    recommendation_provenance_strength: normalizeHealthPlanRecommendationProvenanceStrength(
+      firstValue(value.recommendation_provenance_strength, value.recommendationProvenanceStrength),
+      null,
+    ),
+    recommendation_provenance_score: Number.isFinite(Number(firstValue(value.recommendation_provenance_score, value.recommendationProvenanceScore)))
+      ? Math.max(0, Math.min(100, Math.round(Number(firstValue(value.recommendation_provenance_score, value.recommendationProvenanceScore)))))
+      : null,
+    evidence_review_state: normalizeHealthPlanRecommendationReviewState(firstValue(value.evidence_review_state, value.evidenceReviewState), null),
+    recommendation_use_mode: normalizeHealthPlanRecommendationUseMode(
+      firstValue(value.recommendation_use_mode, value.recommendationUseMode, value.use_mode, value.useMode),
+      null,
+    ),
+    priority: normalizeHealthPlanItemPriority(value.priority, null),
+    due_window: normalizeHealthPlanDueWindow(firstValue(value.due_window, value.dueWindow), null),
+  };
+}
+
+function healthPlanRecommendationComparisonKey(section, item) {
+  const normalizedSection = nullIfBlank(section) || "general";
+  const taskCode = nullIfBlank(item?.source_task_code);
+  if (taskCode) return `task:${normalizedSection}:${taskCode}`;
+  const signalIds = [...new Set((Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []).map((signalId) => nullIfBlank(signalId)).filter(Boolean))].sort();
+  const tacticFamilies = inferHealthPlanRecommendationTacticFamilies(item, normalizedSection).sort();
+  const signalKey = signalIds.join(",");
+  const familyKey = tacticFamilies.join(",");
+  if (signalKey && familyKey) return `signals:${normalizedSection}:${signalKey}|families:${familyKey}`;
+  if (signalKey) return `signals:${normalizedSection}:${signalKey}`;
+  if (familyKey) return `families:${normalizedSection}:${familyKey}`;
+  return `text:${normalizedSection}:${slugToken(item?.text, "recommendation")}`;
+}
+
+function buildHealthPlanRecommendationSnapshot(plan) {
+  if (!plan || typeof plan !== "object") return [];
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan.context_snapshot_json);
+  const sections = [
+    ["goals", normalizeHealthPlanSectionItems(plan?.goals_json)],
+    ["daily_support", normalizeHealthPlanSectionItems(plan?.daily_support_json)],
+    ["monitoring", normalizeHealthPlanSectionItems(plan?.monitoring_json)],
+    ["escalation", normalizeHealthPlanSectionItems(plan?.escalation_json)],
+    ["caregiver_guidance", normalizeHealthPlanSectionItems(plan?.caregiver_guidance_json)],
+  ];
+  const items = [];
+  for (const [section, entries] of sections) {
+    for (const item of entries) {
+      const provenance = deriveHealthPlanRecommendationProvenanceMetadata(item, section, sourceSignals, contextSnapshot);
+      const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(item, section, sourceSignals, contextSnapshot);
+      const useGuidance = deriveHealthPlanRecommendationUseGuidance(item, section, sourceSignals, contextSnapshot);
+      items.push({
+        comparison_key: healthPlanRecommendationComparisonKey(section, item),
+        section,
+        text: nullIfBlank(item?.text) || "Untitled recommendation",
+        ...(nullIfBlank(item?.source_task_code) ? { source_task_code: nullIfBlank(item.source_task_code) } : {}),
+        ...(Array.isArray(item?.source_signal_ids) && item.source_signal_ids.length ? { source_signal_ids: [...new Set(item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))] } : {}),
+        tactic_families: inferHealthPlanRecommendationTacticFamilies(item, section),
+        recommendation_provenance_strength: provenance.recommendation_provenance_strength,
+        recommendation_provenance_score: provenance.recommendation_provenance_score,
+        evidence_review_state: evidenceReview.evidence_review_state,
+        recommendation_use_mode: useGuidance.recommendation_use_mode,
+        ...(normalizeHealthPlanItemPriority(item?.priority, null) ? { priority: normalizeHealthPlanItemPriority(item.priority, null) } : {}),
+        ...(normalizeHealthPlanDueWindow(item?.due_window, null) ? { due_window: normalizeHealthPlanDueWindow(item.due_window, null) } : {}),
+      });
+    }
+  }
+  return items.map((item) => normalizeHealthPlanPlanMemoryRecommendationSnapshotItem(item)).filter(Boolean);
+}
+
+function normalizeHealthPlanPlanMemory(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      has_existing_plan: false,
+      current_plan: null,
+      recent_versions: [],
+      family_outcomes: [],
+      family_outcome_learning: [],
+      family_execution_learning: [],
+      effective_tactic_families: [],
+      contradicted_effective_tactic_families: [],
+      effective_tactic_contradictions: [],
+      stalled_tactic_families: [],
+      recurring_issue_codes: [],
+      repeated_tactic_families: [],
+      learning_highlights: [],
+      planning_cautions: [],
+    };
+  }
+  const currentPlan = objectValue(value.current_plan);
+  return {
+    has_existing_plan: Boolean(value.has_existing_plan),
+    current_plan: currentPlan
+      ? {
+          current_version: Number.isFinite(Number(currentPlan.current_version)) ? Number(currentPlan.current_version) : 1,
+          review_status: nullIfBlank(currentPlan.review_status) === "reviewed" ? "reviewed" : "draft",
+          last_action_type: normalizeHealthPlanActionType(currentPlan.last_action_type, "edited"),
+          generation_confidence: normalizeHealthPlanGenerationConfidence(currentPlan.generation_confidence, null),
+          generated_at: normalizeTimestampValue(currentPlan.generated_at),
+          automated_review_verdict: normalizeHealthPlanAutomatedReviewVerdict(currentPlan.automated_review_verdict, null),
+          approval_gate_state: nullIfBlank(currentPlan.approval_gate_state),
+          quality_score: Number.isFinite(Number(currentPlan.quality_score)) ? Number(currentPlan.quality_score) : null,
+          quality_trust_level: nullIfBlank(currentPlan.quality_trust_level),
+          review_rubric_scores: normalizeHealthPlanAutomatedReviewRubricScores(currentPlan.review_rubric_scores),
+          weak_review_dimensions: Array.isArray(currentPlan.weak_review_dimensions)
+            ? [...new Set(currentPlan.weak_review_dimensions.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          outcome_trajectory:
+            nullIfBlank(currentPlan.outcome_trajectory) === "improved"
+            || nullIfBlank(currentPlan.outcome_trajectory) === "stalled"
+            || nullIfBlank(currentPlan.outcome_trajectory) === "worsened"
+              ? nullIfBlank(currentPlan.outcome_trajectory)
+              : null,
+          outcome_confidence_state:
+            nullIfBlank(currentPlan.outcome_confidence_state) === "verified"
+            || nullIfBlank(currentPlan.outcome_confidence_state) === "mixed"
+            || nullIfBlank(currentPlan.outcome_confidence_state) === "inferred"
+            || nullIfBlank(currentPlan.outcome_confidence_state) === "stale"
+              ? nullIfBlank(currentPlan.outcome_confidence_state)
+              : null,
+          outcome_confidence_reason_codes: Array.isArray(currentPlan.outcome_confidence_reason_codes)
+            ? [...new Set(currentPlan.outcome_confidence_reason_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          outcome_confidence_detail: nullIfBlank(currentPlan.outcome_confidence_detail),
+          outcome_evidence_at: normalizeTimestampValue(currentPlan.outcome_evidence_at),
+          outcome_reason_codes: Array.isArray(currentPlan.outcome_reason_codes)
+            ? [...new Set(currentPlan.outcome_reason_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          outcome_detail: nullIfBlank(currentPlan.outcome_detail),
+          receipt_gap_status:
+            nullIfBlank(currentPlan.receipt_gap_status) === "open"
+            || nullIfBlank(currentPlan.receipt_gap_status) === "stalled"
+              ? nullIfBlank(currentPlan.receipt_gap_status)
+              : null,
+          receipt_gap_reason_codes: Array.isArray(currentPlan.receipt_gap_reason_codes)
+            ? [...new Set(currentPlan.receipt_gap_reason_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          receipt_gap_detail: nullIfBlank(currentPlan.receipt_gap_detail),
+          receipt_gap_missing_receipts: Array.isArray(currentPlan.receipt_gap_missing_receipts)
+            ? [...new Set(currentPlan.receipt_gap_missing_receipts.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          receipt_gap_overdue: Boolean(currentPlan.receipt_gap_overdue),
+          evidence_drift_without_rewrite: Boolean(currentPlan.evidence_drift_without_rewrite),
+          reopened_after_review: Boolean(currentPlan.reopened_after_review),
+          unresolved_required_actions: Array.isArray(currentPlan.unresolved_required_actions)
+            ? currentPlan.unresolved_required_actions.map((item) => nullIfBlank(item)).filter(Boolean)
+            : [],
+          open_issue_codes: Array.isArray(currentPlan.open_issue_codes)
+            ? [...new Set(currentPlan.open_issue_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          watch_issue_codes: Array.isArray(currentPlan.watch_issue_codes)
+            ? [...new Set(currentPlan.watch_issue_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+          recommendation_receipts: normalizeHealthPlanPlanMemoryRecommendationReceipts(currentPlan.recommendation_receipts),
+          recommendation_snapshot: Array.isArray(currentPlan.recommendation_snapshot)
+            ? currentPlan.recommendation_snapshot.map((item) => normalizeHealthPlanPlanMemoryRecommendationSnapshotItem(item)).filter(Boolean)
+            : [],
+          changed_sections: Array.isArray(currentPlan.changed_sections)
+            ? [...new Set(currentPlan.changed_sections.map((item) => nullIfBlank(item)).filter(Boolean))]
+            : [],
+        }
+      : null,
+    recent_versions: Array.isArray(value.recent_versions)
+      ? value.recent_versions
+        .map((entry) => {
+          const record = objectValue(entry);
+          if (!record) return null;
+          return {
+            version_number: Number.isFinite(Number(record.version_number)) ? Number(record.version_number) : 1,
+            action_type: normalizeHealthPlanActionType(record.action_type, "edited"),
+            created_at: normalizeTimestampValue(record.created_at),
+            review_status: nullIfBlank(record.review_status) === "reviewed" ? "reviewed" : "draft",
+            generation_confidence: normalizeHealthPlanGenerationConfidence(record.generation_confidence, null),
+            automated_review_verdict: normalizeHealthPlanAutomatedReviewVerdict(record.automated_review_verdict, null),
+            changed_sections: Array.isArray(record.changed_sections)
+              ? [...new Set(record.changed_sections.map((item) => nullIfBlank(item)).filter(Boolean))]
+              : [],
+            entry_codes: Array.isArray(record.entry_codes)
+              ? [...new Set(record.entry_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+              : [],
+            unresolved_required_actions: Array.isArray(record.unresolved_required_actions)
+              ? record.unresolved_required_actions.map((item) => nullIfBlank(item)).filter(Boolean)
+              : [],
+            open_issue_codes: Array.isArray(record.open_issue_codes)
+              ? [...new Set(record.open_issue_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+              : [],
+          };
+        })
+        .filter(Boolean)
+      : [],
+    family_outcomes: Array.isArray(value.family_outcomes)
+      ? value.family_outcomes.map((entry) => normalizeHealthPlanPlanMemoryFamilyOutcome(entry)).filter(Boolean)
+      : [],
+    family_outcome_learning: Array.isArray(value.family_outcome_learning)
+      ? value.family_outcome_learning.map((entry) => normalizeHealthPlanPlanMemoryFamilyOutcomeLearningEntry(entry)).filter(Boolean)
+      : [],
+    family_execution_learning: Array.isArray(value.family_execution_learning)
+      ? value.family_execution_learning.map((entry) => normalizeHealthPlanPlanMemoryFamilyExecutionLearningEntry(entry)).filter(Boolean)
+      : [],
+    effective_tactic_families: Array.isArray(value.effective_tactic_families)
+      ? [...new Set(value.effective_tactic_families.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    contradicted_effective_tactic_families: Array.isArray(value.contradicted_effective_tactic_families)
+      ? [...new Set(value.contradicted_effective_tactic_families.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    effective_tactic_contradictions: Array.isArray(value.effective_tactic_contradictions)
+      ? value.effective_tactic_contradictions.map((entry) => normalizeHealthPlanPlanMemoryTacticContradiction(entry)).filter(Boolean)
+      : [],
+    stalled_tactic_families: Array.isArray(value.stalled_tactic_families)
+      ? [...new Set(value.stalled_tactic_families.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    recurring_issue_codes: Array.isArray(value.recurring_issue_codes)
+      ? [...new Set(value.recurring_issue_codes.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    repeated_tactic_families: Array.isArray(value.repeated_tactic_families)
+      ? [...new Set(value.repeated_tactic_families.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    learning_highlights: Array.isArray(value.learning_highlights)
+      ? value.learning_highlights.map((item) => nullIfBlank(item)).filter(Boolean)
+      : [],
+    planning_cautions: Array.isArray(value.planning_cautions)
+      ? value.planning_cautions.map((item) => nullIfBlank(item)).filter(Boolean)
+      : [],
+  };
+}
+
+function healthPlanTrustLevelRank(value) {
+  return value === "high" ? 3 : value === "medium" ? 2 : value === "low" ? 1 : 0;
+}
+
+function healthPlanReviewerStatusRank(value) {
+  return value === "ready" ? 3 : value === "needs_review" ? 2 : value === "hold" ? 1 : 0;
+}
+
+function normalizeHealthPlanChangeHighlight(value) {
+  const item = objectValue(value);
+  if (!item) return null;
+  const normalized = normalizeHealthPlanVerificationItem(item);
+  if (!normalized) return null;
+  return {
+    ...normalized,
+    required_sections: Array.isArray(item.required_sections)
+      ? [...new Set(item.required_sections.map((section) => nullIfBlank(section)).filter(Boolean))]
+      : [],
+  };
+}
+
+function normalizeHealthPlanChangeContext(value) {
+  const context = objectValue(value);
+  if (!context) return null;
+  const outcomeTrajectory = nullIfBlank(context.outcome_trajectory);
+  return {
+    must_explain_changes: Boolean(context.must_explain_changes),
+    previous_plan_version: Number.isFinite(Number(context.previous_plan_version))
+      ? Number(context.previous_plan_version)
+      : null,
+    outcome_trajectory:
+      outcomeTrajectory === "improved" || outcomeTrajectory === "stalled" || outcomeTrajectory === "worsened"
+        ? outcomeTrajectory
+        : null,
+    reason_codes: Array.isArray(context.reason_codes)
+      ? [...new Set(context.reason_codes.map((code) => nullIfBlank(code)).filter(Boolean))]
+      : [],
+    highlight_signal_ids: Array.isArray(context.highlight_signal_ids)
+      ? [...new Set(context.highlight_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+    highlights: Array.isArray(context.highlights)
+      ? context.highlights.map((item) => normalizeHealthPlanChangeHighlight(item)).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeHealthPlanCoverageRequirement(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const code = nullIfBlank(value.code);
+  const description = nullIfBlank(value.description);
+  const requiredSignalIds = Array.isArray(value.required_signal_ids)
+    ? [...new Set(value.required_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+    : [];
+  const requiredSections = Array.isArray(value.required_sections)
+    ? [...new Set(value.required_sections.map((section) => nullIfBlank(section)).filter(Boolean))]
+    : [];
+  const priority = nullIfBlank(value.priority);
+  const dueWindow = nullIfBlank(value.due_window);
+  const minimumSectionCoverage = Number(value.minimum_section_coverage);
+  if (!code && !description && !requiredSignalIds.length && !requiredSections.length) return null;
+  return {
+    code,
+    description,
+    required_signal_ids: requiredSignalIds,
+    required_sections: requiredSections,
+    match: value.match === "all" ? "all" : "any",
+    priority: priority === "high" ? "high" : "medium",
+    due_window: dueWindow === "same_day" ? "same_day" : dueWindow === "within_24h" ? "within_24h" : null,
+    minimum_section_coverage: Number.isFinite(minimumSectionCoverage) && minimumSectionCoverage > 0
+      ? Math.max(1, Math.min(requiredSections.length || 1, Math.round(minimumSectionCoverage)))
+      : null,
+  };
+}
+
+function normalizeHealthPlanVerificationItem(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const text = nullIfBlank(firstValue(value.text, value.detail, value.description, value.label));
+  const code = slugToken(firstValue(value.code, value.id), "verification-item");
+  if (!text) return null;
+  return {
+    code,
+    text,
+    priority: nullIfBlank(value.priority) === "high" ? "high" : "medium",
+    due_window: nullIfBlank(value.due_window) === "same_day"
+      ? "same_day"
+      : nullIfBlank(value.due_window) === "within_24h"
+        ? "within_24h"
+        : null,
+    signal_ids: Array.isArray(value.signal_ids)
+      ? [...new Set(value.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+  };
+}
+
+function normalizeHealthPlanAccountabilityCommitment(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const code = slugToken(firstValue(value.code, value.id), "accountability-commitment");
+  const detail = nullIfBlank(firstValue(value.detail, value.text, value.description));
+  const proofHint = nullIfBlank(firstValue(value.proof_hint, value.proofHint));
+  if (!detail) return null;
+  return {
+    code,
+    status:
+      value.status === "covered" || value.status === "open" || value.status === "not_needed"
+        ? value.status
+        : "open",
+    priority: nullIfBlank(value.priority) === "high" ? "high" : nullIfBlank(value.priority) === "low" ? "low" : "medium",
+    due_window: nullIfBlank(value.due_window) === "same_day"
+      ? "same_day"
+      : nullIfBlank(value.due_window) === "within_24h"
+        ? "within_24h"
+        : null,
+    detail,
+    proof_hint: proofHint,
+    signal_ids: Array.isArray(value.signal_ids)
+      ? [...new Set(value.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+  };
+}
+
+function normalizeHealthPlanOutcomeFeedback(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {
+      recent_events: [],
+      planning_cautions: [],
+      execution_brief: null,
+    };
+  }
+  return {
+    recent_events: Array.isArray(value.recent_events)
+      ? value.recent_events.map((item) => normalizeHealthPlanVerificationItem(item)).filter(Boolean)
+      : [],
+    planning_cautions: Array.isArray(value.planning_cautions)
+      ? [...new Set(value.planning_cautions.map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    execution_brief: normalizeHealthPlanExecutionBrief(value.execution_brief),
+  };
+}
+
+function normalizeHealthPlanExecutionBrief(value) {
+  const brief = objectValue(value);
+  if (!brief) return null;
+  const routeState = nullIfBlank(firstValue(brief.route_state, brief.routeState));
+  const recommendedNextRoute = nullIfBlank(firstValue(brief.recommended_next_route, brief.recommendedNextRoute));
+  const missingReceipt = nullIfBlank(firstValue(brief.missing_receipt, brief.missingReceipt));
+  return {
+    route_state:
+      routeState === "idle" || routeState === "attempted" || routeState === "weak" || routeState === "stalled" || routeState === "landed"
+        ? routeState
+        : null,
+    summary_text: nullIfBlank(firstValue(brief.summary_text, brief.summaryText)),
+    latest_client_channel: nullIfBlank(firstValue(brief.latest_client_channel, brief.latestClientChannel))
+      ? normalizeHealthPlanOutreachChannel(firstValue(brief.latest_client_channel, brief.latestClientChannel))
+      : null,
+    route_attempt_count: Number.isFinite(Number(firstValue(brief.route_attempt_count, brief.routeAttemptCount)))
+      ? Math.max(0, Number(firstValue(brief.route_attempt_count, brief.routeAttemptCount)))
+      : 0,
+    repeated_client_channel: nullIfBlank(firstValue(brief.repeated_client_channel, brief.repeatedClientChannel))
+      ? normalizeHealthPlanOutreachChannel(firstValue(brief.repeated_client_channel, brief.repeatedClientChannel))
+      : null,
+    first_contact_recorded: Boolean(firstValue(brief.first_contact_recorded, brief.firstContactRecorded)),
+    handoff_open: Boolean(firstValue(brief.handoff_open, brief.handoffOpen)),
+    escalation_closed: Boolean(firstValue(brief.escalation_closed, brief.escalationClosed)),
+    alternate_audience_open: Boolean(firstValue(brief.alternate_audience_open, brief.alternateAudienceOpen)),
+    recommended_next_route:
+      recommendedNextRoute === "approved_care_circle"
+      || recommendedNextRoute === "switch_client_channel"
+      || recommendedNextRoute === "named_owner_escalation"
+      || recommendedNextRoute === "confirm_current_route"
+        ? recommendedNextRoute
+        : null,
+    missing_receipt:
+      missingReceipt === "first_contact"
+      || missingReceipt === "closure"
+      || missingReceipt === "followthrough"
+        ? missingReceipt
+        : null,
+  };
+}
+
+function normalizeHealthPlanGenerationExecutionTask(value) {
+  const task = objectValue(value);
+  if (!task) return null;
+  return {
+    code: nullIfBlank(task.code),
+    title: nullIfBlank(task.title),
+    detail: nullIfBlank(task.detail),
+    priority: nullIfBlank(task.priority) === "high" ? "high" : nullIfBlank(task.priority) === "low" ? "low" : "medium",
+    due_window: nullIfBlank(task.due_window) === "same_day" ? "same_day" : "within_24h",
+    audience: nullIfBlank(task.audience),
+    owner_label: nullIfBlank(task.owner_label),
+    completion_proof: nullIfBlank(task.completion_proof),
+    escalation_if_not_done: nullIfBlank(task.escalation_if_not_done),
+    signal_ids: Array.isArray(task.signal_ids)
+      ? [...new Set(task.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+  };
+}
+
+function normalizeHealthPlanGenerationExecutionBrief(value) {
+  const brief = objectValue(value);
+  if (!brief) return null;
+  const loadState = nullIfBlank(firstValue(brief.load_state, brief.loadState));
+  return {
+    state: nullIfBlank(brief.state),
+    response_window: nullIfBlank(firstValue(brief.response_window, brief.responseWindow)) === "same_day" ? "same_day" : "within_24h",
+    owner_name: nullIfBlank(firstValue(brief.owner_name, brief.ownerName)),
+    owner_missing: Boolean(firstValue(brief.owner_missing, brief.ownerMissing)),
+    summary_text: nullIfBlank(firstValue(brief.summary_text, brief.summaryText)),
+    next_task_code: nullIfBlank(firstValue(brief.next_task_code, brief.nextTaskCode)),
+    next_task_title: nullIfBlank(firstValue(brief.next_task_title, brief.nextTaskTitle)),
+    opening_move_text: nullIfBlank(firstValue(brief.opening_move_text, brief.openingMoveText)),
+    high_priority_task_count: Number.isFinite(Number(firstValue(brief.high_priority_task_count, brief.highPriorityTaskCount)))
+      ? Math.max(0, Number(firstValue(brief.high_priority_task_count, brief.highPriorityTaskCount)))
+      : 0,
+    same_day_task_count: Number.isFinite(Number(firstValue(brief.same_day_task_count, brief.sameDayTaskCount)))
+      ? Math.max(0, Number(firstValue(brief.same_day_task_count, brief.sameDayTaskCount)))
+      : 0,
+    high_priority_same_day_task_count: Number.isFinite(Number(firstValue(brief.high_priority_same_day_task_count, brief.highPrioritySameDayTaskCount)))
+      ? Math.max(0, Number(firstValue(brief.high_priority_same_day_task_count, brief.highPrioritySameDayTaskCount)))
+      : 0,
+    deferred_task_count: Number.isFinite(Number(firstValue(brief.deferred_task_count, brief.deferredTaskCount)))
+      ? Math.max(0, Number(firstValue(brief.deferred_task_count, brief.deferredTaskCount)))
+      : 0,
+    load_state:
+      loadState === "overloaded" || loadState === "busy" || loadState === "manageable" || loadState === "clear"
+        ? loadState
+        : null,
+    load_reason_codes: Array.isArray(firstValue(brief.load_reason_codes, brief.loadReasonCodes))
+      ? [...new Set(firstValue(brief.load_reason_codes, brief.loadReasonCodes).map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    triage_task_codes: Array.isArray(firstValue(brief.triage_task_codes, brief.triageTaskCodes))
+      ? [...new Set(firstValue(brief.triage_task_codes, brief.triageTaskCodes).map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    triage_summary_text: nullIfBlank(firstValue(brief.triage_summary_text, brief.triageSummaryText)),
+    triage_tasks: Array.isArray(firstValue(brief.triage_tasks, brief.triageTasks))
+      ? firstValue(brief.triage_tasks, brief.triageTasks).map((task) => normalizeHealthPlanGenerationExecutionTask(task)).filter(Boolean)
+      : [],
+  };
+}
+
+function normalizeHealthPlanResponsePathEntry(value) {
+  const entry = objectValue(value);
+  if (!entry) return null;
+  return {
+    timestamp: normalizeTimestampValue(entry.timestamp),
+    author: nullIfBlank(entry.author),
+    audience: entry.audience === "care_circle" ? "care_circle" : "client",
+    channel: normalizeHealthPlanOutreachChannel(entry.channel),
+    state:
+      entry.state === "ready" || entry.state === "review" || entry.state === "hold"
+        ? entry.state
+        : null,
+  };
+}
+
+function normalizeHealthPlanResponsePath(value) {
+  const path = objectValue(value);
+  if (!path) return null;
+  return {
+    latest_outreach: normalizeHealthPlanResponsePathEntry(path.latest_outreach),
+    latest_client_outreach: normalizeHealthPlanResponsePathEntry(path.latest_client_outreach),
+    latest_care_circle_outreach: normalizeHealthPlanResponsePathEntry(path.latest_care_circle_outreach),
+    handoff_open: Boolean(path.handoff_open),
+    owner_assigned: Boolean(path.owner_assigned),
+    first_contact_recorded: Boolean(path.first_contact_recorded),
+    escalation_closed: Boolean(path.escalation_closed),
+    client_route_attempt_count: Number.isFinite(Number(path.client_route_attempt_count))
+      ? Math.max(0, Number(path.client_route_attempt_count))
+      : 0,
+    client_route_channels: Array.isArray(path.client_route_channels)
+      ? [...new Set(path.client_route_channels.map((item) => normalizeHealthPlanOutreachChannel(item)).filter(Boolean))]
+      : [],
+    repeated_client_channel: nullIfBlank(path.repeated_client_channel)
+      ? normalizeHealthPlanOutreachChannel(path.repeated_client_channel)
+      : null,
+    care_circle_route_available: Boolean(path.care_circle_route_available),
+    care_circle_route_used: Boolean(path.care_circle_route_used),
+    alternate_audience_open: Boolean(path.alternate_audience_open),
+  };
+}
+
+function normalizeHealthPlanRouteLearning(value) {
+  const record = objectValue(value);
+  if (!record) return null;
+  const preferredRoute = nullIfBlank(firstValue(record.preferred_route, record.preferredRoute, record.recommended_next_route));
+  const confidence = nullIfBlank(record.confidence);
+  return {
+    preferred_route:
+      preferredRoute === "approved_care_circle"
+      || preferredRoute === "switch_client_channel"
+      || preferredRoute === "named_owner_escalation"
+      || preferredRoute === "confirm_current_route"
+        ? preferredRoute
+        : null,
+    preferred_route_label: nullIfBlank(firstValue(record.preferred_route_label, record.preferredRouteLabel, record.route_label)),
+    confidence:
+      confidence === "high" || confidence === "medium" || confidence === "low"
+        ? confidence
+        : null,
+    summary_text: nullIfBlank(firstValue(record.summary_text, record.summary)),
+    proof_requirement_text: nullIfBlank(firstValue(record.proof_requirement_text, record.proof_requirement, record.completion_proof)),
+    route_cautions: Array.isArray(firstValue(record.route_cautions, record.cautions))
+      ? [...new Set(firstValue(record.route_cautions, record.cautions).map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+    supporting_signal_ids: Array.isArray(firstValue(record.supporting_signal_ids, record.signal_ids, record.signals))
+      ? [...new Set(firstValue(record.supporting_signal_ids, record.signal_ids, record.signals).map((item) => nullIfBlank(item)).filter(Boolean))]
+      : [],
+  };
+}
+
+function normalizeHealthPlanContextSnapshot(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const organization = objectValue(value.organization);
+  const policy = objectValue(value.policy);
+  const client = objectValue(value.client);
+  const health = objectValue(value.health);
+  const medicationActivity = objectValue(value.medication_activity);
+  const checkins = objectValue(value.checkins);
+  const brainCoach = objectValue(value.brain_coach);
+  const predictive = objectValue(value.predictive);
+  const recentOutcomes = objectValue(value.recent_outcomes);
+  const planMemory = objectValue(value.plan_memory);
+  const generationContract = objectValue(value.generation_contract);
+  const generationExecutionBrief = objectValue(value.generation_execution_brief);
+  return {
+    snapshot_version: nullIfBlank(value.snapshot_version) || "health-plan-context-v1",
+    captured_at: normalizeTimestampValue(value.captured_at),
+    language: normalizeLanguage(value.language, "de"),
+    organization: organization
+      ? {
+          name: nullIfBlank(organization.name),
+          country: nullIfBlank(organization.country),
+          timezone: nullIfBlank(organization.timezone),
+          default_language: normalizeLanguage(organization.default_language, normalizeLanguage(value.language, "de")),
+        }
+      : null,
+    policy: policy
+      ? {
+          organization_name: nullIfBlank(policy.organization_name),
+          organization_country: nullIfBlank(policy.organization_country),
+          organization_timezone: nullIfBlank(policy.organization_timezone),
+          organization_default_language: normalizeLanguage(policy.organization_default_language, normalizeLanguage(value.language, "de")),
+          family_sharing_allowed: Boolean(policy.family_sharing_allowed),
+          has_assigned_care_circle: Boolean(policy.has_assigned_care_circle),
+          care_circle_count: Number.isFinite(Number(policy.care_circle_count)) ? Number(policy.care_circle_count) : 0,
+          response_expectation: nullIfBlank(policy.response_expectation),
+          assignment_expectation: nullIfBlank(policy.assignment_expectation),
+          sharing_boundary: nullIfBlank(policy.sharing_boundary),
+        }
+      : null,
+    client: client
+      ? {
+          first_name: nullIfBlank(client.first_name),
+          last_name: nullIfBlank(client.last_name),
+          age: Number.isFinite(Number(client.age)) ? Number(client.age) : null,
+          city: nullIfBlank(client.city),
+          living_context: normalizeLivingContextValue(client.living_context),
+          preferred_language: normalizeLanguage(client.preferred_language, normalizeLanguage(value.language, "de")),
+          family_consent: Boolean(client.family_consent),
+          care_notes: nullIfBlank(client.care_notes),
+        }
+      : null,
+    health: {
+      health_conditions: Array.isArray(health?.health_conditions) ? health.health_conditions.map((item) => nullIfBlank(item)).filter(Boolean) : [],
+      mobility_needs: Array.isArray(health?.mobility_needs) ? health.mobility_needs.map((item) => nullIfBlank(item)).filter(Boolean) : [],
+    },
+    medications: Array.isArray(value.medications)
+      ? value.medications
+        .map((medication) => objectValue(medication))
+        .filter(Boolean)
+        .map((medication) => ({
+          medication_name: nullIfBlank(medication.medication_name),
+          dosage: nullIfBlank(medication.dosage),
+          purpose: nullIfBlank(medication.purpose),
+          frequency: nullIfBlank(medication.frequency),
+          reminders_enabled: medication.reminders_enabled !== false,
+          schedule_times: Array.isArray(medication.schedule_times) ? medication.schedule_times.map((time) => nullIfBlank(time)).filter(Boolean) : [],
+        }))
+      : [],
+    medication_activity: medicationActivity
+      ? {
+          medication_name: nullIfBlank(medicationActivity.medication_name),
+          status: nullIfBlank(medicationActivity.status),
+          occurred_at: normalizeTimestampValue(medicationActivity.occurred_at),
+        }
+      : null,
+    checkins: checkins
+      ? {
+          enabled: Boolean(checkins.enabled),
+          frequency: nullIfBlank(checkins.frequency),
+          preferred_time: nullIfBlank(checkins.preferred_time),
+          last_outcome: nullIfBlank(checkins.last_outcome),
+        }
+      : null,
+    brain_coach: brainCoach
+      ? {
+          enabled: Boolean(brainCoach.enabled),
+          frequency: nullIfBlank(brainCoach.frequency),
+          preferred_time: nullIfBlank(brainCoach.preferred_time),
+          last_outcome: nullIfBlank(brainCoach.last_outcome),
+        }
+      : null,
+    sensors: Array.isArray(value.sensors)
+      ? value.sensors
+        .map((sensor) => objectValue(sensor))
+        .filter(Boolean)
+        .map((sensor) => ({
+          device_name: nullIfBlank(sensor.device_name),
+          sensor_type: nullIfBlank(sensor.sensor_type),
+          status: nullIfBlank(sensor.status),
+          battery_level: Number.isFinite(Number(sensor.battery_level)) ? Number(sensor.battery_level) : null,
+          last_reading_at: normalizeTimestampValue(sensor.last_reading_at),
+        }))
+      : [],
+    alerts: Array.isArray(value.alerts)
+      ? value.alerts
+        .map((alert) => objectValue(alert))
+        .filter(Boolean)
+        .map((alert) => ({
+          severity: nullIfBlank(alert.severity),
+          message: nullIfBlank(alert.message),
+          alert_type: nullIfBlank(alert.alert_type),
+          created_at: normalizeTimestampValue(alert.created_at),
+        }))
+      : [],
+    care_providers: Array.isArray(value.care_providers)
+      ? value.care_providers
+        .map((provider) => objectValue(provider))
+        .filter(Boolean)
+        .map((provider) => ({
+          display_name: nullIfBlank(provider.display_name),
+          provider_type: nullIfBlank(provider.provider_type),
+          is_primary: Boolean(provider.is_primary),
+          relationship_label: nullIfBlank(provider.relationship_label),
+        }))
+      : [],
+    predictive: predictive || { unavailable: true },
+    critical_signal_ids: Array.isArray(value.critical_signal_ids)
+      ? [...new Set(value.critical_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+      : [],
+    must_cover: Array.isArray(value.must_cover)
+      ? value.must_cover.map((requirement) => normalizeHealthPlanCoverageRequirement(requirement)).filter(Boolean)
+      : [],
+    known_facts: Array.isArray(value.known_facts)
+      ? value.known_facts.map((item) => normalizeHealthPlanVerificationItem(item)).filter(Boolean)
+      : [],
+    open_questions: Array.isArray(value.open_questions)
+      ? value.open_questions.map((item) => normalizeHealthPlanVerificationItem(item)).filter(Boolean)
+      : [],
+    next_confirmations: Array.isArray(value.next_confirmations)
+      ? value.next_confirmations.map((item) => normalizeHealthPlanVerificationItem(item)).filter(Boolean)
+      : [],
+    accountability_commitments: Array.isArray(value.accountability_commitments)
+      ? value.accountability_commitments.map((item) => normalizeHealthPlanAccountabilityCommitment(item)).filter(Boolean)
+      : [],
+    decision_branches: Array.isArray(value.decision_branches)
+      ? value.decision_branches.map((item) => normalizeHealthPlanVerificationItem(item)).filter(Boolean)
+      : [],
+    recent_outcomes: normalizeHealthPlanOutcomeFeedback(recentOutcomes),
+    response_path: normalizeHealthPlanResponsePath(value.response_path),
+    route_learning: normalizeHealthPlanRouteLearning(value.route_learning),
+    plan_memory: normalizeHealthPlanPlanMemory(planMemory),
+    change_context: normalizeHealthPlanChangeContext(value.change_context),
+    section_guidance: normalizeHealthPlanSectionGuidance(value.section_guidance),
+    section_evidence_bundles: normalizeHealthPlanSectionEvidenceBundles(value.section_evidence_bundles),
+    generation_contract: normalizeHealthPlanGenerationContract(generationContract),
+    generation_execution_brief: normalizeHealthPlanGenerationExecutionBrief(generationExecutionBrief),
+    generation_assessment: normalizeHealthPlanGenerationAssessment(value.generation_assessment),
+    evidence_digest: normalizeHealthPlanEvidenceDigest(value.evidence_digest),
+    evidence_pack: normalizeHealthPlanEvidencePack(value.evidence_pack),
+    source_signals: normalizeHealthPlanSourceSignals(value.source_signals),
+  };
+}
+
 function normalizeHealthPlanRow(row) {
   if (!row) return null;
-  return {
-    id: String(row.id),
-    vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
-    organization_id: row.organization_id == null ? null : String(row.organization_id),
-    current_version: Number(row.current_version || 1),
-    last_action_type: normalizeHealthPlanActionType(row.last_action_type, "generated"),
-    last_action_at: normalizeTimestampValue(row.last_action_at),
-    last_actor_user_id: nullIfBlank(row.last_actor_user_id),
-    last_actor_email: nullIfBlank(row.last_actor_email),
-    language: normalizeLanguage(row.language, "de"),
-    status: nullIfBlank(row.status) || "current",
-    review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
-    summary_text: nullIfBlank(row.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
-    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
-    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
-    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
-    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
-    generator_provider: nullIfBlank(row.generator_provider),
-    generator_model: nullIfBlank(row.generator_model),
-    generator_version: nullIfBlank(row.generator_version),
-    generated_at: normalizeTimestampValue(row.generated_at),
-    generated_by_user_id: nullIfBlank(row.generated_by_user_id),
-    reviewed_at: normalizeTimestampValue(row.reviewed_at),
-    reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
-    reviewed_by_email: nullIfBlank(row.reviewed_by_email),
-    updated_at: normalizeTimestampValue(row.updated_at),
-  };
+  return enrichHealthPlanRecommendationVerificationTiming(
+    enrichHealthPlanRecommendationUseGuidance(
+      enrichHealthPlanRecommendationProvenance(
+        enrichHealthPlanRecommendationEvidenceReview(
+          enrichHealthPlanRecommendationRationale(
+            enrichHealthPlanRecommendationTrustMetadata(
+              enrichHealthPlanRecommendationActionability({
+              id: String(row.id),
+              vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
+              organization_id: row.organization_id == null ? null : String(row.organization_id),
+              current_version: Number(row.current_version || 1),
+              last_action_type: normalizeHealthPlanActionType(row.last_action_type, "generated"),
+              last_action_at: normalizeTimestampValue(row.last_action_at),
+              last_actor_user_id: nullIfBlank(row.last_actor_user_id),
+              last_actor_email: nullIfBlank(row.last_actor_email),
+              language: normalizeLanguage(row.language, "de"),
+              status: nullIfBlank(row.status) || "current",
+              review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
+              summary_text: nullIfBlank(row.summary_text),
+              goals_json: normalizeHealthPlanSectionItems(row.goals_json),
+              daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
+              monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
+              escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
+              caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
+              source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+              generator_provider: nullIfBlank(row.generator_provider),
+              generator_model: nullIfBlank(row.generator_model),
+              generator_version: nullIfBlank(row.generator_version),
+              generation_confidence: normalizeHealthPlanGenerationConfidence(row.generation_confidence),
+              generation_assessment_json: normalizeHealthPlanGenerationAssessment(row.generation_assessment_json),
+              context_snapshot_json: normalizeHealthPlanContextSnapshot(row.context_snapshot_json),
+              change_summary_json: normalizeHealthPlanChangeSummary(row.change_summary_json),
+              review_valid_until: normalizeTimestampValue(row.review_valid_until),
+              review_attestation_json: normalizeHealthPlanReviewAttestation(row.review_attestation_json),
+              automated_review_json: normalizeHealthPlanAutomatedReview(row.automated_review_json),
+              automated_reviewed_at: normalizeTimestampValue(row.automated_reviewed_at),
+              generated_at: normalizeTimestampValue(row.generated_at),
+              generated_by_user_id: nullIfBlank(row.generated_by_user_id),
+              reviewed_at: normalizeTimestampValue(row.reviewed_at),
+              reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
+              reviewed_by_email: nullIfBlank(row.reviewed_by_email),
+              updated_at: normalizeTimestampValue(row.updated_at),
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 function normalizeHealthPlanRevisionRow(row) {
   if (!row) return null;
+  return enrichHealthPlanRecommendationVerificationTiming(
+    enrichHealthPlanRecommendationUseGuidance(
+      enrichHealthPlanRecommendationProvenance(
+        enrichHealthPlanRecommendationEvidenceReview(
+          enrichHealthPlanRecommendationRationale(
+            enrichHealthPlanRecommendationTrustMetadata(
+              enrichHealthPlanRecommendationActionability({
+              id: String(row.id),
+              health_plan_id: row.health_plan_id == null ? null : String(row.health_plan_id),
+              vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
+              organization_id: row.organization_id == null ? null : String(row.organization_id),
+              version_number: Number(row.version_number || 1),
+              action_type: normalizeHealthPlanActionType(row.action_type, "edited"),
+              actor_user_id: nullIfBlank(row.actor_user_id),
+              actor_email: nullIfBlank(row.actor_email),
+              created_at: normalizeTimestampValue(row.created_at),
+              language: normalizeLanguage(row.language, "de"),
+              status: nullIfBlank(row.status) || "current",
+              review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
+              summary_text: nullIfBlank(row.summary_text),
+              goals_json: normalizeHealthPlanSectionItems(row.goals_json),
+              daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
+              monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
+              escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
+              caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
+              source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+              generator_provider: nullIfBlank(row.generator_provider),
+              generator_model: nullIfBlank(row.generator_model),
+              generator_version: nullIfBlank(row.generator_version),
+              generation_confidence: normalizeHealthPlanGenerationConfidence(row.generation_confidence),
+              generation_assessment_json: normalizeHealthPlanGenerationAssessment(row.generation_assessment_json),
+              context_snapshot_json: normalizeHealthPlanContextSnapshot(row.context_snapshot_json),
+              change_summary_json: normalizeHealthPlanChangeSummary(row.change_summary_json),
+              review_valid_until: normalizeTimestampValue(row.review_valid_until),
+              review_attestation_json: normalizeHealthPlanReviewAttestation(row.review_attestation_json),
+              automated_review_json: normalizeHealthPlanAutomatedReview(row.automated_review_json),
+              automated_reviewed_at: normalizeTimestampValue(row.automated_reviewed_at),
+              generated_at: normalizeTimestampValue(row.generated_at),
+              generated_by_user_id: nullIfBlank(row.generated_by_user_id),
+              reviewed_at: normalizeTimestampValue(row.reviewed_at),
+              reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
+              reviewed_by_email: nullIfBlank(row.reviewed_by_email),
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+function healthPlanSectionSignalIds(items) {
+  const ids = new Set();
+  for (const item of Array.isArray(items) ? items : []) {
+    for (const signalId of Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []) {
+      const normalized = nullIfBlank(signalId);
+      if (normalized) ids.add(normalized);
+    }
+  }
+  return ids;
+}
+
+function serializedHealthPlanSection(items) {
+  return JSON.stringify(
+    (Array.isArray(items) ? items : []).map((item) => ({
+      text: nullIfBlank(item?.text) || "",
+      source_signal_ids: [...new Set((Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []).map((signalId) => nullIfBlank(signalId)).filter(Boolean))].sort(),
+    })),
+  );
+}
+
+function healthPlanFingerprint(value) {
+  return crypto.createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+}
+
+function healthPlanContentFingerprint(plan) {
+  return healthPlanFingerprint({
+    language: normalizeLanguage(plan?.language, "de"),
+    summary_text: nullIfBlank(plan?.summary_text),
+    goals_json: normalizeHealthPlanSectionItems(plan?.goals_json),
+    daily_support_json: normalizeHealthPlanSectionItems(plan?.daily_support_json),
+    monitoring_json: normalizeHealthPlanSectionItems(plan?.monitoring_json),
+    escalation_json: normalizeHealthPlanSectionItems(plan?.escalation_json),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(plan?.caregiver_guidance_json),
+  });
+}
+
+function healthPlanEvidenceFingerprint(plan) {
+  return healthPlanFingerprint({
+    source_signals_json: normalizeHealthPlanSourceSignals(plan?.source_signals_json),
+    generation_assessment_json: normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json),
+    context_snapshot_json: normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json),
+  });
+}
+
+function healthPlanReviewFingerprint(plan) {
+  return healthPlanFingerprint({
+    review_status: plan?.review_status === "reviewed" ? "reviewed" : "draft",
+    review_valid_until: normalizeTimestampValue(plan?.review_valid_until),
+    review_attestation_json: normalizeHealthPlanReviewAttestation(plan?.review_attestation_json),
+    automated_review_json: normalizeHealthPlanAutomatedReview(plan?.automated_review_json),
+    automated_reviewed_at: normalizeTimestampValue(plan?.automated_reviewed_at),
+  });
+}
+
+function buildPatchedHealthPlanDraft(existingPlan, patch = {}) {
+  if (!existingPlan) return null;
   return {
-    id: String(row.id),
-    health_plan_id: row.health_plan_id == null ? null : String(row.health_plan_id),
-    vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
-    organization_id: row.organization_id == null ? null : String(row.organization_id),
-    version_number: Number(row.version_number || 1),
-    action_type: normalizeHealthPlanActionType(row.action_type, "edited"),
-    actor_user_id: nullIfBlank(row.actor_user_id),
-    actor_email: nullIfBlank(row.actor_email),
-    created_at: normalizeTimestampValue(row.created_at),
-    language: normalizeLanguage(row.language, "de"),
-    status: nullIfBlank(row.status) || "current",
-    review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
-    summary_text: nullIfBlank(row.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
-    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
-    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
-    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
-    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
-    generator_provider: nullIfBlank(row.generator_provider),
-    generator_model: nullIfBlank(row.generator_model),
-    generator_version: nullIfBlank(row.generator_version),
-    generated_at: normalizeTimestampValue(row.generated_at),
-    generated_by_user_id: nullIfBlank(row.generated_by_user_id),
-    reviewed_at: normalizeTimestampValue(row.reviewed_at),
-    reviewed_by_user_id: nullIfBlank(row.reviewed_by_user_id),
-    reviewed_by_email: nullIfBlank(row.reviewed_by_email),
+    language: normalizeLanguage(patch?.language, existingPlan.language || "de"),
+    summary_text:
+      patch && Object.prototype.hasOwnProperty.call(patch, "summary_text")
+        ? nullIfBlank(patch.summary_text)
+        : nullIfBlank(existingPlan.summary_text),
+    goals_json:
+      patch && (Object.prototype.hasOwnProperty.call(patch, "goals_json") || Object.prototype.hasOwnProperty.call(patch, "goals"))
+        ? normalizeHealthPlanSectionItems(patch.goals_json ?? patch.goals)
+        : normalizeHealthPlanSectionItems(existingPlan.goals_json),
+    daily_support_json:
+      patch && (Object.prototype.hasOwnProperty.call(patch, "daily_support_json") || Object.prototype.hasOwnProperty.call(patch, "daily_support"))
+        ? normalizeHealthPlanSectionItems(patch.daily_support_json ?? patch.daily_support)
+        : normalizeHealthPlanSectionItems(existingPlan.daily_support_json),
+    monitoring_json:
+      patch && (Object.prototype.hasOwnProperty.call(patch, "monitoring_json") || Object.prototype.hasOwnProperty.call(patch, "monitoring"))
+        ? normalizeHealthPlanSectionItems(patch.monitoring_json ?? patch.monitoring)
+        : normalizeHealthPlanSectionItems(existingPlan.monitoring_json),
+    escalation_json:
+      patch && (Object.prototype.hasOwnProperty.call(patch, "escalation_json") || Object.prototype.hasOwnProperty.call(patch, "escalation"))
+        ? normalizeHealthPlanSectionItems(patch.escalation_json ?? patch.escalation)
+        : normalizeHealthPlanSectionItems(existingPlan.escalation_json),
+    caregiver_guidance_json:
+      patch && (Object.prototype.hasOwnProperty.call(patch, "caregiver_guidance_json") || Object.prototype.hasOwnProperty.call(patch, "caregiver_guidance"))
+        ? normalizeHealthPlanSectionItems(patch.caregiver_guidance_json ?? patch.caregiver_guidance)
+        : normalizeHealthPlanSectionItems(existingPlan.caregiver_guidance_json),
+  };
+}
+
+function hasMaterialHealthPlanEdits(existingPlan, patch = {}) {
+  if (!existingPlan) return false;
+  const nextPlan = buildPatchedHealthPlanDraft(existingPlan, patch);
+  if (!nextPlan) return false;
+  if (normalizeLanguage(existingPlan.language, "de") !== nextPlan.language) return true;
+  if (nullIfBlank(existingPlan.summary_text) !== nextPlan.summary_text) return true;
+  return [
+    "goals_json",
+    "daily_support_json",
+    "monitoring_json",
+    "escalation_json",
+    "caregiver_guidance_json",
+  ].some((key) => serializedHealthPlanSection(existingPlan[key]) !== serializedHealthPlanSection(nextPlan[key]));
+}
+
+function resolveHealthPlanReviewWriteState(existingPlan, patch = {}) {
+  const requestedReviewed = patch?.review_status === "reviewed";
+  const requestedDraft = patch?.review_status === "draft";
+  const materialEdit = hasMaterialHealthPlanEdits(existingPlan, patch);
+  const currentlyReviewed = existingPlan?.review_status === "reviewed";
+
+  if (requestedReviewed) {
+    return {
+      requestedReviewStatus: "reviewed",
+      preserveReviewedMetadata: false,
+      materialEdit,
+      reopenedForReview: false,
+    };
+  }
+
+  if (requestedDraft) {
+    return {
+      requestedReviewStatus: "draft",
+      preserveReviewedMetadata: false,
+      materialEdit,
+      reopenedForReview: currentlyReviewed,
+    };
+  }
+
+  if (currentlyReviewed && materialEdit) {
+    return {
+      requestedReviewStatus: "draft",
+      preserveReviewedMetadata: false,
+      materialEdit: true,
+      reopenedForReview: true,
+    };
+  }
+
+  return {
+    requestedReviewStatus: currentlyReviewed ? "reviewed" : "draft",
+    preserveReviewedMetadata: currentlyReviewed,
+    materialEdit,
+    reopenedForReview: false,
+  };
+}
+
+function buildHealthPlanChangeSummary(previousPlan, nextPlan, actionType = "edited") {
+  const normalizedActionType = normalizeHealthPlanActionType(actionType, "edited");
+  const previousSignals = previousPlan ? healthPlanReferencedSignalIds({ ...previousPlan, summary_text: null }) : new Set();
+  const nextSignals = healthPlanReferencedSignalIds({ ...nextPlan, summary_text: null });
+  const previousSourceSignals = previousPlan ? sourceSignalIdSet(previousPlan.source_signals_json) : new Set();
+  const nextSourceSignals = sourceSignalIdSet(nextPlan.source_signals_json);
+  const changedSections = [];
+  const sectionKeys = ["goals_json", "daily_support_json", "monitoring_json", "escalation_json", "caregiver_guidance_json"];
+
+  if (!previousPlan || nullIfBlank(previousPlan.summary_text) !== nullIfBlank(nextPlan.summary_text)) {
+    changedSections.push("summary");
+  }
+  for (const key of sectionKeys) {
+    if (!previousPlan || serializedHealthPlanSection(previousPlan[key]) !== serializedHealthPlanSection(nextPlan[key])) {
+      changedSections.push(key.replace(/_json$/, ""));
+    }
+  }
+
+  const signalsAdded = [...nextSignals].filter((signalId) => !previousSignals.has(signalId)).sort();
+  const signalsRemoved = [...previousSignals].filter((signalId) => !nextSignals.has(signalId)).sort();
+  const sourceSignalsAdded = [...nextSourceSignals].filter((signalId) => !previousSourceSignals.has(signalId)).sort();
+  const sourceSignalsRemoved = [...previousSourceSignals].filter((signalId) => !nextSourceSignals.has(signalId)).sort();
+  const previousReviewStatus = previousPlan?.review_status === "reviewed" ? "reviewed" : "draft";
+  const nextReviewStatus = nextPlan?.review_status === "reviewed" ? "reviewed" : "draft";
+  const reviewTransition =
+    !previousPlan || previousReviewStatus === nextReviewStatus ? null : `${previousReviewStatus}_to_${nextReviewStatus}`;
+  const previousConfidence = normalizeHealthPlanGenerationConfidence(previousPlan?.generation_confidence, null);
+  const nextConfidence = normalizeHealthPlanGenerationConfidence(nextPlan?.generation_confidence, null);
+  const confidenceTransition =
+    previousPlan && previousConfidence && nextConfidence && previousConfidence !== nextConfidence
+      ? `${previousConfidence}_to_${nextConfidence}`
+      : null;
+  const previousContentFingerprint = previousPlan ? healthPlanContentFingerprint(previousPlan) : null;
+  const nextContentFingerprint = healthPlanContentFingerprint(nextPlan);
+  const nextEvidenceFingerprint = healthPlanEvidenceFingerprint(nextPlan);
+  const nextReviewFingerprint = healthPlanReviewFingerprint(nextPlan);
+  const generationAssessmentChanged = previousPlan
+    ? JSON.stringify(normalizeHealthPlanGenerationAssessment(previousPlan.generation_assessment_json))
+      !== JSON.stringify(normalizeHealthPlanGenerationAssessment(nextPlan.generation_assessment_json))
+    : false;
+  const contextSnapshotChanged = previousPlan
+    ? JSON.stringify(normalizeHealthPlanContextSnapshot(previousPlan.context_snapshot_json))
+      !== JSON.stringify(normalizeHealthPlanContextSnapshot(nextPlan.context_snapshot_json))
+    : false;
+  const evidenceInputsChanged = previousPlan
+    ? healthPlanEvidenceFingerprint(previousPlan) !== nextEvidenceFingerprint
+    : false;
+  const evidenceRefreshCount =
+    sourceSignalsAdded.length +
+    sourceSignalsRemoved.length +
+    Number(generationAssessmentChanged) +
+    Number(contextSnapshotChanged);
+  const reviewWindowChanged = previousPlan
+    ? normalizeTimestampValue(previousPlan.review_valid_until) !== normalizeTimestampValue(nextPlan.review_valid_until)
+    : false;
+  const reviewAttestationChanged = previousPlan
+    ? JSON.stringify(normalizeHealthPlanReviewAttestation(previousPlan.review_attestation_json))
+      !== JSON.stringify(normalizeHealthPlanReviewAttestation(nextPlan.review_attestation_json))
+    : false;
+  const automatedReviewChanged = previousPlan
+    ? JSON.stringify(normalizeHealthPlanAutomatedReview(previousPlan.automated_review_json))
+      !== JSON.stringify(normalizeHealthPlanAutomatedReview(nextPlan.automated_review_json))
+    : false;
+
+  const entries = [];
+  if (!previousPlan) {
+    entries.push({ code: "baseline_created" });
+  } else if (normalizedActionType === "regenerated") {
+    entries.push({ code: "plan_regenerated" });
+  }
+  if (changedSections.length) {
+    entries.push({ code: "sections_updated", sections: changedSections, count: changedSections.length });
+  }
+  if (signalsAdded.length) {
+    entries.push({ code: "signals_added", signal_ids: signalsAdded, count: signalsAdded.length });
+  }
+  if (signalsRemoved.length) {
+    entries.push({ code: "signals_removed", signal_ids: signalsRemoved, count: signalsRemoved.length });
+  }
+  if (evidenceInputsChanged) {
+    entries.push({
+      code: "evidence_inputs_changed",
+      count: evidenceRefreshCount,
+    });
+  }
+  if (!changedSections.length && evidenceInputsChanged && previousContentFingerprint === nextContentFingerprint) {
+    entries.push({ code: "content_stable_evidence_shifted" });
+  }
+  if (reviewTransition === "draft_to_reviewed") {
+    entries.push({ code: "review_marked" });
+  } else if (reviewTransition === "reviewed_to_draft") {
+    entries.push({ code: "review_reopened" });
+  }
+  if (confidenceTransition) {
+    const [from, to] = confidenceTransition.split("_to_");
+    entries.push({ code: "generation_confidence_changed", from, to });
+  }
+  if (automatedReviewChanged) {
+    entries.push({ code: "automated_review_refreshed" });
+  }
+  if (reviewAttestationChanged) {
+    entries.push({ code: "review_attestation_updated" });
+  }
+  if (reviewWindowChanged) {
+    entries.push({ code: "review_window_updated" });
+  }
+  if (!entries.length) {
+    entries.push({ code: "metadata_only_update" });
+  }
+
+  return normalizeHealthPlanChangeSummary({
+    change_kind: previousPlan ? "update" : "baseline",
+    action_type: normalizedActionType,
+    changed_sections: changedSections,
+    signals_added: signalsAdded,
+    signals_removed: signalsRemoved,
+    source_signals_added: sourceSignalsAdded,
+    source_signals_removed: sourceSignalsRemoved,
+    review_transition: reviewTransition,
+    generation_confidence_transition: confidenceTransition,
+    content_fingerprint: nextContentFingerprint,
+    evidence_fingerprint: nextEvidenceFingerprint,
+    review_fingerprint: nextReviewFingerprint,
+    entries,
+  });
+}
+
+function buildHealthPlanReviewValidUntil(reviewedAt, profile, predictiveContext, organization = null, language = "de") {
+  const reviewedDate = reviewedAt instanceof Date ? reviewedAt : new Date(reviewedAt || Date.now());
+  if (Number.isNaN(reviewedDate.getTime())) return null;
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const hours = policy.response_expectation === "same-day review" ? 12 : 72;
+  return new Date(reviewedDate.getTime() + hours * 60 * 60 * 1000).toISOString();
+}
+
+function requiredHealthPlanReviewConfirmationCodes() {
+  return ["summary", "timing", "escalation", "sharing_boundary"];
+}
+
+function reviewAttestationHasRequiredConfirmations(attestation) {
+  const codes = new Set(
+    (Array.isArray(attestation?.operator_confirmation_codes) ? attestation.operator_confirmation_codes : [])
+      .map((code) => nullIfBlank(code))
+      .filter(Boolean),
+  );
+  return requiredHealthPlanReviewConfirmationCodes().every((code) => codes.has(code));
+}
+
+function mergeHealthPlanReviewAttestation(baseAttestation, providedAttestation = null, reviewedAt = null) {
+  const base = normalizeHealthPlanReviewAttestation(baseAttestation) || {};
+  const provided = normalizeHealthPlanReviewAttestation(providedAttestation) || {};
+  return normalizeHealthPlanReviewAttestation({
+    ...base,
+    checked_at: normalizeTimestampValue(reviewedAt) || provided.checked_at || base.checked_at || new Date().toISOString(),
+    operator_confirmation_codes: [
+      ...new Set([
+        ...((Array.isArray(base.operator_confirmation_codes) ? base.operator_confirmation_codes : []).filter(Boolean)),
+        ...((Array.isArray(provided.operator_confirmation_codes) ? provided.operator_confirmation_codes : []).filter(Boolean)),
+      ]),
+    ],
+    reviewer_note: provided.reviewer_note || base.reviewer_note || null,
+  });
+}
+
+function buildHealthPlanReviewApproval(plan, profile, predictiveContext, organization = null, reviewedAt = new Date()) {
+  if (!plan) {
+    return { allowed: false, reason: "health_plan_missing", audit: null, review: null, valid_until: null, attestation: null };
+  }
+  const reviewedAtIso = normalizeTimestampValue(reviewedAt) || new Date().toISOString();
+  const reviewValidUntil = buildHealthPlanReviewValidUntil(
+    reviewedAtIso,
+    profile,
+    predictiveContext,
+    organization,
+    plan.language || profile?.user?.language || organization?.defaultLanguage || "de",
+  );
+  const candidatePlan = {
+    ...plan,
+    review_status: "reviewed",
+    reviewed_at: reviewedAtIso,
+    review_valid_until: reviewValidUntil,
+  };
+  const audit = buildHealthPlanAudit(candidatePlan, profile, predictiveContext, organization, new Date(reviewedAtIso));
+  const review = buildHealthPlanReviewerAssessment(candidatePlan, profile, predictiveContext, organization, audit);
+  const quality = buildHealthPlanQualitySummary(candidatePlan, profile, predictiveContext, organization, new Date(reviewedAtIso), audit, review);
+  const coordination = buildHealthPlanCoordinationSummary(candidatePlan, profile, predictiveContext, organization, new Date(reviewedAtIso), audit, review);
+  const approvalGate = buildHealthPlanApprovalGate(
+    candidatePlan,
+    profile,
+    predictiveContext,
+    organization,
+    new Date(reviewedAtIso),
+    audit,
+    review,
+    quality,
+    coordination,
+  );
+  const allowed = Boolean(approvalGate?.ready_for_approval);
+  const attestation = normalizeHealthPlanReviewAttestation({
+    approved_for_sharing: allowed,
+    checked_at: reviewedAtIso,
+    response_expectation: review?.response_expectation || audit?.response_expectation || null,
+    checklist_codes: Array.isArray(review?.checks) ? review.checks.filter((check) => check?.state === "good").map((check) => check.code) : [],
+    open_issue_codes: Array.isArray(review?.checks) ? review.checks.filter((check) => check?.state !== "good").map((check) => check.code) : [],
+    reason_codes: Array.isArray(audit?.reasons) ? audit.reasons.map((reason) => reason.code) : [],
+    generation_confidence: plan.generation_confidence || null,
+    audit_status: audit?.status || null,
+    review_status: review?.status || null,
+    blocking_issue_codes: Array.isArray(approvalGate?.blocking_issue_codes) ? approvalGate.blocking_issue_codes : [],
+    watch_issue_codes: Array.isArray(approvalGate?.watch_issue_codes) ? approvalGate.watch_issue_codes : [],
+    approval_gate_state: approvalGate?.state || null,
+    coordination_state: coordination?.state || null,
+    quality_score: quality?.score ?? null,
+    quality_trust_level: quality?.trust_level || null,
+  });
+  return {
+    allowed,
+    reason: allowed
+      ? null
+      : approvalGate?.must_regenerate
+        ? "audit_failed"
+        : review?.status === "hold" || approvalGate?.state === "blocked"
+          ? "review_blocked"
+          : "review_not_ready",
+    audit,
+    review,
+    quality,
+    coordination,
+    approval_gate: approvalGate,
+    valid_until: reviewValidUntil,
+    attestation,
+  };
+}
+
+function healthPlanReferencedSignalIds(plan) {
+  const ids = new Set();
+  const sections = [
+    plan?.goals_json,
+    plan?.daily_support_json,
+    plan?.monitoring_json,
+    plan?.escalation_json,
+    plan?.caregiver_guidance_json,
+  ];
+  for (const section of sections) {
+    for (const signalId of healthPlanSectionSignalIds(section)) ids.add(signalId);
+  }
+  return ids;
+}
+
+function healthPlanActionSignalIds(plan) {
+  return healthPlanSectionSignalIds([
+    ...(Array.isArray(plan?.monitoring_json) ? plan.monitoring_json : []),
+    ...(Array.isArray(plan?.escalation_json) ? plan.escalation_json : []),
+  ]);
+}
+
+function describeHealthPlanSignalLabels(signalIds, primarySignals = [], secondarySignals = []) {
+  const labelMap = new Map(
+    [...(Array.isArray(primarySignals) ? primarySignals : []), ...(Array.isArray(secondarySignals) ? secondarySignals : [])]
+      .map((signal) => [nullIfBlank(signal?.id), nullIfBlank(signal?.label)])
+      .filter(([id, label]) => id && label),
+  );
+  return signalIds
+    .map((signalId) => labelMap.get(signalId) || signalId)
+    .filter(Boolean);
+}
+
+function buildHealthPlanAudit(plan, profile, predictiveContext, organization = null, now = new Date()) {
+  if (!plan) return null;
+
+  const language = normalizeLanguage(
+    plan.language,
+    profile?.user?.language || organization?.defaultLanguage || "de",
+  );
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const savedSignals = Array.isArray(plan.source_signals_json) ? plan.source_signals_json : [];
+  const currentSignals = assembleRichHealthPlanSourceSignals(profile, predictiveContext);
+  const currentCriticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, currentSignals);
+  const savedSignalIds = new Set(savedSignals.map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const referencedSignalIds = healthPlanReferencedSignalIds(plan);
+  const actionSignalIds = healthPlanActionSignalIds(plan);
+  const sections = [
+    ...(Array.isArray(plan.goals_json) ? plan.goals_json : []),
+    ...(Array.isArray(plan.daily_support_json) ? plan.daily_support_json : []),
+    ...(Array.isArray(plan.monitoring_json) ? plan.monitoring_json : []),
+    ...(Array.isArray(plan.escalation_json) ? plan.escalation_json : []),
+    ...(Array.isArray(plan.caregiver_guidance_json) ? plan.caregiver_guidance_json : []),
+  ];
+  const itemsWithoutEvidence = sections.filter((item) => !Array.isArray(item?.source_signal_ids) || !item.source_signal_ids.length).length;
+  const generatedAt = normalizeTimestampValue(plan.generated_at);
+  const generatedAtDate = generatedAt ? new Date(generatedAt) : null;
+  const ageHours =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? Math.max(0, (now.getTime() - generatedAtDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const currentSignalsById = new Map(currentSignals.map((signal) => [signal.id, signal]));
+  const newCriticalSignalIds = currentCriticalSignalIds.filter((signalId) => !savedSignalIds.has(signalId));
+  const unaddressedCurrentCriticalSignalIds = currentCriticalSignalIds.filter(
+    (signalId) => savedSignalIds.has(signalId) && !actionSignalIds.has(signalId),
+  );
+  const predictiveAvailableNow = Boolean(
+    predictiveContext?.latestScore || (Array.isArray(predictiveContext?.forecastRows) && predictiveContext.forecastRows.length),
+  );
+  const predictiveUsedAtGeneration = savedSignals.some((signal) => {
+    const category = normalizeHealthPlanSignalCategory(signal?.category, "context");
+    return (category === "risk" || category === "forecast") && nullIfBlank(signal?.id) !== "context-live-profile-only";
+  });
+  const reviewValidUntil = normalizeTimestampValue(plan.review_valid_until);
+  const reviewValidUntilDate = reviewValidUntil ? new Date(reviewValidUntil) : null;
+  const automatedReview = normalizeHealthPlanAutomatedReview(plan.automated_review_json);
+  const automatedReviewedAt = normalizeTimestampValue(plan.automated_reviewed_at || automatedReview?.checked_at);
+  const automatedReviewedAtDate = automatedReviewedAt ? new Date(automatedReviewedAt) : null;
+  const reasons = [];
+  const policyReasons = buildHealthPlanOperationalPolicyReasons(plan, profile, predictiveContext, organization, now);
+
+  if (plan.review_status !== "reviewed") {
+    reasons.push({
+      code: "draft_review_required",
+      severity: "medium",
+      detail: "Staff review is still required before this plan should be shared.",
+    });
+  }
+
+  if (plan.generator_provider === "fallback") {
+    reasons.push({
+      code: "fallback_generation",
+      severity: "medium",
+      detail: "This plan was generated from the deterministic fallback rather than the LLM pipeline.",
+    });
+  }
+
+  if (!generatedAt) {
+    reasons.push({
+      code: "missing_generation_time",
+      severity: "high",
+      detail: "The saved plan has no reliable generation timestamp.",
+    });
+  } else if (ageHours != null) {
+    if (policy.response_expectation === "same-day review" && ageHours > 24) {
+      reasons.push({
+        code: "stale_same_day_window",
+        severity: "high",
+        detail: `The plan is ${Math.round(ageHours)} hours old even though the current care picture needs same-day follow-up.`,
+      });
+    } else if (ageHours > 24 * 7) {
+      reasons.push({
+        code: "stale_review_window",
+        severity: "medium",
+        detail: `The plan is ${Math.round(ageHours / 24)} days old and should be reviewed against the latest care context.`,
+      });
+    }
+  }
+
+  if (!savedSignalIds.size) {
+    reasons.push({
+      code: "missing_saved_signals",
+      severity: "high",
+      detail: "The saved plan has no evidence snapshot attached to it.",
+    });
+  }
+
+  if (itemsWithoutEvidence > 0) {
+    reasons.push({
+      code: "items_missing_evidence",
+      severity: "medium",
+      detail: `${itemsWithoutEvidence} plan item${itemsWithoutEvidence === 1 ? "" : "s"} are missing evidence links.`,
+    });
+  }
+
+  if (predictiveAvailableNow && !predictiveUsedAtGeneration) {
+    reasons.push({
+      code: "predictive_now_available",
+      severity: "medium",
+      detail: "Predictive inputs are available now, but this saved plan was generated without them.",
+    });
+  }
+
+  if (newCriticalSignalIds.length) {
+    const labels = describeHealthPlanSignalLabels(newCriticalSignalIds, currentSignals, savedSignals);
+    reasons.push({
+      code: "new_critical_signals",
+      severity: "high",
+      signal_ids: newCriticalSignalIds,
+      detail: `New critical signals now require action: ${labels.join(", ")}.`,
+    });
+  }
+
+  if (unaddressedCurrentCriticalSignalIds.length) {
+    const labels = describeHealthPlanSignalLabels(unaddressedCurrentCriticalSignalIds, currentSignals, savedSignals);
+    reasons.push({
+      code: "critical_signals_not_actioned",
+      severity: "high",
+      signal_ids: unaddressedCurrentCriticalSignalIds,
+      detail: `Current critical signals are present in the plan context but not turned into monitoring or escalation steps: ${labels.join(", ")}.`,
+    });
+  }
+
+  if (
+    plan.review_status === "reviewed"
+    && reviewValidUntilDate
+    && !Number.isNaN(reviewValidUntilDate.getTime())
+    && reviewValidUntilDate.getTime() < now.getTime()
+  ) {
+    reasons.push({
+      code: "review_attestation_expired",
+      severity: policy.response_expectation === "same-day review" ? "high" : "medium",
+      detail: `The last review approval expired at ${reviewValidUntilDate.toISOString()} and should be refreshed against the current care picture.`,
+    });
+  }
+
+  if (automatedReview?.verdict === "block") {
+    reasons.push({
+      code: "automated_review_blocked",
+      severity: "high",
+      detail: automatedReview.summary_text || "Automated review found blocking issues in the saved plan.",
+    });
+  } else if (automatedReview?.verdict === "revise") {
+    reasons.push({
+      code: "automated_review_requested_revisions",
+      severity: "medium",
+      detail: automatedReview.summary_text || "Automated review requested revisions before broader reliance.",
+    });
+  }
+
+  if (generatedAtDate && automatedReviewedAtDate && !Number.isNaN(generatedAtDate.getTime()) && !Number.isNaN(automatedReviewedAtDate.getTime()) && automatedReviewedAtDate.getTime() < generatedAtDate.getTime()) {
+    reasons.push({
+      code: "automated_review_stale",
+      severity: "medium",
+      detail: "Automated review is older than the saved plan content and should be refreshed.",
+    });
+  }
+
+  for (const reason of policyReasons) {
+    if (!reasons.some((existingReason) => existingReason.code === reason.code)) {
+      reasons.push(reason);
+    }
+  }
+
+  const status = reasons.some((reason) => reason.severity === "high")
+    ? "needs_regeneration"
+    : reasons.length
+      ? "needs_review"
+      : "ready";
+
+  return {
+    status,
+    review_required: status !== "ready",
+    regeneration_recommended: status === "needs_regeneration",
+    reviewed: plan.review_status === "reviewed",
+    generated_with_fallback: plan.generator_provider === "fallback",
+    predictive_available_now: predictiveAvailableNow,
+    predictive_used_at_generation: predictiveUsedAtGeneration,
+    response_expectation: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+    review_valid_until: reviewValidUntil,
+    checked_at: now.toISOString(),
+    saved_signal_count: savedSignalIds.size,
+    referenced_signal_count: referencedSignalIds.size,
+    current_signal_count: currentSignals.length,
+    current_critical_signal_ids: currentCriticalSignalIds,
+    new_critical_signal_ids: newCriticalSignalIds,
+    unaddressed_current_critical_signal_ids: unaddressedCurrentCriticalSignalIds,
+    reasons,
+  };
+}
+
+function planSectionText(plan, sectionNames = []) {
+  const resolvedNames = sectionNames.length
+    ? sectionNames
+    : ["summary", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"];
+  const fragments = [];
+  for (const sectionName of resolvedNames) {
+    if (sectionName === "summary") {
+      const summary = nullIfBlank(plan?.summary_text);
+      if (summary) fragments.push(summary);
+      continue;
+    }
+    const key = `${sectionName}_json`;
+    for (const item of Array.isArray(plan?.[key]) ? plan[key] : []) {
+      const text = nullIfBlank(item?.text);
+      if (text) fragments.push(text);
+    }
+  }
+  return fragments.join(" ").toLowerCase();
+}
+
+function textMatchesAny(text, matchers = []) {
+  return matchers.some((matcher) => {
+    if (matcher instanceof RegExp) return matcher.test(text);
+    const token = String(matcher || "").trim().toLowerCase();
+    return token ? text.includes(token) : false;
+  });
+}
+
+function healthPlanOwnerMentioned(text) {
+  return textMatchesAny(text, [
+    /\bnamed owner\b/,
+    /\bassign\b.{0,40}\b(owner|staff|follow-up|respons)/,
+    /\bresponsible\b/,
+    /\bpoint person\b/,
+    /\bwho is following up\b/,
+  ]);
+}
+
+function healthPlanResponseTimingMentioned(text, sameDayExpected = false) {
+  return sameDayExpected
+    ? textMatchesAny(text, [/\bsame[- ]day\b/, /\btoday\b/, /\bimmediately\b/, /\bbefore end of day\b/, /\basap\b/])
+    : textMatchesAny(text, [/\bwithin 24 hours\b/, /\bnext 24 hours\b/, /\btoday\b/, /\btomorrow\b/]);
+}
+
+function healthPlanMedicationMentioned(text) {
+  return textMatchesAny(text, [/\bmedication\b/, /\breminder\b/, /\bdose\b/, /\badherence\b/, /\bpill\b/]);
+}
+
+function healthPlanOutreachMentioned(text) {
+  return textMatchesAny(text, [/\balert\b/, /\breach\b/, /\bcontact\b/, /\boutreach\b/, /\bcall\b/, /\bfollow-up\b/]);
+}
+
+function healthPlanSensorMentioned(text) {
+  return textMatchesAny(text, [/\bsensor\b/, /\bdevice\b/, /\bbattery\b/, /\boffline\b/, /\bconnectiv/]);
+}
+
+function healthPlanBoundaryMentioned(text) {
+  return textMatchesAny(text, [/\bstaff\b/, /\bapproved provider\b/, /\bconsent\b/, /\bdo not share\b/, /\buntil family consent\b/]);
+}
+
+function healthPlanCareCircleUpdateMentioned(text) {
+  return textMatchesAny(text, [/\bcare circle\b/, /\bcaregiver\b/, /\bfamily\b/, /\bshare\b/, /\bupdate\b/, /\binform\b/]);
+}
+
+function healthPlanPrimaryOwnerName(profile) {
+  const providers = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  return providers.find((provider) => provider?.is_primary && nullIfBlank(provider?.display_name))?.display_name
+    || providers.find((provider) => nullIfBlank(provider?.display_name))?.display_name
+    || null;
+}
+
+function buildHealthPlanOperationalPolicyReasons(plan, profile, predictiveContext, organization = null, now = new Date()) {
+  if (!plan) return [];
+
+  const language = normalizeLanguage(
+    plan.language,
+    profile?.user?.language || organization?.defaultLanguage || "de",
+  );
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const activeAlerts = (Array.isArray(profile?.alerts) ? profile.alerts : []).filter((alert) => !alert?.resolved_at);
+  const criticalAlerts = activeAlerts.filter((alert) => ["critical", "high", "urgent"].includes(String(alert?.severity || "").trim().toLowerCase()));
+  const caregiverText = planSectionText(plan, ["caregiver_guidance", "escalation"]);
+  const actionText = planSectionText(plan, ["daily_support", "monitoring", "escalation", "caregiver_guidance"]);
+  const generatedAt = normalizeTimestampValue(plan.generated_at);
+  const generatedAtDate = generatedAt ? new Date(generatedAt) : null;
+  const ageHours =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? Math.max(0, (now.getTime() - generatedAtDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const reasons = [];
+  const sameDayExpected = policy.response_expectation === "same-day review";
+  const ownerMentioned = healthPlanOwnerMentioned(caregiverText);
+  const timingMentioned = healthPlanResponseTimingMentioned(actionText, sameDayExpected);
+  const outreachMentioned = healthPlanOutreachMentioned(actionText);
+
+  if (sameDayExpected && !careProviders.length && !ownerMentioned) {
+    reasons.push({
+      code: "same_day_owner_required",
+      severity: "high",
+      detail: "Same-day follow-up is required, but the plan still has no named owner for the next action.",
+    });
+  }
+
+  if (sameDayExpected && generatedAt && ageHours != null && ageHours > 12) {
+    reasons.push({
+      code: "same_day_plan_stale",
+      severity: "high",
+      detail: `This same-day follow-up plan is already ${Math.round(ageHours)} hours old and should not be treated as current.`,
+    });
+  }
+
+  if (criticalAlerts.length && !outreachMentioned) {
+    reasons.push({
+      code: "critical_alert_outreach_missing",
+      severity: "high",
+      detail: "There are unresolved critical alerts, but the plan does not make the outreach or contact action explicit.",
+    });
+  }
+
+  if (criticalAlerts.length && !timingMentioned) {
+    reasons.push({
+      code: "critical_alert_timing_missing",
+      severity: "high",
+      detail: "There are unresolved critical alerts, but the plan does not make the same-day response window explicit.",
+    });
+  }
+
+  return reasons;
+}
+
+function buildHealthPlanCoordinationSummary(plan, profile, predictiveContext, organization = null, now = new Date(), existingAudit = null, existingReview = null) {
+  if (!plan) return null;
+
+  const language = normalizeLanguage(
+    plan.language,
+    profile?.user?.language || organization?.defaultLanguage || "de",
+  );
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const review = existingReview || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const providers = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const alerts = (Array.isArray(profile?.alerts) ? profile.alerts : []).filter((alert) => !alert?.resolved_at);
+  const offlineSensors = (Array.isArray(profile?.sensors) ? profile.sensors : []).filter((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const medicationRisk = ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const sameDayExpected = policy.response_expectation === "same-day review";
+  const ownerName = healthPlanPrimaryOwnerName(profile);
+  const caregiverText = planSectionText(plan, ["caregiver_guidance", "escalation"]);
+  const actionText = planSectionText(plan, ["daily_support", "monitoring", "escalation", "caregiver_guidance"]);
+  const ownerCovered = Boolean(ownerName) || healthPlanOwnerMentioned(caregiverText);
+  const outreachCovered = healthPlanOutreachMentioned(actionText);
+  const timingCovered = healthPlanResponseTimingMentioned(actionText, sameDayExpected);
+  const medicationCovered = healthPlanMedicationMentioned(actionText);
+  const sensorCovered = healthPlanSensorMentioned(actionText);
+  const boundaryCovered = familyConsent ? true : healthPlanBoundaryMentioned(caregiverText);
+  const careCircleUpdateCovered = familyConsent ? healthPlanCareCircleUpdateMentioned(caregiverText) : false;
+  const reviewCovered = plan.review_status === "reviewed" && audit?.status !== "needs_regeneration";
+  const commitments = [];
+
+  const pushCommitment = (code, enabled, covered, priority, dueWindow, detail, proofHint, signalIds = []) => {
+    commitments.push({
+      code,
+      status: !enabled ? "not_needed" : covered ? "covered" : "open",
+      priority,
+      due_window: dueWindow,
+      detail,
+      proof_hint: proofHint,
+      signal_ids: signalIds,
+    });
+  };
+
+  pushCommitment(
+    "review_plan",
+    true,
+    reviewCovered,
+    sameDayExpected ? "high" : "medium",
+    sameDayExpected ? "same_day" : "within_24h",
+    reviewCovered
+      ? "The current plan has a usable review state."
+      : "Staff review and approval are still required before this plan should guide wider coordination.",
+    "Counts as done when a reviewed plan is saved and no regeneration warning is active.",
+  );
+
+  pushCommitment(
+    "assign_owner",
+    true,
+    ownerCovered,
+    sameDayExpected || !providers.length ? "high" : "medium",
+    sameDayExpected ? "same_day" : "within_24h",
+    ownerCovered
+      ? "Follow-up ownership is clear enough for the next contact."
+      : "One named owner should be confirmed before the next follow-up cycle.",
+    "Counts as done when one named owner is linked on the profile or clearly named in the saved plan guidance.",
+    ["care-circle-context"],
+  );
+
+  const clientContactRequired = sameDayExpected || alerts.length > 0 || medicationRisk;
+  pushCommitment(
+    "contact_client",
+    clientContactRequired,
+    !clientContactRequired || (outreachCovered && timingCovered),
+    sameDayExpected || alerts.length > 0 ? "high" : "medium",
+    sameDayExpected ? "same_day" : "within_24h",
+    outreachCovered && timingCovered
+      ? "Client contact timing is explicit in the saved plan."
+      : "The plan should make the client touchpoint and response timing explicit.",
+    sameDayExpected
+      ? "Counts as done when the first same-day client touchpoint is recorded."
+      : "Counts as done when the next client touchpoint is recorded.",
+    alerts.length > 0 ? ["alert-active"] : medicationRisk ? ["medication-plan"] : [],
+  );
+
+  pushCommitment(
+    "review_alerts",
+    alerts.length > 0,
+    alerts.length < 1 || outreachCovered,
+    alerts.length > 0 ? "high" : "low",
+    sameDayExpected ? "same_day" : "within_24h",
+    alerts.length > 0
+      ? outreachCovered
+        ? "Alert follow-up is explicitly carried into the plan."
+        : "Unresolved alerts should be turned into explicit outreach or response actions."
+      : "No active alerts require alert-specific action.",
+    "Counts as done when alert-specific outreach or response action is explicit and the first alert follow-up is recorded.",
+    alerts.length > 0 ? ["alert-active"] : [],
+  );
+
+  pushCommitment(
+    "verify_medication",
+    medicationRisk,
+    !medicationRisk || medicationCovered,
+    medicationRisk ? "high" : "low",
+    sameDayExpected ? "same_day" : "within_24h",
+    medicationRisk
+      ? medicationCovered
+        ? "Medication follow-up is reflected in the plan."
+        : "Medication adherence risk should be turned into a clear follow-up step."
+      : "Medication follow-up is not currently elevated.",
+    "Counts as done when today's medication status is confirmed and the follow-up step is explicit for the care circle.",
+    medicationRisk ? ["medication-plan"] : [],
+  );
+
+  pushCommitment(
+    "check_sensors",
+    offlineSensors.length > 0,
+    offlineSensors.length < 1 || sensorCovered,
+    offlineSensors.length > 0 ? "medium" : "low",
+    sameDayExpected ? "same_day" : "within_24h",
+    offlineSensors.length > 0
+      ? sensorCovered
+        ? "Sensor reliability is acknowledged in the plan."
+        : "Offline or silent sensors should be checked so they do not create false reassurance."
+      : "No sensor reliability concern is currently open.",
+    "Counts as done when the sensor issue is confirmed as device, connectivity, or real client concern.",
+    offlineSensors.length > 0 ? ["sensor-status"] : [],
+  );
+
+  const careCircleUpdateRequired = familyConsent && providers.length > 0 && (sameDayExpected || alerts.length > 0 || medicationRisk);
+  pushCommitment(
+    "update_care_circle",
+    careCircleUpdateRequired,
+    !careCircleUpdateRequired || careCircleUpdateCovered,
+    sameDayExpected ? "medium" : "low",
+    sameDayExpected ? "same_day" : "within_24h",
+    careCircleUpdateRequired
+      ? careCircleUpdateCovered
+        ? "The plan includes a practical update path for the approved care circle."
+        : "The approved care circle should receive a practical update once the first follow-up is complete."
+      : "No care-circle update is currently required.",
+    "Counts as done when an approved care-circle update is logged after the first client follow-up.",
+    careCircleUpdateRequired ? ["care-circle-context", "consent-family-sharing"] : [],
+  );
+
+  pushCommitment(
+    "respect_sharing_boundary",
+    !familyConsent,
+    familyConsent || boundaryCovered,
+    !familyConsent ? "high" : "low",
+    sameDayExpected ? "same_day" : "within_24h",
+    !familyConsent
+      ? boundaryCovered
+        ? "The sharing boundary is explicit in the saved guidance."
+        : "The plan should keep personal details within staff or approved providers until consent is confirmed."
+      : "Sharing is allowed with the approved care circle.",
+    "Counts as done when updates stay within staff or approved providers until consent changes.",
+    ["consent-family-sharing"],
+  );
+
+  const refreshPlanRequired = audit?.status === "needs_regeneration";
+  pushCommitment(
+    "refresh_plan",
+    refreshPlanRequired,
+    !refreshPlanRequired,
+    "high",
+    sameDayExpected ? "same_day" : "within_24h",
+    refreshPlanRequired
+      ? "The saved plan should be regenerated or rewritten before broader reliance."
+      : "The current plan does not require immediate regeneration.",
+    "Counts as done when a regenerated or materially updated plan is saved against the current live signals.",
+    Array.isArray(audit?.current_critical_signal_ids) ? audit.current_critical_signal_ids : [],
+  );
+
+  const openCommitments = commitments.filter((item) => item.status === "open");
+  const recommendedAction = openCommitments.find((item) => item.priority === "high") || openCommitments[0] || null;
+  const state = openCommitments.some((item) => item.priority === "high")
+    ? "urgent"
+    : openCommitments.length
+      ? "watch"
+      : "stable";
+
+  return {
+    state,
+    response_window: sameDayExpected ? "same_day" : "within_24h",
+    sharing_boundary: familyConsent ? "approved_circle" : "staff_only",
+    owner_name: ownerName,
+    owner_missing: !ownerCovered,
+    ready_for_share: Boolean(review?.share_ready) && state === "stable",
+    open_commitment_codes: openCommitments.map((item) => item.code),
+    recommended_action_code: recommendedAction?.code || null,
+    commitments,
+  };
+}
+
+function buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization = null, existingAudit = null) {
+  if (!plan) return null;
+
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, plan.language || profile?.user?.language || "de");
+  const generationAssessment =
+    normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json)
+    || buildHealthPlanGenerationAssessment(profile, predictiveContext, assembleRichHealthPlanSourceSignals(profile, predictiveContext), organization);
+  const reviewerClock = normalizeTimestampValue(existingAudit?.checked_at);
+  const reviewNow = reviewerClock ? new Date(reviewerClock) : new Date();
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const remindersDisabled = medications.some((med) => med?.reminders_enabled === false);
+  const activeAlerts = alerts.filter((alert) => !alert?.resolved_at);
+  const offlineSensors = sensors.filter((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const outcomeTrajectory = buildHealthPlanOutcomeTrajectory(
+    buildHealthPlanTacticOutcomeStateFromSnapshot(plan?.context_snapshot_json),
+    buildHealthPlanTacticOutcomeStateFromProfile(profile),
+  );
+  const allText = planSectionText(plan);
+  const actionText = planSectionText(plan, ["daily_support", "monitoring", "escalation", "caregiver_guidance"]);
+  const caregiverText = planSectionText(plan, ["caregiver_guidance", "escalation"]);
+  const freshnessDecay = buildHealthPlanFreshnessDecaySummary(
+    plan,
+    profile,
+    predictiveContext,
+    organization,
+    reviewerClock ? new Date(reviewerClock) : new Date(),
+  );
+  const sectionRefMap = new Map([
+    ["summary", new Set((Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids : []).filter(Boolean))],
+    ["goals", new Set((Array.isArray(plan?.goals_json) ? plan.goals_json : []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean))],
+    ["daily_support", new Set((Array.isArray(plan?.daily_support_json) ? plan.daily_support_json : []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean))],
+    ["monitoring", new Set((Array.isArray(plan?.monitoring_json) ? plan.monitoring_json : []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean))],
+    ["escalation", new Set((Array.isArray(plan?.escalation_json) ? plan.escalation_json : []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean))],
+    ["caregiver_guidance", new Set((Array.isArray(plan?.caregiver_guidance_json) ? plan.caregiver_guidance_json : []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean))],
+  ]);
+  const checks = [];
+  const nextMoves = [];
+  const satisfiedReviewerRequirementCodes = new Set();
+
+  const addCheck = (code, state, detail, nextMove = null) => {
+    checks.push({ code, state, detail });
+    if (nextMove && state !== "good") nextMoves.push({ code, priority: state === "critical" ? "high" : "medium", text: nextMove });
+  };
+
+  const ownerMentioned = healthPlanOwnerMentioned(caregiverText);
+  if (!careProviders.length && !ownerMentioned) {
+    addCheck(
+      "owner_assignment_missing",
+      "critical",
+      "The plan does not clearly assign one named owner for follow-up.",
+      "Assign one named owner for this client and document who is responsible for the next contact.",
+    );
+  } else {
+    addCheck("owner_assignment_clear", "good", "Follow-up ownership is clear enough to act on.");
+  }
+
+  const sameDayExpected = policy.response_expectation === "same-day review";
+  const timingMentioned = healthPlanResponseTimingMentioned(actionText, sameDayExpected);
+  if (!timingMentioned) {
+    addCheck(
+      "response_window_unclear",
+      sameDayExpected ? "critical" : "watch",
+      sameDayExpected
+        ? "The plan does not make the same-day follow-up window explicit."
+        : "The plan could be clearer about the response window.",
+      sameDayExpected
+        ? "Add same-day timing language so the operator knows this follow-up cannot wait."
+        : "Clarify when the next follow-up should happen.",
+    );
+  } else {
+    addCheck("response_window_clear", "good", "The response timing is explicit enough for staff action.");
+  }
+
+  const medicationFollowupRequired = medications.length && (remindersDisabled || ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus));
+  const medicationMentioned = healthPlanMedicationMentioned(actionText);
+  if (medicationFollowupRequired && !medicationMentioned) {
+    addCheck(
+      "medication_followup_missing",
+      "critical",
+      "Medication risk is present, but the plan does not turn it into clear follow-up actions.",
+      "Add concrete medication follow-up steps using the saved reminder schedule and missed-dose picture.",
+    );
+  } else if (medicationFollowupRequired) {
+    addCheck("medication_followup_present", "good", "Medication follow-up is explicitly covered.");
+  }
+
+  const outreachMentioned = healthPlanOutreachMentioned(actionText);
+  if (activeAlerts.length && !outreachMentioned) {
+    addCheck(
+      "alert_response_missing",
+      "critical",
+      "Active alerts are present, but the plan does not clearly translate them into contact or outreach actions.",
+      "Add explicit outreach and contact steps tied to the active alerts.",
+    );
+  } else if (activeAlerts.length) {
+    addCheck("alert_response_present", "good", "Active alerts are translated into outreach action.");
+  }
+
+  const sensorMentioned = healthPlanSensorMentioned(actionText);
+  if (offlineSensors.length && !sensorMentioned) {
+    addCheck(
+      "sensor_reliability_missing",
+      "watch",
+      "Sensor reliability issues are present, but the plan does not explicitly mention checking them.",
+      "Add a sensor reliability check so silent devices do not create false reassurance.",
+    );
+  } else if (offlineSensors.length) {
+    addCheck("sensor_reliability_present", "good", "Sensor reliability is explicitly addressed.");
+  }
+
+  const boundaryMentioned =
+    familyConsent
+      ? true
+      : healthPlanBoundaryMentioned(caregiverText);
+  if (!familyConsent && !boundaryMentioned) {
+    addCheck(
+      "sharing_boundary_missing",
+      "critical",
+      "The plan does not clearly respect the current sharing boundary.",
+      "Add staff-only or approved-provider-only sharing guidance until family consent is confirmed.",
+    );
+  } else {
+    addCheck("sharing_boundary_clear", "good", "The sharing boundary is explicit enough for staff use.");
+  }
+
+  const overdueVerificationCount = Number(freshnessDecay?.recommendation_overdue_count || 0);
+  const sameDayOverdueVerificationCount = Number(freshnessDecay?.recommendation_overdue_same_day_count || 0);
+  const dueSoonVerificationCount = Number(freshnessDecay?.recommendation_due_soon_count || 0);
+  const timedVerificationCount = Number(freshnessDecay?.recommendation_timed_item_count || 0);
+  if (overdueVerificationCount > 0) {
+    const state = sameDayOverdueVerificationCount > 0 || sameDayExpected ? "critical" : "watch";
+    addCheck(
+      "verification_window_overdue",
+      state,
+      overdueVerificationCount === 1
+        ? "A saved recommendation verification window is overdue, so the plan should be refreshed against the live picture now."
+        : `${overdueVerificationCount} saved recommendation verification windows are overdue, so the plan should be refreshed against the live picture now.`,
+      overdueVerificationCount === 1
+        ? "Refresh the overdue verification step and re-check the plan against the latest live evidence."
+        : "Refresh the overdue verification steps and re-check the plan against the latest live evidence.",
+    );
+  } else if (dueSoonVerificationCount > 0) {
+    addCheck(
+      "verification_window_due_soon",
+      "watch",
+      dueSoonVerificationCount === 1
+        ? "A saved recommendation verification window is coming due soon."
+        : `${dueSoonVerificationCount} saved recommendation verification windows are coming due soon.`,
+      "Keep the plan under active review until the next verification window is completed.",
+    );
+  } else if (timedVerificationCount > 0) {
+    addCheck("verification_window_current", "good", "Saved recommendation verification windows are still within their expected operating window.");
+  }
+
+  if (outcomeTrajectory?.status === "worsened") {
+    addCheck(
+      "prior_plan_outcome_worsened",
+      "critical",
+      "Later live evidence suggests the previous saved plan was followed by a heavier care burden, so the next version should visibly change course.",
+      "Strengthen the response path now and make the escalation route more explicit instead of preserving the previous framing.",
+    );
+  } else if (outcomeTrajectory?.status === "stalled") {
+    addCheck(
+      "prior_plan_outcome_stalled",
+      "watch",
+      "Later live evidence suggests the previous saved plan did not move the response loop far enough.",
+      "Make the next response path materially stronger so the team is not repeating a stalled approach.",
+    );
+  } else if (outcomeTrajectory?.status === "improved") {
+    addCheck("prior_plan_outcome_improved", "good", "Later live evidence suggests the previous saved plan helped move the case forward.");
+  }
+
+  const reviewerMustCoverCodes = new Set([
+    "resolve_prior_plan_gaps",
+    "change_course_after_worsening",
+    "unstick_stalled_outcome",
+    "adapt_contact_path",
+    "differentiate_repeated_tactic",
+    "upgrade_stalled_tactic",
+    "close_execution_receipt_gap",
+    "explain_material_change",
+    "anchor_accountability_receipts",
+  ]);
+  for (const requirement of Array.isArray(contextSnapshot?.must_cover) ? contextSnapshot.must_cover : []) {
+    const requirementCode = nullIfBlank(requirement?.code);
+    if (!requirementCode || !reviewerMustCoverCodes.has(requirementCode)) continue;
+    const config = healthPlanReviewerRequirementConfig(requirementCode);
+    if (!config) continue;
+    const requiredSections = Array.isArray(requirement?.required_sections) && requirement.required_sections.length
+      ? requirement.required_sections.filter(Boolean)
+      : ["summary", "daily_support", "monitoring", "escalation", "caregiver_guidance"];
+    const requiredSignalIds = Array.isArray(requirement?.required_signal_ids)
+      ? requirement.required_signal_ids.filter(Boolean)
+      : [];
+    const minimumSectionCoverage = Number(requirement?.minimum_section_coverage);
+    const coveredSections = new Set();
+    for (const sectionName of requiredSections) {
+      const refs = sectionRefMap.get(sectionName);
+      if (!refs) continue;
+      if (!requiredSignalIds.length || requiredSignalIds.some((signalId) => refs.has(signalId))) {
+        coveredSections.add(sectionName);
+      }
+    }
+    const coverageIsThin =
+      Number.isFinite(minimumSectionCoverage)
+      && minimumSectionCoverage > 1
+      && coveredSections.size < minimumSectionCoverage;
+    if (coverageIsThin) {
+      addCheck(
+        `${config.missingTextCode}_coverage`,
+        requirement?.priority === "high" ? "critical" : "watch",
+        `The plan does not carry "${nullIfBlank(requirement?.description) || requirementCode}" across enough sections for reliable staff use.`,
+        config.nextMove,
+      );
+      continue;
+    }
+    const requirementMatchers = healthPlanRequirementMatchers(requirementCode, contextSnapshot);
+    if (!requirementMatchers.length) continue;
+    const requirementText = planSectionText(plan, requiredSections);
+    if (!textMatchesAny(requirementText, requirementMatchers)) {
+      addCheck(
+        config.missingTextCode,
+        requirement?.priority === "high" ? "critical" : "watch",
+        config.missingTextDetail,
+        config.nextMove,
+      );
+      continue;
+    }
+    satisfiedReviewerRequirementCodes.add(requirementCode);
+  }
+
+  const resolvedAuditReasonCodes = new Set();
+  if (satisfiedReviewerRequirementCodes.has("resolve_prior_plan_gaps")) {
+    resolvedAuditReasonCodes.add("prior_review_actions_open");
+    resolvedAuditReasonCodes.add("prior_plan_evidence_shifted");
+  }
+  if (satisfiedReviewerRequirementCodes.has("change_course_after_worsening")) {
+    resolvedAuditReasonCodes.add("prior_plan_outcome_worsened");
+  }
+  if (satisfiedReviewerRequirementCodes.has("unstick_stalled_outcome")) {
+    resolvedAuditReasonCodes.add("prior_plan_outcome_stalled");
+  }
+  if (satisfiedReviewerRequirementCodes.has("differentiate_repeated_tactic")) {
+    resolvedAuditReasonCodes.add("repeated_tactic_pattern");
+  }
+  if (satisfiedReviewerRequirementCodes.has("upgrade_stalled_tactic")) {
+    resolvedAuditReasonCodes.add("prior_tactics_stalled");
+  }
+  const unresolvedAuditReasons = (Array.isArray(audit?.reasons) ? audit.reasons : [])
+    .filter((reason) => !resolvedAuditReasonCodes.has(nullIfBlank(reason?.code)));
+  const provisionalStatus = checks.some((check) => check.state === "critical")
+    ? "hold"
+    : checks.some((check) => check.state === "watch") || plan.review_status !== "reviewed" || generationAssessment.confidence !== "high" || unresolvedAuditReasons.length > 0
+      ? "needs_review"
+      : "ready";
+  const provisionalReview = {
+    status: provisionalStatus,
+    share_ready: provisionalStatus === "ready",
+    response_expectation: sameDayExpected ? "same_day" : "within_24h",
+    generation_confidence: generationAssessment.confidence,
+    checks,
+    next_moves: nextMoves,
+  };
+  const coordinationPreview = buildHealthPlanCoordinationSummary(
+    plan,
+    profile,
+    predictiveContext,
+    organization,
+    reviewNow,
+    audit,
+    provisionalReview,
+  );
+  const executionPreview = buildHealthPlanExecutionPack(
+    plan,
+    profile,
+    predictiveContext,
+    organization,
+    reviewNow,
+    audit,
+    provisionalReview,
+    coordinationPreview,
+  );
+  if (executionPreview?.load_state === "overloaded") {
+    addCheck(
+      "same_day_lane_overloaded",
+      "critical",
+      executionPreview?.triage_summary_text
+        || "Too many same-day tasks are competing at once for this plan to be operationally safe without clearer triage.",
+      executionPreview?.triage_summary_text
+        || "Collapse the same-day lane to the first three tasks and make the opening move explicit before wider staff use.",
+    );
+  } else if (executionPreview?.load_state === "busy") {
+    addCheck(
+      "same_day_lane_busy",
+      "watch",
+      executionPreview?.triage_summary_text
+        || "The same-day lane is getting crowded, so the first moves should stay tightly ordered.",
+      "Keep the first few same-day tasks tightly ordered so follow-through does not splinter.",
+    );
+  } else if (executionPreview?.load_state === "manageable") {
+    addCheck("same_day_lane_manageable", "good", "The same-day execution lane is focused enough for staff to follow.");
+  }
+  const criticalStates = checks.filter((check) => check.state === "critical").length;
+  const watchStates = checks.filter((check) => check.state === "watch").length;
+  const status = criticalStates > 0
+    ? "hold"
+    : watchStates > 0 || plan.review_status !== "reviewed" || generationAssessment.confidence !== "high" || unresolvedAuditReasons.length > 0
+      ? "needs_review"
+      : "ready";
+
+  if (generationAssessment.confidence !== "high") {
+    nextMoves.push({
+      code: "enrich_live_context",
+      priority: generationAssessment.confidence === "low" ? "high" : "medium",
+      text: "Refresh the live care picture before sharing this plan broadly.",
+    });
+  }
+
+  return {
+    status,
+    share_ready: status === "ready",
+    response_expectation: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+    generation_confidence: generationAssessment.confidence,
+    checks,
+    next_moves: nextMoves,
+  };
+}
+
+function buildHealthPlanImprovementSummary(plan, audit, reviewAssessment, quality) {
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const planMemory = normalizeHealthPlanPlanMemory(contextSnapshot?.plan_memory);
+  const previousPlan = planMemory?.current_plan;
+  const changeSummary = normalizeHealthPlanChangeSummary(plan?.change_summary_json);
+  const automatedReview = normalizeHealthPlanAutomatedReview(plan?.automated_review_json);
+  const currentIssueCodes = [
+    ...new Set([
+      ...(Array.isArray(audit?.reasons) ? audit.reasons.map((reason) => nullIfBlank(reason?.code)).filter(Boolean) : []),
+      ...(Array.isArray(reviewAssessment?.checks) ? reviewAssessment.checks.filter((check) => check?.state !== "good").map((check) => nullIfBlank(check?.code)).filter(Boolean) : []),
+      ...(Array.isArray(automatedReview?.concerns) ? automatedReview.concerns.map((item) => nullIfBlank(item?.code)).filter(Boolean) : []),
+    ]),
+  ];
+  if (!previousPlan) {
+    return {
+      status: "baseline",
+      summary_text: "No previous saved health plan is available for a direct improvement comparison yet.",
+      score_delta: null,
+      rubric_overall_delta: null,
+      trust_level_delta: "unknown",
+      review_status_delta: "unknown",
+      resolved_issue_codes: [],
+      new_issue_codes: currentIssueCodes.slice(0, 8),
+      repeated_issue_codes: [],
+      changed_sections: Array.isArray(changeSummary?.changed_sections) ? changeSummary.changed_sections : [],
+    };
+  }
+
+  const previousIssueCodes = [
+    ...new Set([
+      ...(Array.isArray(previousPlan?.open_issue_codes) ? previousPlan.open_issue_codes : []),
+      ...(Array.isArray(previousPlan?.watch_issue_codes) ? previousPlan.watch_issue_codes : []),
+    ]),
+  ].filter(Boolean);
+  const resolvedIssueCodes = previousIssueCodes.filter((code) => !currentIssueCodes.includes(code));
+  const newIssueCodes = currentIssueCodes.filter((code) => !previousIssueCodes.includes(code));
+  const repeatedIssueCodes = currentIssueCodes.filter((code) => previousIssueCodes.includes(code));
+  const previousScore = Number.isFinite(Number(previousPlan?.quality_score)) ? Number(previousPlan.quality_score) : null;
+  const currentScore = Number.isFinite(Number(quality?.score)) ? Number(quality.score) : null;
+  const scoreDelta = previousScore == null || currentScore == null ? null : currentScore - previousScore;
+  const currentRecommendationSnapshot = buildHealthPlanRecommendationSnapshot(plan);
+  const previousRecommendationSnapshot = Array.isArray(previousPlan?.recommendation_snapshot) ? previousPlan.recommendation_snapshot : [];
+  const previousRubricOverall = Number.isFinite(Number(previousPlan?.review_rubric_scores?.overall))
+    ? Number(previousPlan.review_rubric_scores.overall)
+    : null;
+  const currentRubricOverall = Number.isFinite(Number(automatedReview?.rubric_scores?.overall))
+    ? Number(automatedReview.rubric_scores.overall)
+    : null;
+  const rubricOverallDelta =
+    previousRubricOverall == null || currentRubricOverall == null
+      ? null
+      : currentRubricOverall - previousRubricOverall;
+  const previousTrustRank = healthPlanTrustLevelRank(previousPlan?.quality_trust_level);
+  const currentTrustRank = healthPlanTrustLevelRank(quality?.trust_level);
+  const trustLevelDelta =
+    currentTrustRank === previousTrustRank
+      ? "same"
+      : currentTrustRank > previousTrustRank
+        ? "up"
+        : currentTrustRank < previousTrustRank
+          ? "down"
+          : "unknown";
+  const previousReviewRank = healthPlanReviewerStatusRank(previousPlan?.approval_gate_state === "ready" ? "ready" : previousPlan?.automated_review_verdict === "block" ? "hold" : "needs_review");
+  const currentReviewRank = healthPlanReviewerStatusRank(reviewAssessment?.status);
+  const reviewStatusDelta =
+    currentReviewRank === previousReviewRank
+      ? "same"
+      : currentReviewRank > previousReviewRank
+        ? "up"
+        : currentReviewRank < previousReviewRank
+          ? "down"
+          : "unknown";
+
+  const previousRecommendationMap = new Map(
+    previousRecommendationSnapshot
+      .map((item) => [nullIfBlank(item?.comparison_key), item])
+      .filter(([key]) => Boolean(key)),
+  );
+  const strengthenedRecommendations = [];
+  const weakenedRecommendations = [];
+  const riskierRecommendations = [];
+  for (const item of currentRecommendationSnapshot) {
+    const previousItem = previousRecommendationMap.get(nullIfBlank(item?.comparison_key));
+    if (!previousItem) continue;
+    const currentProvenance = Number.isFinite(Number(item?.recommendation_provenance_score)) ? Number(item.recommendation_provenance_score) : null;
+    const previousProvenance = Number.isFinite(Number(previousItem?.recommendation_provenance_score)) ? Number(previousItem.recommendation_provenance_score) : null;
+    const currentReviewState = normalizeHealthPlanRecommendationReviewState(item?.evidence_review_state, null);
+    const previousReviewState = normalizeHealthPlanRecommendationReviewState(previousItem?.evidence_review_state, null);
+    const currentUseMode = normalizeHealthPlanRecommendationUseMode(item?.recommendation_use_mode, null);
+    const previousUseMode = normalizeHealthPlanRecommendationUseMode(previousItem?.recommendation_use_mode, null);
+    const currentReviewRank = currentReviewState === "ready" ? 3 : currentReviewState === "verify_first" ? 2 : currentReviewState === "urgent_review" ? 1 : 0;
+    const previousReviewRank = previousReviewState === "ready" ? 3 : previousReviewState === "verify_first" ? 2 : previousReviewState === "urgent_review" ? 1 : 0;
+    const currentUseRank = currentUseMode === "ready_with_judgment" ? 3 : currentUseMode === "verify_before_use" ? 2 : currentUseMode === "staff_review_only" ? 1 : 0;
+    const previousUseRank = previousUseMode === "ready_with_judgment" ? 3 : previousUseMode === "verify_before_use" ? 2 : previousUseMode === "staff_review_only" ? 1 : 0;
+    const provenanceDelta = currentProvenance == null || previousProvenance == null ? 0 : currentProvenance - previousProvenance;
+    const reviewDelta = currentReviewRank - previousReviewRank;
+    const useDelta = currentUseRank - previousUseRank;
+    const detail = `${nullIfBlank(item?.text) || "Recommendation"} (${nullIfBlank(item?.section) || "general"})`;
+    if (provenanceDelta >= 10 || (provenanceDelta >= 6 && (reviewDelta > 0 || useDelta > 0)) || (useDelta > 0 && reviewDelta >= 0)) {
+      strengthenedRecommendations.push({
+        comparison_key: item.comparison_key,
+        section: item.section,
+        detail,
+        score_delta: provenanceDelta,
+      });
+    } else if (provenanceDelta <= -10 || (provenanceDelta <= -6 && (reviewDelta < 0 || useDelta < 0)) || (useDelta < 0 && reviewDelta <= 0)) {
+      weakenedRecommendations.push({
+        comparison_key: item.comparison_key,
+        section: item.section,
+        detail,
+        score_delta: provenanceDelta,
+      });
+    }
+    if (
+      (currentReviewState === "urgent_review" && previousReviewState !== "urgent_review")
+      || (currentUseMode === "staff_review_only" && previousUseMode !== "staff_review_only")
+    ) {
+      riskierRecommendations.push({
+        comparison_key: item.comparison_key,
+        section: item.section,
+        detail,
+        review_state: currentReviewState,
+        recommendation_use_mode: currentUseMode,
+      });
+    } else if (
+      (
+        (currentReviewState === "verify_first" && previousReviewState === "ready")
+        || (currentUseMode === "verify_before_use" && previousUseMode === "ready_with_judgment")
+      )
+      && (provenanceDelta <= -4 || normalizeHealthPlanRecommendationProvenanceStrength(item?.recommendation_provenance_strength, null) === "caution" || useDelta < 0)
+    ) {
+      riskierRecommendations.push({
+        comparison_key: item.comparison_key,
+        section: item.section,
+        detail,
+        review_state: currentReviewState,
+        recommendation_use_mode: currentUseMode,
+      });
+    }
+  }
+
+  let improvementPoints = 0;
+  let regressionPoints = 0;
+  if (trustLevelDelta === "up") improvementPoints += 2;
+  else if (trustLevelDelta === "down") regressionPoints += 2;
+  if (reviewStatusDelta === "up") improvementPoints += 1;
+  else if (reviewStatusDelta === "down") regressionPoints += 1;
+  if (scoreDelta != null && scoreDelta >= 8) improvementPoints += 1;
+  else if (scoreDelta != null && scoreDelta <= -8) regressionPoints += 1;
+  if (rubricOverallDelta != null && rubricOverallDelta >= 6) improvementPoints += 1;
+  else if (rubricOverallDelta != null && rubricOverallDelta <= -6) regressionPoints += 1;
+  if (resolvedIssueCodes.length > newIssueCodes.length && resolvedIssueCodes.length > 0) improvementPoints += 1;
+  else if (newIssueCodes.length > resolvedIssueCodes.length && newIssueCodes.length > 0) regressionPoints += 1;
+  if (quality?.trust_level === "low" && previousPlan?.quality_trust_level && previousPlan.quality_trust_level !== "low") regressionPoints += 1;
+  if (quality?.trust_level === "high" && previousPlan?.quality_trust_level && previousPlan.quality_trust_level !== "high") improvementPoints += 1;
+  if (strengthenedRecommendations.length > weakenedRecommendations.length && strengthenedRecommendations.length > 0) improvementPoints += 1;
+  else if (weakenedRecommendations.length > strengthenedRecommendations.length && weakenedRecommendations.length > 0) regressionPoints += 1;
+  if (riskierRecommendations.length > 0) regressionPoints += 1;
+
+  let status = "mixed";
+  if (regressionPoints >= 2 && regressionPoints > improvementPoints) status = "regressed";
+  else if (improvementPoints >= 2 && improvementPoints > regressionPoints) status = "improved";
+  else if (improvementPoints === 0 && regressionPoints === 0) status = "stable";
+
+  const summaryText =
+    status === "improved"
+      ? strengthenedRecommendations.length
+        ? `This version improves on the previous plan by strengthening recommendations such as ${strengthenedRecommendations.slice(0, 2).map((item) => item.detail).join(", ")}.`
+        : resolvedIssueCodes.length
+          ? `This version improves on the previous plan by resolving ${resolvedIssueCodes.slice(0, 3).join(", ")} and tightening the next response path.`
+          : "This version is materially stronger than the previous saved plan."
+      : status === "regressed"
+        ? riskierRecommendations.length
+          ? `This version regressed because some recommendations became riskier, including ${riskierRecommendations.slice(0, 2).map((item) => item.detail).join(", ")}.`
+          : weakenedRecommendations.length
+            ? `This version regressed because recommendation backing weakened for ${weakenedRecommendations.slice(0, 2).map((item) => item.detail).join(", ")}.`
+            : newIssueCodes.length
+              ? `This version regressed by introducing or reopening ${newIssueCodes.slice(0, 3).join(", ")} compared with the previous saved plan.`
+              : "This version appears weaker than the previous saved plan and should not be treated as a clean improvement."
+        : status === "stable"
+          ? "This version looks materially similar to the previous saved plan, with no clear improvement or regression signal."
+          : "This version mixes some improvements with some newly open gaps, so staff should review the delta before relying on it broadly.";
+
+  return {
+    status,
+    summary_text: summaryText,
+    score_delta: scoreDelta,
+    rubric_overall_delta: rubricOverallDelta,
+    trust_level_delta: trustLevelDelta,
+    review_status_delta: reviewStatusDelta,
+    resolved_issue_codes: resolvedIssueCodes.slice(0, 8),
+    new_issue_codes: newIssueCodes.slice(0, 8),
+    repeated_issue_codes: repeatedIssueCodes.slice(0, 8),
+    changed_sections: Array.isArray(changeSummary?.changed_sections) ? changeSummary.changed_sections : [],
+    strengthened_recommendation_count: strengthenedRecommendations.length,
+    weakened_recommendation_count: weakenedRecommendations.length,
+    riskier_recommendation_count: riskierRecommendations.length,
+    strengthened_recommendations: strengthenedRecommendations.slice(0, 5),
+    weakened_recommendations: weakenedRecommendations.slice(0, 5),
+    riskier_recommendations: riskierRecommendations.slice(0, 5),
+  };
+}
+
+function normalizeHealthPlanResponseExpectationKey(value) {
+  return value === "same_day" || value === "same-day review" ? "same_day" : "within_24h";
+}
+
+function buildHealthPlanSignalFreshnessPolicy(signalOrCategory = null, responseExpectation = null) {
+  const category = normalizeHealthPlanSignalCategory(
+    typeof signalOrCategory === "string" ? signalOrCategory : signalOrCategory?.category,
+    "context",
+  );
+  const expectation = normalizeHealthPlanResponseExpectationKey(responseExpectation);
+  const categoryPolicies = expectation === "same_day"
+    ? {
+      alert: { watch: 4, aging: 8, stale: 24 },
+      risk: { watch: 12, aging: 24, stale: 72 },
+      forecast: { watch: 12, aging: 24, stale: 72 },
+      medication: { watch: 6, aging: 12, stale: 36 },
+      sensor: { watch: 4, aging: 8, stale: 24 },
+      service: { watch: 8, aging: 24, stale: 72 },
+      "care-circle": { watch: 24, aging: 48, stale: 120 },
+      context: { watch: 24, aging: 48, stale: 120 },
+    }
+    : {
+      alert: { watch: 8, aging: 16, stale: 24 },
+      risk: { watch: 24, aging: 72, stale: 168 },
+      forecast: { watch: 24, aging: 72, stale: 168 },
+      medication: { watch: 12, aging: 36, stale: 72 },
+      sensor: { watch: 12, aging: 24, stale: 48 },
+      service: { watch: 24, aging: 72, stale: 168 },
+      "care-circle": { watch: 48, aging: 120, stale: 240 },
+      context: { watch: 48, aging: 120, stale: 240 },
+    };
+  const policy = categoryPolicies[category] || categoryPolicies.context;
+  return {
+    category,
+    response_expectation: expectation,
+    watch_after_hours: policy.watch,
+    aging_after_hours: Math.max(policy.aging, policy.watch),
+    stale_after_hours: Math.max(policy.stale, policy.aging),
+  };
+}
+
+function assessHealthPlanSignalFreshness(signalOrTimestamp, now = new Date(), signalOrCategory = null, responseExpectation = null) {
+  const timestamp =
+    typeof signalOrTimestamp === "object" && signalOrTimestamp !== null
+      ? signalOrTimestamp?.observed_at
+      : signalOrTimestamp;
+  const signal =
+    typeof signalOrTimestamp === "object" && signalOrTimestamp !== null
+      ? signalOrTimestamp
+      : typeof signalOrCategory === "object" && signalOrCategory !== null
+        ? signalOrCategory
+        : { category: signalOrCategory };
+  const normalized = normalizeTimestampValue(timestamp);
+  const policy = buildHealthPlanSignalFreshnessPolicy(signal, responseExpectation);
+  if (!normalized) {
+    return {
+      freshness: "unknown",
+      status: "watch",
+      age_hours: null,
+      watch_due_at: null,
+      aging_due_at: null,
+      stale_due_at: null,
+      refresh_recommended_by_at: null,
+      policy,
+    };
+  }
+  const observedAt = new Date(normalized);
+  if (Number.isNaN(observedAt.getTime())) {
+    return {
+      freshness: "unknown",
+      status: "watch",
+      age_hours: null,
+      watch_due_at: null,
+      aging_due_at: null,
+      stale_due_at: null,
+      refresh_recommended_by_at: null,
+      policy,
+    };
+  }
+  const currentNow = now instanceof Date ? now : new Date(now || Date.now());
+  const hours = (currentNow.getTime() - observedAt.getTime()) / (60 * 60 * 1000);
+  if (!Number.isFinite(hours) || hours < 0) {
+    return {
+      freshness: "unknown",
+      status: "watch",
+      age_hours: null,
+      watch_due_at: null,
+      aging_due_at: null,
+      stale_due_at: null,
+      refresh_recommended_by_at: null,
+      policy,
+    };
+  }
+
+  const addHours = (amount) => new Date(observedAt.getTime() + amount * 60 * 60 * 1000).toISOString();
+  const freshness =
+    hours <= policy.watch_after_hours
+      ? "live"
+      : hours <= policy.stale_after_hours
+        ? "recent"
+        : "stale";
+  const status =
+    hours <= policy.watch_after_hours
+      ? "fresh"
+      : hours <= policy.aging_after_hours
+        ? "watch"
+        : hours <= policy.stale_after_hours
+          ? "aging"
+          : "stale";
+
+  return {
+    freshness,
+    status,
+    age_hours: hours,
+    watch_due_at: addHours(policy.watch_after_hours),
+    aging_due_at: addHours(policy.aging_after_hours),
+    stale_due_at: addHours(policy.stale_after_hours),
+    refresh_recommended_by_at: addHours(
+      policy.response_expectation === "same_day" ? policy.aging_after_hours : policy.stale_after_hours,
+    ),
+    policy,
+  };
+}
+
+function inferHealthPlanSignalFreshnessAtBucket(timestamp, now = new Date(), signalOrCategory = null, responseExpectation = null) {
+  const assessment = assessHealthPlanSignalFreshness(timestamp, now, signalOrCategory, responseExpectation);
+  return {
+    freshness: assessment.freshness,
+    status: assessment.status,
+    age_hours: assessment.age_hours,
+    refresh_recommended_by_at: assessment.refresh_recommended_by_at,
+    watch_due_at: assessment.watch_due_at,
+    aging_due_at: assessment.aging_due_at,
+    stale_due_at: assessment.stale_due_at,
+    policy: assessment.policy,
+  };
+}
+
+function inferHealthPlanSignalFreshnessAtCurrent(signal, now = new Date(), responseExpectation = null) {
+  return inferHealthPlanSignalFreshnessAtBucket(signal?.observed_at, now, signal, responseExpectation);
+}
+
+function inferHealthPlanSignalFreshnessAt(timestamp, now = new Date(), signalOrCategory = null, responseExpectation = null) {
+  return assessHealthPlanSignalFreshness(timestamp, now, signalOrCategory, responseExpectation).freshness;
+}
+
+function healthPlanFreshnessStatusRank(status) {
+  if (status === "stale") return 3;
+  if (status === "aging") return 2;
+  if (status === "watch") return 1;
+  return 0;
+}
+
+function earliestTimestamp(values = []) {
+  const normalized = values
+    .map((value) => normalizeTimestampValue(value))
+    .filter(Boolean)
+    .sort((left, right) => new Date(left).getTime() - new Date(right).getTime());
+  return normalized[0] || null;
+}
+
+function earlierTimestamp(...values) {
+  return earliestTimestamp(values.filter(Boolean));
+}
+
+function healthPlanRecommendationUsesVerificationClock(item, sectionName) {
+  if (sectionName !== "monitoring" && sectionName !== "escalation") return false;
+  const text = nullIfBlank(item?.text) || "";
+  return (
+    /\bverify\b/i.test(text)
+    || /\bconfirm\b/i.test(text)
+    || /\bre-?confirm\b/i.test(text)
+    || /\brefresh\b/i.test(text)
+    || /\bre-?check\b/i.test(text)
+    || /\btouchpoint\b/i.test(text)
+    || normalizeHealthPlanRecommendationConflict(item?.evidence_conflict, null) === "freshness_gap"
+    || normalizeHealthPlanRecommendationConflict(item?.evidence_conflict, null) === "conflicted"
+    || ["stale", "unknown", "mixed"].includes(normalizeHealthPlanRecommendationFreshness(item?.evidence_freshness, null) || "")
+  );
+}
+
+function buildHealthPlanFreshnessDecaySummary(plan, profile, predictiveContext, organization = null, now = new Date()) {
+  const language = normalizeLanguage(
+    plan?.language,
+    profile?.user?.language || organization?.defaultLanguage || "de",
+  );
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const savedSignals = normalizeHealthPlanSourceSignals(plan?.source_signals_json);
+  const generatedAt = normalizeTimestampValue(plan?.generated_at);
+  const generatedAtDate = generatedAt ? new Date(generatedAt) : null;
+  const ageHours =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? Math.max(0, (now.getTime() - generatedAtDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const observedTimestamps = savedSignals
+    .map((signal) => normalizeTimestampValue(signal?.observed_at))
+    .filter(Boolean);
+  const freshestObservedAt = latestTimestamp(observedTimestamps);
+  const freshestObservedAtDate = freshestObservedAt ? new Date(freshestObservedAt) : null;
+  const freshestSignalAgeHours =
+    freshestObservedAtDate && !Number.isNaN(freshestObservedAtDate.getTime())
+      ? Math.max(0, (now.getTime() - freshestObservedAtDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const sameDayExpected = policy.response_expectation === "same-day review";
+  const responseExpectation = sameDayExpected ? "same_day" : "within_24h";
+  const currentFreshnessBuckets = savedSignals.map((signal) => {
+    const assessment = inferHealthPlanSignalFreshnessAtCurrent(signal, now, responseExpectation);
+    return {
+      id: nullIfBlank(signal?.id),
+      freshness: assessment.freshness,
+      status: assessment.status,
+      age_hours: assessment.age_hours,
+      watch_due_at: assessment.watch_due_at,
+      aging_due_at: assessment.aging_due_at,
+      stale_due_at: assessment.stale_due_at,
+      refresh_recommended_by_at: assessment.refresh_recommended_by_at,
+    };
+  });
+  const freshnessCountsActive = currentFreshnessBuckets.some((item) => item.age_hours != null);
+  const liveCount = freshnessCountsActive ? currentFreshnessBuckets.filter((item) => item.freshness === "live").length : 0;
+  const recentCount = freshnessCountsActive ? currentFreshnessBuckets.filter((item) => item.freshness === "recent").length : 0;
+  const staleCount = freshnessCountsActive ? currentFreshnessBuckets.filter((item) => item.freshness === "stale").length : 0;
+  const unknownCount = freshnessCountsActive ? currentFreshnessBuckets.filter((item) => item.freshness === "unknown").length : 0;
+  const planThresholds = sameDayExpected
+    ? { watch: 4, aging: 8, stale: 12 }
+    : { watch: 24, aging: 72, stale: 168 };
+  const planStatus =
+    ageHours == null
+      ? "fresh"
+      : ageHours > planThresholds.stale
+        ? "stale"
+        : ageHours > planThresholds.aging
+          ? "aging"
+          : ageHours > planThresholds.watch
+            ? "watch"
+            : "fresh";
+  const planWatchAt =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? new Date(generatedAtDate.getTime() + planThresholds.watch * 60 * 60 * 1000).toISOString()
+      : null;
+  const planAgingAt =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? new Date(generatedAtDate.getTime() + planThresholds.aging * 60 * 60 * 1000).toISOString()
+      : null;
+  const planStaleAt =
+    generatedAtDate && !Number.isNaN(generatedAtDate.getTime())
+      ? new Date(generatedAtDate.getTime() + planThresholds.stale * 60 * 60 * 1000).toISOString()
+      : null;
+  const signalStatusCandidates = [
+    ...currentFreshnessBuckets.map((item) => item.status),
+    planStatus,
+  ];
+  const signalStatus = signalStatusCandidates
+    .slice()
+    .sort((left, right) => healthPlanFreshnessStatusRank(right) - healthPlanFreshnessStatusRank(left))[0] || "fresh";
+  const signalRequiresRefresh = signalStatus === "stale" || (signalStatus === "aging" && sameDayExpected);
+  const signalRefreshRecommendedByAt = earlierTimestamp(
+    earliestTimestamp(currentFreshnessBuckets.map((item) => item.refresh_recommended_by_at)),
+    sameDayExpected ? planAgingAt : planStaleAt,
+  );
+  const signalNextStatusCandidate = [
+    planStatus === "fresh" && planWatchAt ? { status: "watch", at: planWatchAt } : null,
+    planStatus === "watch" && planAgingAt ? { status: "aging", at: planAgingAt } : null,
+    planStatus === "aging" && planStaleAt ? { status: "stale", at: planStaleAt } : null,
+    ...currentFreshnessBuckets.map((item) =>
+      item.status === "fresh"
+        ? item.watch_due_at ? { status: "watch", at: item.watch_due_at } : null
+        : item.status === "watch"
+          ? item.aging_due_at ? { status: "aging", at: item.aging_due_at } : null
+          : item.status === "aging"
+            ? item.stale_due_at ? { status: "stale", at: item.stale_due_at } : null
+            : null),
+  ]
+    .filter(Boolean)
+    .filter((candidate) => healthPlanFreshnessStatusRank(candidate.status) > healthPlanFreshnessStatusRank(signalStatus))
+    .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] || null;
+  const signalNextStatus = signalStatus === "stale" ? null : signalNextStatusCandidate?.status || null;
+  const signalNextStatusAt = signalStatus === "stale" ? null : signalNextStatusCandidate?.at || null;
+  const signalScorePenalty =
+    signalStatus === "stale"
+      ? sameDayExpected ? 18 : 12
+      : signalStatus === "aging"
+        ? sameDayExpected ? 10 : 7
+        : signalStatus === "watch"
+          ? 4
+          : 0;
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan?.source_signals_json);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const recommendationItems = [
+    ...normalizeHealthPlanSectionItems(plan?.goals_json).map((item) => ({ ...item, __section: "goals" })),
+    ...normalizeHealthPlanSectionItems(plan?.daily_support_json).map((item) => ({ ...item, __section: "daily_support" })),
+    ...normalizeHealthPlanSectionItems(plan?.monitoring_json).map((item) => ({ ...item, __section: "monitoring" })),
+    ...normalizeHealthPlanSectionItems(plan?.escalation_json).map((item) => ({ ...item, __section: "escalation" })),
+    ...normalizeHealthPlanSectionItems(plan?.caregiver_guidance_json).map((item) => ({ ...item, __section: "caregiver_guidance" })),
+  ].map((item) => {
+    const timing = deriveHealthPlanRecommendationVerificationTiming(item, sourceSignals, contextSnapshot, now);
+    return {
+      ...item,
+      due_window: normalizeHealthPlanDueWindow(item?.due_window, null),
+      priority: normalizeHealthPlanItemPriority(item?.priority, null),
+      staff_disposition: normalizeHealthPlanRecommendationDisposition(item?.staff_disposition, null),
+      last_verified_at: normalizeTimestampValue(timing?.last_verified_at),
+      recheck_due_at: normalizeTimestampValue(timing?.recheck_due_at),
+    };
+  });
+  const timedRecommendationItems = recommendationItems.filter((item) =>
+    item.recheck_due_at
+    && healthPlanRecommendationUsesVerificationClock(item, item.__section),
+  );
+  const openTimedRecommendationItems = timedRecommendationItems.filter((item) => item.staff_disposition !== "confirmed");
+  const dueSoonWindowHours = sameDayExpected ? 2 : 12;
+  const overdueToStaleHours = sameDayExpected ? 2 : 12;
+  const timedRecommendationSummary = openTimedRecommendationItems.reduce((summary, item) => {
+    const dueAt = item.recheck_due_at ? new Date(item.recheck_due_at) : null;
+    if (!dueAt || Number.isNaN(dueAt.getTime())) return summary;
+    const diffHours = (dueAt.getTime() - now.getTime()) / (1000 * 60 * 60);
+    if (item.last_verified_at) summary.latestVerifiedAtCandidates.push(item.last_verified_at);
+    summary.earliestDueAtCandidates.push(item.recheck_due_at);
+    if (diffHours < 0) {
+      summary.overdueCount += 1;
+      if (item.due_window === "same_day") summary.sameDayOverdueCount += 1;
+      if (item.priority === "high") summary.highPriorityOverdueCount += 1;
+      if (Math.abs(diffHours) >= overdueToStaleHours) summary.longOverdueCount += 1;
+      return summary;
+    }
+    if (diffHours <= dueSoonWindowHours) summary.dueSoonCount += 1;
+    return summary;
+  }, {
+    overdueCount: 0,
+    sameDayOverdueCount: 0,
+    highPriorityOverdueCount: 0,
+    longOverdueCount: 0,
+    dueSoonCount: 0,
+    earliestDueAtCandidates: [],
+    latestVerifiedAtCandidates: [],
+  });
+  const earliestRecheckDueAt = earliestTimestamp(timedRecommendationSummary.earliestDueAtCandidates);
+  const latestRecommendationVerifiedAt = latestTimestamp(timedRecommendationSummary.latestVerifiedAtCandidates);
+  let recommendationStatus = "fresh";
+  if (
+    timedRecommendationSummary.sameDayOverdueCount > 0
+    || timedRecommendationSummary.highPriorityOverdueCount > 0
+    || timedRecommendationSummary.longOverdueCount > 0
+  ) {
+    recommendationStatus = "stale";
+  } else if (timedRecommendationSummary.overdueCount > 0) {
+    recommendationStatus = "aging";
+  } else if (timedRecommendationSummary.dueSoonCount > 0) {
+    recommendationStatus = "watch";
+  }
+  const recommendationRequiresRefresh = timedRecommendationSummary.overdueCount > 0;
+  const recommendationScorePenalty =
+    recommendationStatus === "stale"
+      ? sameDayExpected ? 18 : 12
+      : recommendationStatus === "aging"
+        ? sameDayExpected ? 10 : 7
+        : recommendationStatus === "watch"
+          ? 4
+          : 0;
+  let recommendationNextStatus = null;
+  let recommendationNextStatusAt = null;
+  if (recommendationStatus === "fresh" && earliestRecheckDueAt) {
+    const dueAtMs = new Date(earliestRecheckDueAt).getTime();
+    const watchAtMs = dueAtMs - (dueSoonWindowHours * 60 * 60 * 1000);
+    if (watchAtMs > now.getTime()) {
+      recommendationNextStatus = "watch";
+      recommendationNextStatusAt = new Date(watchAtMs).toISOString();
+    } else {
+      recommendationNextStatus = "watch";
+      recommendationNextStatusAt = earliestRecheckDueAt;
+    }
+  } else if (recommendationStatus === "watch" && earliestRecheckDueAt) {
+    recommendationNextStatus =
+      sameDayExpected || timedRecommendationSummary.highPriorityOverdueCount > 0
+        ? "stale"
+        : "aging";
+    recommendationNextStatusAt = earliestRecheckDueAt;
+  } else if (recommendationStatus === "aging" && earliestRecheckDueAt) {
+    recommendationNextStatus = "stale";
+    recommendationNextStatusAt = new Date(new Date(earliestRecheckDueAt).getTime() + (overdueToStaleHours * 60 * 60 * 1000)).toISOString();
+  }
+
+  const signalRank = healthPlanFreshnessStatusRank(signalStatus);
+  const recommendationRank = healthPlanFreshnessStatusRank(recommendationStatus);
+  const status = recommendationRank > signalRank ? recommendationStatus : signalStatus;
+  const summaryDecayReason =
+    recommendationRank > 0 && signalRank > 0
+      ? "mixed"
+      : recommendationRank > signalRank
+        ? timedRecommendationSummary.overdueCount > 0
+          ? "recommendation_overdue"
+          : "recommendation_due_soon"
+        : signalRank > 0
+          ? "signal_age"
+          : null;
+  const requiresRefresh = signalRequiresRefresh || recommendationRequiresRefresh;
+  const refreshRecommendedByAt = earlierTimestamp(signalRefreshRecommendedByAt, earliestRecheckDueAt);
+  const refreshOverdue = Boolean(
+    requiresRefresh
+    && refreshRecommendedByAt
+    && new Date(refreshRecommendedByAt).getTime() <= now.getTime(),
+  );
+  const nextStatusCandidate = [
+    signalNextStatus && signalNextStatusAt ? { status: signalNextStatus, at: signalNextStatusAt } : null,
+    recommendationNextStatus && recommendationNextStatusAt ? { status: recommendationNextStatus, at: recommendationNextStatusAt } : null,
+  ]
+    .filter(Boolean)
+    .filter((candidate) => healthPlanFreshnessStatusRank(candidate.status) > healthPlanFreshnessStatusRank(status))
+    .sort((left, right) => new Date(left.at).getTime() - new Date(right.at).getTime())[0] || null;
+  const nextStatus = status === "stale" ? null : nextStatusCandidate?.status || null;
+  const nextStatusAt = status === "stale" ? null : nextStatusCandidate?.at || null;
+  const scorePenalty = Math.min(24, signalScorePenalty + recommendationScorePenalty);
+  const summaryText =
+    summaryDecayReason === "mixed"
+      ? "Some source signals are aging and one or more recommendation rechecks are now due, so staff should refresh the live picture before treating this plan as fully current."
+      : summaryDecayReason === "recommendation_overdue"
+        ? timedRecommendationSummary.sameDayOverdueCount > 0 || timedRecommendationSummary.highPriorityOverdueCount > 0
+          ? "Time-bound verification steps have slipped past their safe window, so staff should refresh this plan against the live picture before relying on it."
+          : "One or more saved recommendation checks are overdue, so staff should review the plan against newer context now."
+        : summaryDecayReason === "recommendation_due_soon"
+          ? "A saved recommendation check is coming due soon, so staff should keep this plan under active review."
+          : signalStatus === "stale"
+            ? sameDayExpected
+              ? "This same-day plan has aged past a safe operating window and needs a fresh live-picture refresh before staff rely on it."
+              : "The saved plan is now stale against the latest care context and should be refreshed before broader reliance."
+            : signalStatus === "aging"
+              ? sameDayExpected
+                ? "This same-day plan is aging quickly; staff should refresh the live picture before treating it as fully current."
+                : "The saved evidence is aging and should be reviewed against newer context soon."
+              : signalStatus === "watch"
+                ? "Some supporting evidence is no longer fully fresh, so staff should keep a live-picture refresh in view."
+                : "The saved plan is still anchored in a reasonably fresh care picture.";
+
+  return {
+    status,
+    summary_text: summaryText,
+    summary_decay_reason: summaryDecayReason,
+    response_expectation: sameDayExpected ? "same_day" : "within_24h",
+    plan_age_hours: ageHours == null ? null : Math.round(ageHours * 10) / 10,
+    freshest_signal_age_hours: freshestSignalAgeHours == null ? null : Math.round(freshestSignalAgeHours * 10) / 10,
+    latest_recommendation_verified_at: latestRecommendationVerifiedAt,
+    earliest_recheck_due_at: earliestRecheckDueAt,
+    refresh_recommended_by_at: refreshRecommendedByAt,
+    refresh_overdue: refreshOverdue,
+    next_status: nextStatus,
+    next_status_at: nextStatusAt,
+    live_signal_count: liveCount,
+    recent_signal_count: recentCount,
+    stale_signal_count: staleCount,
+    unknown_signal_count: unknownCount,
+    recommendation_timed_item_count: openTimedRecommendationItems.length,
+    recommendation_due_soon_count: timedRecommendationSummary.dueSoonCount,
+    recommendation_overdue_count: timedRecommendationSummary.overdueCount,
+    recommendation_overdue_same_day_count: timedRecommendationSummary.sameDayOverdueCount,
+    requires_refresh: requiresRefresh,
+    score_penalty: scorePenalty,
+  };
+}
+
+function buildHealthPlanQualitySummary(plan, profile, predictiveContext, organization = null, now = new Date(), existingAudit = null, existingReview = null) {
+  if (!plan) return null;
+
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const reviewAssessment = existingReview || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const generationAssessment =
+    normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json)
+    || buildHealthPlanGenerationAssessment(profile, predictiveContext, assembleRichHealthPlanSourceSignals(profile, predictiveContext), organization);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const beforeOutcomeState = buildHealthPlanTacticOutcomeStateFromSnapshot(plan?.context_snapshot_json);
+  const afterOutcomeState = buildHealthPlanTacticOutcomeStateFromProfile(profile);
+  const outcomeTrajectory = buildHealthPlanOutcomeTrajectory(beforeOutcomeState, afterOutcomeState);
+  const recommendationReceiptSummary = buildHealthPlanRecommendationReceiptSummary(plan);
+  const outcomeConfidence = buildHealthPlanOutcomeConfidenceSummary(
+    beforeOutcomeState,
+    afterOutcomeState,
+    {
+      generatedAt: plan?.generated_at || contextSnapshot?.captured_at,
+      liveEvidenceAt: buildHealthPlanOutcomeEvidenceTimestamp(profile),
+      outcomeTrajectory,
+      receiptGap: buildHealthPlanExecutionReceiptGap(
+        beforeOutcomeState,
+        afterOutcomeState,
+        {
+          generatedAt: plan?.generated_at || contextSnapshot?.captured_at,
+          responseExpectation: buildHealthPlanPolicy(profile, predictiveContext, organization).response_expectation,
+          outcomeTrajectory,
+          now,
+        },
+      ),
+      recommendationReceipts: recommendationReceiptSummary,
+      now,
+    },
+  );
+  const savedSignals = Array.isArray(plan.source_signals_json) ? plan.source_signals_json : [];
+  const currentSignals = assembleRichHealthPlanSourceSignals(profile, predictiveContext);
+  const savedSignalIds = new Set(savedSignals.map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const currentSignalIds = new Set(currentSignals.map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const referencedSignalIds = healthPlanReferencedSignalIds(plan);
+  const actionSignalIds = healthPlanActionSignalIds(plan);
+  const sectionEntries = [
+    ["goals", Array.isArray(plan.goals_json) ? plan.goals_json : []],
+    ["daily_support", Array.isArray(plan.daily_support_json) ? plan.daily_support_json : []],
+    ["monitoring", Array.isArray(plan.monitoring_json) ? plan.monitoring_json : []],
+    ["escalation", Array.isArray(plan.escalation_json) ? plan.escalation_json : []],
+    ["caregiver_guidance", Array.isArray(plan.caregiver_guidance_json) ? plan.caregiver_guidance_json : []],
+  ];
+  const sections = sectionEntries.flatMap(([, items]) => items);
+  const recommendationReviews = sectionEntries.flatMap(([sectionName, items]) =>
+    normalizeHealthPlanSectionItems(items).map((item) =>
+      deriveHealthPlanRecommendationEvidenceReview(item, sectionName, savedSignals, contextSnapshot),
+    ),
+  );
+  const recommendationProvenance = sectionEntries.flatMap(([sectionName, items]) =>
+    normalizeHealthPlanSectionItems(items).map((item) =>
+      deriveHealthPlanRecommendationProvenanceMetadata(item, sectionName, savedSignals, contextSnapshot),
+    ),
+  );
+  const recommendationUseGuidance = sectionEntries.flatMap(([sectionName, items]) =>
+    normalizeHealthPlanSectionItems(items).map((item) =>
+      deriveHealthPlanRecommendationUseGuidance(item, sectionName, savedSignals, contextSnapshot),
+    ),
+  );
+  const recommendationReadyCount = recommendationReviews.filter((item) => item?.evidence_review_state === "ready").length;
+  const recommendationVerifyFirstCount = recommendationReviews.filter((item) => item?.evidence_review_state === "verify_first").length;
+  const recommendationUrgentReviewCount = recommendationReviews.filter((item) => item?.evidence_review_state === "urgent_review").length;
+  const recommendationStrongProvenanceCount = recommendationProvenance.filter((item) => item?.recommendation_provenance_strength === "strong").length;
+  const recommendationModerateProvenanceCount = recommendationProvenance.filter((item) => item?.recommendation_provenance_strength === "moderate").length;
+  const recommendationCautionProvenanceCount = recommendationProvenance.filter((item) => item?.recommendation_provenance_strength === "caution").length;
+  const recommendationWeakProvenanceCount = recommendationProvenance.filter((item) => item?.recommendation_provenance_strength === "weak").length;
+  const recommendationReadyWithJudgmentCount = recommendationUseGuidance.filter((item) => item?.recommendation_use_mode === "ready_with_judgment").length;
+  const recommendationVerifyBeforeUseCount = recommendationUseGuidance.filter((item) => item?.recommendation_use_mode === "verify_before_use").length;
+  const recommendationStaffReviewOnlyCount = recommendationUseGuidance.filter((item) => item?.recommendation_use_mode === "staff_review_only").length;
+  const urgentRecommendationStaffReviewOnlyCount = sectionEntries.flatMap(([sectionName, items]) =>
+    normalizeHealthPlanSectionItems(items).map((item) => {
+      const useGuidance = deriveHealthPlanRecommendationUseGuidance(item, sectionName, savedSignals, contextSnapshot);
+      const dueWindow = normalizeHealthPlanDueWindow(item?.due_window, null);
+      const priority = normalizeHealthPlanItemPriority(item?.priority, null);
+      return useGuidance.recommendation_use_mode === "staff_review_only"
+        && (dueWindow === "same_day" || priority === "high" || sectionName === "monitoring" || sectionName === "escalation");
+    }),
+  ).filter(Boolean).length;
+  const recommendationProvenanceAverageScore = recommendationProvenance.length
+    ? Math.round(
+      recommendationProvenance.reduce((sum, item) =>
+        sum + (Number.isFinite(Number(item?.recommendation_provenance_score)) ? Number(item.recommendation_provenance_score) : 0), 0) / recommendationProvenance.length,
+    )
+    : null;
+  const evidenceLinkedCount = sections.filter((item) => Array.isArray(item?.source_signal_ids) && item.source_signal_ids.length > 0).length;
+  const evidenceCoverage = sections.length ? Math.round((evidenceLinkedCount / sections.length) * 100) : 0;
+  const distinctSignalCoverage = savedSignalIds.size ? Math.round((Math.min(referencedSignalIds.size, savedSignalIds.size) / savedSignalIds.size) * 100) : 0;
+  const currentSignalsReferenced = [...referencedSignalIds].filter((signalId) => currentSignalIds.has(signalId)).length;
+  const currentSignalCoverage = currentSignalIds.size ? Math.round((currentSignalsReferenced / currentSignalIds.size) * 100) : 0;
+  const currentCriticalSignalIds = Array.isArray(audit?.current_critical_signal_ids) ? audit.current_critical_signal_ids : [];
+  const addressedCurrentCriticalCount = currentCriticalSignalIds.filter((signalId) => actionSignalIds.has(signalId)).length;
+  const criticalActionCoverage = currentCriticalSignalIds.length
+    ? Math.round((addressedCurrentCriticalCount / currentCriticalSignalIds.length) * 100)
+    : 100;
+  const freshnessDecay = buildHealthPlanFreshnessDecaySummary(plan, profile, predictiveContext, organization, now);
+  const auditReasons = Array.isArray(audit?.reasons) ? audit.reasons : [];
+  const highReasonCount = auditReasons.filter((reason) => reason?.severity === "high").length;
+  const mediumReasonCount = auditReasons.filter((reason) => reason?.severity === "medium").length;
+  const automatedReview = normalizeHealthPlanAutomatedReview(plan?.automated_review_json);
+  const automatedRubric = automatedReview?.rubric_scores || null;
+  const coordinationSummary = buildHealthPlanCoordinationSummary(
+    plan,
+    profile,
+    predictiveContext,
+    organization,
+    now,
+    audit,
+    reviewAssessment,
+  );
+  const executionPack = buildHealthPlanExecutionPack(
+    plan,
+    profile,
+    predictiveContext,
+    organization,
+    now,
+    audit,
+    reviewAssessment,
+    coordinationSummary,
+  );
+  const sharingBoundaryCovered =
+    !currentSignalIds.has("consent-family-sharing") ||
+    actionSignalIds.has("consent-family-sharing") ||
+    healthPlanSectionSignalIds(plan?.caregiver_guidance_json).has("consent-family-sharing");
+  const ownerCoverage =
+    currentSignalIds.has("care-circle-context")
+      ? actionSignalIds.has("care-circle-context") || healthPlanSectionSignalIds(plan?.caregiver_guidance_json).has("care-circle-context")
+      : true;
+  const predictiveGrounded =
+    audit?.predictive_available_now === false ||
+    audit?.predictive_available_now == null ||
+    audit?.predictive_used_at_generation === true;
+  const reviewApprovalCurrent = !auditReasons.some((reason) => reason?.code === "review_attestation_expired");
+
+  const strengths = [];
+  const cautions = [];
+
+  if (plan.review_status === "reviewed" && reviewApprovalCurrent) strengths.push({ code: "reviewed_by_staff", state: "good" });
+  else if (plan.review_status === "reviewed") cautions.push({ code: "review_attestation_expired", state: "critical" });
+  else cautions.push({ code: "staff_review_pending", state: "watch" });
+
+  if (automatedReview?.verdict === "pass") strengths.push({ code: "automated_review_passed", state: "good" });
+  else if (automatedReview?.verdict === "block") cautions.push({ code: "automated_review_blocked", state: "critical" });
+  else if (automatedReview?.verdict === "revise") cautions.push({ code: "automated_review_requested_revisions", state: "watch" });
+
+  if (automatedRubric?.overall >= 80) strengths.push({ code: "automated_review_rubric_strong", state: "good" });
+  else if (automatedRubric?.overall != null && automatedRubric.overall < 60) cautions.push({ code: "automated_review_rubric_low", state: "critical" });
+  else if (automatedRubric?.overall != null) cautions.push({ code: "automated_review_rubric_mixed", state: "watch" });
+
+  if (automatedRubric?.grounding != null && automatedRubric.grounding < 60) cautions.push({ code: "plan_grounding_weak", state: "critical" });
+  if (automatedRubric?.actionability != null && automatedRubric.actionability < 60) cautions.push({ code: "plan_actionability_weak", state: "critical" });
+  if (automatedRubric?.timeliness != null && automatedRubric.timeliness < 60) cautions.push({ code: "plan_timeliness_weak", state: "watch" });
+  if (automatedRubric?.safety != null && automatedRubric.safety < 60) cautions.push({ code: "plan_safety_weak", state: "critical" });
+  if (automatedRubric?.shareability != null && automatedRubric.shareability < 60) cautions.push({ code: "plan_shareability_weak", state: "watch" });
+
+  if (plan.generator_provider !== "fallback") strengths.push({ code: "validated_llm_pipeline", state: "good" });
+  else cautions.push({ code: "fallback_plan_in_use", state: "watch" });
+
+  if (evidenceCoverage >= 85) strengths.push({ code: "evidence_well_linked", state: "good" });
+  else cautions.push({ code: "evidence_links_thin", state: evidenceCoverage >= 60 ? "watch" : "critical" });
+
+  if (distinctSignalCoverage >= 70) strengths.push({ code: "broad_signal_coverage", state: "good" });
+  else cautions.push({ code: "signal_coverage_narrow", state: distinctSignalCoverage >= 50 ? "watch" : "critical" });
+
+  if (criticalActionCoverage === 100) strengths.push({ code: "critical_signals_actioned", state: "good" });
+  else if (currentCriticalSignalIds.length) cautions.push({ code: "critical_signals_open", state: "critical" });
+
+  if (predictiveGrounded) strengths.push({ code: "predictive_context_aligned", state: "good" });
+  else cautions.push({ code: "predictive_context_missing", state: "watch" });
+
+  if (generationAssessment.confidence === "high") strengths.push({ code: "generation_context_strong", state: "good" });
+  else cautions.push({
+    code: generationAssessment.confidence === "low" ? "generation_context_limited" : "generation_context_review",
+    state: generationAssessment.confidence === "low" ? "critical" : "watch",
+  });
+
+  if (recommendationUrgentReviewCount === 0 && recommendationVerifyFirstCount <= Math.max(1, Math.floor(sections.length / 3))) {
+    strengths.push({ code: "recommendation_receipts_stable", state: "good" });
+  } else if (recommendationUrgentReviewCount > 0) {
+    cautions.push({ code: "recommendations_need_urgent_review", state: "critical" });
+  } else if (recommendationVerifyFirstCount > Math.max(1, Math.floor(sections.length / 2))) {
+    cautions.push({ code: "recommendations_need_verification", state: "watch" });
+  }
+
+  if (recommendationStrongProvenanceCount >= Math.max(2, Math.floor(sections.length / 2))) {
+    strengths.push({ code: "recommendations_strongly_grounded", state: "good" });
+  } else if (recommendationWeakProvenanceCount > 0) {
+    cautions.push({ code: "recommendations_provenance_weak", state: recommendationWeakProvenanceCount > 1 ? "critical" : "watch" });
+  } else if (recommendationCautionProvenanceCount > Math.max(1, Math.floor(sections.length / 2))) {
+    cautions.push({ code: "recommendations_provenance_caution", state: "watch" });
+  }
+
+  if (recommendationStaffReviewOnlyCount === 0 && recommendationReadyWithJudgmentCount >= Math.max(2, Math.floor(sections.length / 2))) {
+    strengths.push({ code: "recommendations_ready_for_live_use", state: "good" });
+  } else if (urgentRecommendationStaffReviewOnlyCount > 0) {
+    cautions.push({ code: "urgent_recommendations_not_ready_for_live_use", state: "critical" });
+  } else if (recommendationStaffReviewOnlyCount > 0) {
+    cautions.push({ code: "recommendations_staff_review_only", state: recommendationStaffReviewOnlyCount > 1 ? "critical" : "watch" });
+  } else if (recommendationVerifyBeforeUseCount > Math.max(1, Math.floor(sections.length / 2))) {
+    cautions.push({ code: "recommendations_verify_before_use", state: "watch" });
+  }
+
+  if (reviewAssessment?.status === "ready") strengths.push({ code: "operational_review_ready", state: "good" });
+  else if (reviewAssessment?.status === "hold") cautions.push({ code: "operational_review_blocked", state: "critical" });
+  else cautions.push({ code: "operational_review_pending", state: "watch" });
+
+  if (executionPack?.load_state === "overloaded") cautions.push({ code: "execution_lane_overloaded", state: "critical" });
+  else if (executionPack?.load_state === "busy") cautions.push({ code: "execution_lane_busy", state: "watch" });
+  else if (executionPack?.load_state === "manageable" || executionPack?.load_state === "clear") strengths.push({ code: "execution_lane_focused", state: "good" });
+
+  if (freshnessDecay.status === "fresh") strengths.push({ code: "evidence_freshness_current", state: "good" });
+  else if (freshnessDecay.status === "stale") cautions.push({ code: "evidence_freshness_stale", state: "critical" });
+  else if (freshnessDecay.status === "aging") cautions.push({ code: "evidence_freshness_aging", state: "watch" });
+  else if (freshnessDecay.status === "watch") cautions.push({ code: "evidence_freshness_watch", state: "watch" });
+
+  if (sharingBoundaryCovered) strengths.push({ code: "sharing_boundary_respected", state: "good" });
+  else cautions.push({ code: "sharing_boundary_needs_attention", state: "critical" });
+
+  if (ownerCoverage) strengths.push({ code: "follow_up_owner_clear", state: "good" });
+  else cautions.push({ code: "follow_up_owner_missing", state: "critical" });
+
+  if (outcomeTrajectory?.status === "improved" && outcomeConfidence?.confidence_state === "verified") {
+    strengths.push({ code: "prior_plan_outcome_improved", state: "good" });
+  } else if (outcomeTrajectory?.status === "improved" && outcomeConfidence?.confidence_state === "mixed") {
+    cautions.push({ code: "prior_plan_outcome_improved_needs_receipts", state: "watch" });
+  } else if (outcomeTrajectory?.status === "improved") {
+    cautions.push({
+      code: outcomeConfidence?.confidence_state === "stale"
+        ? "prior_plan_outcome_improved_stale"
+        : "prior_plan_outcome_improved_unverified",
+      state: "watch",
+    });
+  }
+  else if (outcomeTrajectory?.status === "worsened") cautions.push({ code: "prior_plan_outcome_worsened", state: "critical" });
+  else if (outcomeTrajectory?.status === "stalled") cautions.push({ code: "prior_plan_outcome_stalled", state: "watch" });
+
+  let score = 30;
+  score += plan.review_status === "reviewed" ? 20 : 6;
+  score += automatedReview?.verdict === "pass" ? 6 : automatedReview?.verdict === "block" ? -10 : automatedReview?.verdict === "revise" ? -3 : 0;
+  score += automatedRubric?.overall != null ? Math.round((automatedRubric.overall - 50) * 0.08) : 0;
+  score += plan.generator_provider === "fallback" ? 2 : 10;
+  score += Math.round(evidenceCoverage * 0.18);
+  score += Math.round(distinctSignalCoverage * 0.12);
+  score += Math.round(criticalActionCoverage * 0.18);
+  score += predictiveGrounded ? 6 : 0;
+  score += generationAssessment.confidence === "high" ? 8 : generationAssessment.confidence === "medium" ? 2 : -12;
+  score += recommendationReadyCount * 1.5;
+  score -= recommendationVerifyFirstCount * 2;
+  score -= recommendationUrgentReviewCount * 6;
+  score += recommendationReadyWithJudgmentCount * 1.5;
+  score -= recommendationVerifyBeforeUseCount * 1.5;
+  score -= recommendationStaffReviewOnlyCount * 4;
+  score -= urgentRecommendationStaffReviewOnlyCount * 3;
+  score += recommendationStrongProvenanceCount * 2;
+  score += recommendationModerateProvenanceCount * 0.75;
+  score -= recommendationCautionProvenanceCount * 1.5;
+  score -= recommendationWeakProvenanceCount * 4;
+  score += recommendationProvenanceAverageScore != null ? Math.round((recommendationProvenanceAverageScore - 50) * 0.12) : 0;
+  score += reviewAssessment?.status === "ready" ? 8 : reviewAssessment?.status === "hold" ? -15 : -2;
+  score += executionPack?.load_state === "clear" ? 4 : executionPack?.load_state === "manageable" ? 2 : executionPack?.load_state === "busy" ? -6 : executionPack?.load_state === "overloaded" ? -16 : 0;
+  score -= freshnessDecay.score_penalty;
+  score += sharingBoundaryCovered ? 4 : -8;
+  score += ownerCoverage ? 4 : -8;
+  score += outcomeTrajectory?.status === "improved" ? 6 : outcomeTrajectory?.status === "stalled" ? -8 : outcomeTrajectory?.status === "worsened" ? -18 : 0;
+  score -= highReasonCount * 15;
+  score -= mediumReasonCount * 7;
+  score = Math.max(0, Math.min(100, score));
+
+  let trustLevel = "medium";
+  if (audit?.status === "needs_regeneration" || generationAssessment.confidence === "low" || reviewAssessment?.status === "hold" || outcomeTrajectory?.status === "worsened" || score < 60) trustLevel = "low";
+  else if (audit?.status === "ready" && score >= 80 && freshnessDecay.status === "fresh") trustLevel = "high";
+
+  const recommendedAction =
+    audit?.status === "needs_regeneration"
+      ? "regenerate"
+      : audit?.status === "needs_review" || reviewAssessment?.status !== "ready" || plan.review_status !== "reviewed" || generationAssessment.confidence !== "high" || freshnessDecay.requires_refresh
+        ? "review"
+        : "share";
+  const improvementSummary = buildHealthPlanImprovementSummary(plan, audit, reviewAssessment, {
+    score,
+    trust_level: trustLevel,
+  });
+
+  if (improvementSummary?.status === "improved") strengths.push({ code: "version_improved", state: "good" });
+  else if (improvementSummary?.status === "regressed") cautions.push({ code: "version_regressed", state: "critical" });
+  else if (improvementSummary?.status === "mixed") cautions.push({ code: "version_improvement_mixed", state: "watch" });
+
+  const trustSummary = (() => {
+    const criticalCodes = cautions.filter((item) => item?.state === "critical").map((item) => item.code).filter(Boolean);
+    const watchCodes = cautions.filter((item) => item?.state === "watch").map((item) => item.code).filter(Boolean);
+    const gateCodes = Array.isArray(generationAssessment?.trust_gate_reason_codes) ? generationAssessment.trust_gate_reason_codes : [];
+    const reasonCodes = [...new Set([
+      ...gateCodes,
+      ...criticalCodes.slice(0, 4),
+      ...watchCodes.slice(0, 4),
+    ])];
+    let state = "ready_to_share";
+    if (
+      recommendedAction === "regenerate"
+      || trustLevel === "low"
+      || reviewAssessment?.status === "hold"
+      || generationAssessment?.trust_gate_state === "fallback_only"
+      || recommendationUrgentReviewCount > 0
+      || urgentRecommendationStaffReviewOnlyCount > 0
+      || freshnessDecay?.status === "stale"
+    ) {
+      state = "do_not_share";
+    } else if (
+      recommendedAction === "review"
+      || trustLevel !== "high"
+      || generationAssessment?.trust_gate_state === "review_only"
+      || freshnessDecay?.requires_refresh
+      || recommendationVerifyFirstCount > 0
+      || recommendationStaffReviewOnlyCount > 0
+      || recommendationVerifyBeforeUseCount > 0
+    ) {
+      state = "staff_review_only";
+    }
+    const headline = state === "do_not_share"
+      ? "Do not rely on this plan without fresh staff review."
+      : state === "staff_review_only"
+        ? "This plan is useful as a staff-only draft, not as a broadly shareable care guide yet."
+        : "This plan is grounded enough to use after normal staff review.";
+    const detail = state === "do_not_share"
+      ? generationAssessment?.trust_gate_summary_text
+        || improvementSummary?.summary_text
+        || "The current evidence mix is too thin, stale, conflicted, or operationally incomplete to trust this plan as a stable guide."
+      : state === "staff_review_only"
+        ? generationAssessment?.trust_gate_summary_text
+          || "The plan has usable structure, but staff should refresh key evidence and confirm the next live follow-up path before sharing it more broadly."
+        : "The plan links recommendations to current evidence, keeps critical signals actioned, and does not show major trust blockers right now.";
+    const nextAction = state === "do_not_share"
+      ? "Regenerate or tighten the plan after fresher evidence, explicit receipts, or a clearer owner path are in place."
+      : state === "staff_review_only"
+        ? "Keep the plan staff-only, close the open evidence gaps, and review again before sharing."
+        : "Proceed through the normal staff review flow and keep watching for evidence drift.";
+    return {
+      state,
+      headline,
+      detail,
+      next_action_text: nextAction,
+      reason_codes: reasonCodes,
+      generation_gate_state: generationAssessment?.trust_gate_state || null,
+      generation_confidence: generationAssessment?.confidence || null,
+      freshness_state: freshnessDecay?.status || null,
+      review_status: reviewAssessment?.status || null,
+      recommendation_review_urgent_count: recommendationUrgentReviewCount,
+      recommendation_review_verify_first_count: recommendationVerifyFirstCount,
+      recommendation_use_staff_review_only_count: recommendationStaffReviewOnlyCount,
+      recommendation_use_verify_before_use_count: recommendationVerifyBeforeUseCount,
+    };
+  })();
+
+  return {
+    score,
+    trust_level: trustLevel,
+    recommended_action: recommendedAction,
+    evidence_coverage: evidenceCoverage,
+    distinct_signal_coverage: distinctSignalCoverage,
+    current_signal_coverage: currentSignalCoverage,
+    critical_action_coverage: criticalActionCoverage,
+    recommendation_review_ready_count: recommendationReadyCount,
+    recommendation_review_verify_first_count: recommendationVerifyFirstCount,
+    recommendation_review_urgent_count: recommendationUrgentReviewCount,
+    recommendation_use_ready_with_judgment_count: recommendationReadyWithJudgmentCount,
+    recommendation_use_verify_before_use_count: recommendationVerifyBeforeUseCount,
+    recommendation_use_staff_review_only_count: recommendationStaffReviewOnlyCount,
+    urgent_recommendation_staff_review_only_count: urgentRecommendationStaffReviewOnlyCount,
+    recommendation_provenance_strong_count: recommendationStrongProvenanceCount,
+    recommendation_provenance_moderate_count: recommendationModerateProvenanceCount,
+    recommendation_provenance_caution_count: recommendationCautionProvenanceCount,
+    recommendation_provenance_weak_count: recommendationWeakProvenanceCount,
+    recommendation_provenance_average_score: recommendationProvenanceAverageScore,
+    freshness_decay: freshnessDecay,
+    reviewed: plan.review_status === "reviewed",
+    generated_with_fallback: plan.generator_provider === "fallback",
+    predictive_grounded: predictiveGrounded,
+    outcome_trajectory: outcomeTrajectory?.status || null,
+    generation_confidence: generationAssessment.confidence,
+    generation_readiness: generationAssessment.readiness,
+    trust_summary: trustSummary,
+    improvement_summary: improvementSummary,
+    strengths,
+    cautions,
+  };
+}
+
+function buildHealthPlanAutomatedReviewRubric(plan, profile, predictiveContext, organization = null, audit = null, review = null, quality = null) {
+  const currentAudit = audit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, new Date());
+  const currentReview = review || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, currentAudit);
+  const currentQuality = quality || buildHealthPlanQualitySummary(plan, profile, predictiveContext, organization, new Date(), currentAudit, currentReview);
+  const generationAssessment =
+    normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json)
+    || buildHealthPlanGenerationAssessment(profile, predictiveContext, assembleRichHealthPlanSourceSignals(profile, predictiveContext), organization);
+  const actionText = planSectionText(plan, ["daily_support", "monitoring", "escalation", "caregiver_guidance"]);
+  const caregiverText = planSectionText(plan, ["caregiver_guidance", "summary"]);
+  const auditReasons = Array.isArray(currentAudit?.reasons) ? currentAudit.reasons : [];
+  const reviewChecks = Array.isArray(currentReview?.checks) ? currentReview.checks : [];
+  const criticalReviewChecks = reviewChecks.filter((check) => check?.state === "critical").length;
+  const watchReviewChecks = reviewChecks.filter((check) => check?.state === "watch").length;
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const sharingBoundaryCovered = familyConsent || healthPlanBoundaryMentioned(caregiverText);
+  const sameDayExpected = currentReview?.response_expectation === "same_day" || currentAudit?.response_expectation === "same_day";
+  const timeExplicit = textMatchesAny(actionText, [
+    /\bsame[- ]day\b/i,
+    /\btoday\b/i,
+    /\bwithin 24 hours\b/i,
+    /\bnext 24 hours\b/i,
+  ]);
+  const verificationExplicit = healthPlanTextNeedsVerification(actionText);
+  const urgentReceiptExplicit = textMatchesAny(actionText, healthPlanRequirementMatchers("anchor_accountability_receipts"));
+  const criticalReasonCount = auditReasons.filter((reason) => reason?.severity === "high").length;
+  const watchReasonCount = auditReasons.filter((reason) => reason?.severity === "medium").length;
+  const improvementSummary = currentQuality?.improvement_summary || null;
+  const versionDeltaEffect =
+    improvementSummary?.status === "improved"
+      ? 10
+      : improvementSummary?.status === "mixed"
+        ? -8
+        : improvementSummary?.status === "regressed"
+          ? -18
+          : 0;
+  const recommendationReadyCount = Number(currentQuality?.recommendation_review_ready_count || 0);
+  const recommendationVerifyFirstCount = Number(currentQuality?.recommendation_review_verify_first_count || 0);
+  const recommendationUrgentCount = Number(currentQuality?.recommendation_review_urgent_count || 0);
+  const clamp = (value) => Math.max(0, Math.min(100, Math.round(value)));
+
+  const grounding = clamp(
+    (currentQuality?.evidence_coverage || 0) * 0.4
+    + (currentQuality?.distinct_signal_coverage || 0) * 0.25
+    + (currentQuality?.current_signal_coverage || 0) * 0.2
+    + (generationAssessment.confidence === "high" ? 12 : generationAssessment.confidence === "medium" ? 4 : -10)
+    + versionDeltaEffect * 0.35
+    + Math.min(recommendationReadyCount, 4) * 1.5
+    - recommendationVerifyFirstCount * 2
+    - recommendationUrgentCount * 5
+    - criticalReasonCount * 6
+    - watchReasonCount * 3,
+  );
+  const actionability = clamp(
+    (currentQuality?.critical_action_coverage || 0) * 0.45
+    + (currentReview?.status === "ready" ? 18 : currentReview?.status === "needs_review" ? 6 : -10)
+    + (urgentReceiptExplicit ? 16 : 0)
+    + (verificationExplicit ? 8 : 0)
+    + versionDeltaEffect * 0.45
+    + Math.min(recommendationReadyCount, 4) * 2
+    - recommendationVerifyFirstCount * 3
+    - recommendationUrgentCount * 8
+    - criticalReviewChecks * 14
+    - watchReviewChecks * 5,
+  );
+  const timeliness = clamp(
+    62
+    + (sameDayExpected && timeExplicit ? 18 : sameDayExpected ? -18 : timeExplicit ? 10 : 0)
+    + (verificationExplicit ? 10 : -10)
+    + (generationAssessment.confidence === "high" ? 8 : generationAssessment.confidence === "medium" ? 2 : -12)
+    + versionDeltaEffect * 0.25
+    - recommendationVerifyFirstCount * 2
+    - recommendationUrgentCount * 5
+    - (auditReasons.some((reason) => reason?.code === "same_day_plan_stale") ? 32 : 0)
+    - (auditReasons.some((reason) => reason?.code === "critical_signals_stale") ? 20 : 0),
+  );
+  const safety = clamp(
+    70
+    + (sharingBoundaryCovered ? 12 : -22)
+    + ((currentQuality?.critical_action_coverage || 0) * 0.12)
+    + (urgentReceiptExplicit ? 8 : 0)
+    + versionDeltaEffect * 0.15
+    - recommendationVerifyFirstCount * 1
+    - recommendationUrgentCount * 6
+    - criticalReasonCount * 10
+    - criticalReviewChecks * 8,
+  );
+  const shareability = clamp(
+    58
+    + (sharingBoundaryCovered ? 20 : -25)
+    + (currentReview?.share_ready ? 14 : 0)
+    + (plan.review_status === "reviewed" ? 8 : 0)
+    + (healthPlanOwnerMentioned(caregiverText) ? 8 : 0)
+    + versionDeltaEffect * 0.1
+    - watchReviewChecks * 4,
+  );
+  const overall = clamp(
+    (currentQuality?.score || 0) * 0.5
+    + grounding * 0.15
+    + actionability * 0.15
+    + timeliness * 0.1
+    + safety * 0.06
+    + shareability * 0.04,
+  );
+
+  return { grounding, actionability, timeliness, safety, shareability, overall };
+}
+
+function buildHealthPlanApprovalGate(
+  plan,
+  profile,
+  predictiveContext,
+  organization = null,
+  now = new Date(),
+  existingAudit = null,
+  existingReview = null,
+  existingQuality = null,
+  existingCoordination = null,
+) {
+  if (!plan) return null;
+
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const review = existingReview || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const quality = existingQuality || buildHealthPlanQualitySummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const coordination = existingCoordination || buildHealthPlanCoordinationSummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const blockingIssues = [];
+  const watchIssues = [];
+  const seenBlockingCodes = new Set();
+  const seenWatchCodes = new Set();
+
+  const pushIssue = (bucket, seenCodes, issue) => {
+    const code = nullIfBlank(issue?.code);
+    if (!code || seenCodes.has(code)) return;
+    seenCodes.add(code);
+    bucket.push({
+      code,
+      detail: nullIfBlank(issue?.detail) || null,
+      source: nullIfBlank(issue?.source) || null,
+      signal_ids: Array.isArray(issue?.signal_ids)
+        ? [...new Set(issue.signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))]
+        : [],
+      priority: nullIfBlank(issue?.priority) || null,
+      due_window: nullIfBlank(issue?.due_window) || null,
+    });
+  };
+
+  for (const reason of Array.isArray(audit?.reasons) ? audit.reasons : []) {
+    const target = reason?.severity === "high" ? blockingIssues : watchIssues;
+    const seen = reason?.severity === "high" ? seenBlockingCodes : seenWatchCodes;
+    pushIssue(target, seen, {
+      code: reason.code,
+      detail: reason.detail,
+      source: "audit",
+      signal_ids: reason.signal_ids,
+      priority: reason?.severity === "high" ? "high" : "medium",
+      due_window: audit?.response_expectation || null,
+    });
+  }
+
+  for (const check of Array.isArray(review?.checks) ? review.checks : []) {
+    if (check?.state !== "critical" && check?.state !== "watch") continue;
+    const target = check.state === "critical" ? blockingIssues : watchIssues;
+    const seen = check.state === "critical" ? seenBlockingCodes : seenWatchCodes;
+    pushIssue(target, seen, {
+      code: check.code,
+      detail: check.detail,
+      source: "review",
+      priority: check.state === "critical" ? "high" : "medium",
+      due_window: review?.response_expectation || null,
+    });
+  }
+
+  for (const commitment of Array.isArray(coordination?.commitments) ? coordination.commitments : []) {
+    if (commitment?.status !== "open") continue;
+    const isBlocking = commitment?.priority === "high";
+    const target = isBlocking ? blockingIssues : watchIssues;
+    const seen = isBlocking ? seenBlockingCodes : seenWatchCodes;
+    pushIssue(target, seen, {
+      code: commitment.code,
+      detail: commitment.detail,
+      source: "coordination",
+      signal_ids: commitment.signal_ids,
+      priority: commitment.priority,
+      due_window: commitment.due_window,
+    });
+  }
+
+  const state = blockingIssues.length > 0 ? "blocked" : watchIssues.length > 0 ? "review" : "ready";
+  const readyForApproval =
+    state === "ready"
+    && audit?.status === "ready"
+    && review?.status === "ready";
+  const readyForShare =
+    readyForApproval
+    && plan.review_status === "reviewed"
+    && quality?.trust_level !== "low"
+    && coordination?.state === "stable";
+
+  const summaryText = state === "blocked"
+    ? "This plan still has blocking safety or coordination gaps before approval."
+    : state === "review"
+      ? "This plan is close, but staff should resolve the remaining follow-through items before relying on it broadly."
+      : "This plan has the evidence, review, and coordination coverage needed for staff approval.";
+
+  return {
+    state,
+    ready_for_approval: readyForApproval,
+    ready_for_share: readyForShare,
+    must_regenerate: audit?.status === "needs_regeneration",
+    response_window: review?.response_expectation || audit?.response_expectation || null,
+    summary_text: summaryText,
+    blocking_issue_codes: blockingIssues.map((item) => item.code),
+    watch_issue_codes: watchIssues.map((item) => item.code),
+    blocking_issues: blockingIssues,
+    watch_issues: watchIssues,
+  };
+}
+
+function buildHealthPlanExecutionPack(
+  plan,
+  profile,
+  predictiveContext,
+  organization = null,
+  now = new Date(),
+  existingAudit = null,
+  existingReview = null,
+  existingCoordination = null,
+) {
+  if (!plan) return null;
+
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const review = existingReview || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const coordination = existingCoordination || buildHealthPlanCoordinationSummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const currentSignals = assembleRichHealthPlanSourceSignals(profile, predictiveContext);
+  const currentEvidenceDigest = buildHealthPlanEvidenceDigest(currentSignals);
+  const generationAssessment =
+    normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json)
+    || buildHealthPlanGenerationAssessment(profile, predictiveContext, currentSignals, organization);
+  const sameDay = (coordination?.response_window || review?.response_expectation || audit?.response_expectation) === "same_day";
+  const ownerName = coordination?.owner_name || healthPlanPrimaryOwnerName(profile) || null;
+  const tasks = [];
+  const seenCodes = new Set();
+  const openCommitments = Array.isArray(coordination?.commitments)
+    ? coordination.commitments.filter((commitment) => commitment?.status === "open")
+    : [];
+  const defaultDueWindow = sameDay ? "same_day" : "within_24h";
+
+  const taskTemplate = (code) => {
+    switch (code) {
+      case "review_plan":
+        return {
+          title: "Review and lock the next move",
+          audience: "staff",
+          escalation: "If this is not reviewed on time, keep the plan staff-only and treat the risk picture as still open.",
+        };
+      case "assign_owner":
+        return {
+          title: "Assign one named owner",
+          audience: "staff",
+          escalation: "If no one owns the next move, same-day signals can stall in plain sight.",
+        };
+      case "contact_client":
+        return {
+          title: "Make a real client touchpoint",
+          audience: "elder",
+          escalation: "If the person still cannot be reached, escalate the situation instead of assuming the silence is safe.",
+        };
+      case "review_alerts":
+        return {
+          title: "Resolve every open alert",
+          audience: "staff",
+          escalation: "If alerts remain open after the deadline, move the case back into urgent follow-up.",
+        };
+      case "verify_medication":
+        return {
+          title: "Confirm medication reality",
+          audience: "elder",
+          escalation: "If medication status is still unconfirmed, treat the adherence risk as still active.",
+        };
+      case "check_sensors":
+        return {
+          title: "Check sensor reliability",
+          audience: "staff",
+          escalation: "If sensors remain unreliable, do not let missing device data substitute for a wellbeing check.",
+        };
+      case "update_care_circle":
+        return {
+          title: "Update the approved care circle",
+          audience: "care_circle",
+          escalation: "If the care circle is not updated after first contact, the next responder may work from an outdated picture.",
+        };
+      case "respect_sharing_boundary":
+        return {
+          title: "Protect the sharing boundary",
+          audience: "care_circle",
+          escalation: "If the boundary is unclear, keep the update inside staff or approved providers until consent is confirmed.",
+        };
+      case "refresh_plan":
+        return {
+          title: "Refresh the saved plan",
+          audience: "staff",
+          escalation: "If the plan is not refreshed, the team may keep coordinating from guidance that no longer matches the live care picture.",
+        };
+      case "refresh_live_status":
+        return {
+          title: "Refresh the live care picture",
+          audience: "elder",
+          escalation: "If no fresh touchpoint is captured, treat the case as still unresolved even if the written plan sounds calm.",
+        };
+      default:
+        return {
+          title: "Complete the next care action",
+          audience: "staff",
+          escalation: "If the next action does not happen, keep the case visible and escalate if risk remains unclear.",
+        };
+    }
+  };
+
+  const pushTask = ({
+    code,
+    title,
+    detail,
+    priority = "medium",
+    due_window = defaultDueWindow,
+    audience = "staff",
+    owner_label = ownerName || (coordination?.owner_missing ? "Assign now" : "Care team"),
+    completion_proof = null,
+    escalation_if_not_done = null,
+    signal_ids = [],
+    source = "coordination",
+    status = "open",
+  }) => {
+    const resolvedCode = nullIfBlank(code);
+    if (!resolvedCode || seenCodes.has(resolvedCode)) return;
+    seenCodes.add(resolvedCode);
+    tasks.push({
+      code: resolvedCode,
+      title: nullIfBlank(title) || "Complete the next care action",
+      detail: nullIfBlank(detail) || null,
+      priority: priority === "high" ? "high" : priority === "low" ? "low" : "medium",
+      due_window: due_window === "same_day" ? "same_day" : "within_24h",
+      audience,
+      owner_label: owner_label || null,
+      completion_proof: nullIfBlank(completion_proof) || null,
+      escalation_if_not_done: nullIfBlank(escalation_if_not_done) || null,
+      signal_ids: Array.isArray(signal_ids) ? [...new Set(signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))] : [],
+      source,
+      status,
+    });
+  };
+
+  for (const commitment of openCommitments) {
+    const template = taskTemplate(commitment.code);
+    pushTask({
+      code: commitment.code,
+      title: template.title,
+      detail: commitment.detail,
+      priority: commitment.priority,
+      due_window: commitment.due_window,
+      audience: template.audience,
+      owner_label:
+        commitment.code === "assign_owner"
+          ? ownerName || "Shift lead / admin lead"
+          : ownerName || (coordination?.owner_missing ? "Assign now" : "Care team"),
+      completion_proof: commitment.proof_hint,
+      escalation_if_not_done: template.escalation,
+      signal_ids: commitment.signal_ids,
+      source: "coordination",
+      status: "open",
+    });
+  }
+
+  const freshnessGapReasons = Array.isArray(generationAssessment?.reasons)
+    ? generationAssessment.reasons.filter((reason) => [
+      "critical_signals_stale",
+      "critical_freshness_unknown",
+      "live_picture_stale",
+    ].includes(reason?.code))
+    : [];
+  const freshnessTaskNeeded =
+    currentEvidenceDigest?.freshness_gap
+    || freshnessGapReasons.length > 0
+    || (generationAssessment?.confidence === "low" && generationAssessment?.unknown_freshness_signal_count > 0);
+
+  if (freshnessTaskNeeded) {
+    const detail = freshnessGapReasons[0]?.detail
+      || currentEvidenceDigest?.summary_text
+      || "The team needs a fresh touchpoint before assuming the current picture is still true.";
+    pushTask({
+      code: "refresh_live_status",
+      title: taskTemplate("refresh_live_status").title,
+      detail,
+      priority: sameDay ? "high" : "medium",
+      due_window: defaultDueWindow,
+      audience: "elder",
+      owner_label: ownerName || (coordination?.owner_missing ? "Assign now" : "Care team"),
+      completion_proof: "Counts as done when a new touchpoint, reading, or verified status update is logged against the client today.",
+      escalation_if_not_done: taskTemplate("refresh_live_status").escalation,
+      signal_ids: [
+        ...(Array.isArray(currentEvidenceDigest?.stale_signal_ids) ? currentEvidenceDigest.stale_signal_ids : []),
+        ...(Array.isArray(currentEvidenceDigest?.unknown_freshness_signal_ids) ? currentEvidenceDigest.unknown_freshness_signal_ids : []),
+      ],
+      source: "freshness",
+      status: "open",
+    });
+  }
+
+  for (const move of Array.isArray(review?.next_moves) ? review.next_moves : []) {
+    if (!nullIfBlank(move?.code) || seenCodes.has(move.code)) continue;
+    if (move.code !== "enrich_live_context") continue;
+    pushTask({
+      code: move.code,
+      title: "Enrich the live context",
+      detail: move.text,
+      priority: move.priority,
+      due_window: defaultDueWindow,
+      audience: "staff",
+      owner_label: ownerName || (coordination?.owner_missing ? "Assign now" : "Care team"),
+      completion_proof: "Counts as done when the plan context has been refreshed with a current contact, live service outcome, or updated risk evidence.",
+      escalation_if_not_done: "If the live context is not enriched, keep the case in review and do not widen sharing.",
+      signal_ids: Array.isArray(currentEvidenceDigest?.top_priority_signal_ids) ? currentEvidenceDigest.top_priority_signal_ids : [],
+      source: "review",
+      status: "watch",
+    });
+  }
+
+  const sortedTasks = tasks
+    .slice()
+    .sort((left, right) => {
+      const priorityScore = (value) => value === "high" ? 3 : value === "medium" ? 2 : 1;
+      const dueScore = (value) => value === "same_day" ? 2 : 1;
+      return (
+        priorityScore(right.priority) - priorityScore(left.priority)
+        || dueScore(right.due_window) - dueScore(left.due_window)
+        || String(left.title || "").localeCompare(String(right.title || ""))
+      );
+    });
+  const nextTask =
+    sortedTasks.find((task) => task.code === coordination?.recommended_action_code)
+    || sortedTasks[0]
+    || null;
+  const state = sortedTasks.some((task) => task.priority === "high")
+    ? "urgent"
+    : sortedTasks.length
+      ? "watch"
+      : "stable";
+  const sameDayTaskCount = sortedTasks.filter((task) => task.due_window === "same_day").length;
+  const highPriorityTaskCount = sortedTasks.filter((task) => task.priority === "high").length;
+  const highPrioritySameDayCount = sortedTasks.filter((task) => task.priority === "high" && task.due_window === "same_day").length;
+  const triageTasks = sortedTasks.slice(0, 3);
+  const distinctTopAudiences = new Set(triageTasks.map((task) => nullIfBlank(task?.audience)).filter(Boolean)).size;
+  const loadReasonCodes = [];
+  if (sameDayTaskCount >= 4) loadReasonCodes.push("same_day_task_stack");
+  if (highPriorityTaskCount >= 3) loadReasonCodes.push("high_priority_stack");
+  if (highPrioritySameDayCount >= 3) loadReasonCodes.push("high_priority_same_day_stack");
+  if (Boolean(coordination?.owner_missing) && sameDayTaskCount >= 3) loadReasonCodes.push("owner_path_fragile");
+  if (distinctTopAudiences >= 3 && highPriorityTaskCount >= 3) loadReasonCodes.push("audience_switching_risk");
+  const loadState =
+    sameDayTaskCount >= 5
+      || highPriorityTaskCount >= 4
+      || highPrioritySameDayCount >= 3
+      || (sameDayTaskCount >= 4 && Boolean(coordination?.owner_missing))
+      ? "overloaded"
+      : sameDayTaskCount >= 3 || highPriorityTaskCount >= 2
+        ? "busy"
+        : sortedTasks.length
+          ? "manageable"
+          : "clear";
+  const triageSummaryText = nextTask
+    ? loadState === "overloaded"
+      ? `There are ${sameDayTaskCount || highPriorityTaskCount} same-day execution tasks still open. Start with ${nextTask.title.toLowerCase()}, keep only the first ${triageTasks.length} tasks in active same-day focus, and defer the rest until one of those steps lands.`
+      : loadState === "busy"
+        ? `There are ${sameDayTaskCount || highPriorityTaskCount} same-day execution tasks still in play. Start with ${nextTask.title.toLowerCase()} and keep the next few moves tightly ordered.`
+        : `Start with ${nextTask.title.toLowerCase()} and keep the follow-through lane visible until it lands.`
+    : null;
+  const summaryText = nextTask
+    ? loadState === "overloaded"
+      ? triageSummaryText
+      : state === "urgent"
+        ? `There are ${sameDayTaskCount || highPriorityTaskCount} same-day execution task${sameDayTaskCount === 1 || highPriorityTaskCount === 1 ? "" : "s"} still open. Start with ${nextTask.title.toLowerCase()}.`
+        : `The plan is usable, but ${sortedTasks.length} follow-through task${sortedTasks.length === 1 ? "" : "s"} still need completion.`
+    : "No immediate execution blockers are open. Keep the next scheduled touchpoint visible.";
+
+  return {
+    state,
+    response_window: coordination?.response_window || review?.response_expectation || audit?.response_expectation || defaultDueWindow,
+    owner_name: ownerName,
+    owner_missing: Boolean(coordination?.owner_missing),
+    summary_text: summaryText,
+    next_task_code: nextTask?.code || null,
+    next_task_title: nextTask?.title || null,
+    high_priority_task_count: highPriorityTaskCount,
+    same_day_task_count: sameDayTaskCount,
+    high_priority_same_day_task_count: highPrioritySameDayCount,
+    load_state: loadState,
+    load_reason_codes: loadReasonCodes,
+    triage_task_codes: triageTasks.map((task) => task.code).filter(Boolean),
+    triage_summary_text: triageSummaryText,
+    tasks: sortedTasks,
+  };
+}
+
+function buildHealthPlanGenerationExecutionBrief(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  organization = null,
+  planMemory = null,
+) {
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const responseWindow = policy.response_expectation === "same-day review" ? "same_day" : "within_24h";
+  const ownerName = healthPlanPrimaryOwnerName(profile) || null;
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const alerts = (Array.isArray(profile?.alerts) ? profile.alerts : []).filter((alert) => !alert?.resolved_at);
+  const offlineSensors = (Array.isArray(profile?.sensors) ? profile.sensors : []).filter((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const medicationRisk = ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const evidenceDigest = buildHealthPlanEvidenceDigest(sourceSignals);
+  const generationAssessment = buildHealthPlanGenerationAssessment(profile, predictiveContext, sourceSignals, organization, planMemory);
+  const freshnessGapReasons = Array.isArray(generationAssessment?.reasons)
+    ? generationAssessment.reasons.filter((reason) => [
+      "critical_signals_stale",
+      "critical_freshness_unknown",
+      "live_picture_stale",
+    ].includes(reason?.code))
+    : [];
+  const commitments = [];
+
+  const pushCommitment = (code, enabled, priority, dueWindow, detail, proofHint, signalIds = []) => {
+    commitments.push({
+      code,
+      status: enabled ? "open" : "not_needed",
+      priority,
+      due_window: dueWindow,
+      detail,
+      proof_hint: proofHint,
+      signal_ids: signalIds,
+    });
+  };
+
+  pushCommitment(
+    "assign_owner",
+    !ownerName,
+    responseWindow === "same_day" || !careProviders.length ? "high" : "medium",
+    responseWindow,
+    ownerName
+      ? "A named owner already exists, but the opening move should still keep ownership visible."
+      : "One named owner should be visible in the opening lane before the next follow-up cycle starts.",
+    "Counts as done when one named owner is visible on the profile or in the saved plan.",
+    ["care-circle-context"],
+  );
+
+  const clientContactRequired = responseWindow === "same_day" || alerts.length > 0 || medicationRisk;
+  pushCommitment(
+    "contact_client",
+    clientContactRequired,
+    responseWindow === "same_day" || alerts.length > 0 ? "high" : "medium",
+    responseWindow,
+    "The plan should make the first real touchpoint explicit instead of scattering effort across parallel tasks.",
+    responseWindow === "same_day"
+      ? "Counts as done when the first same-day client touchpoint is recorded."
+      : "Counts as done when the next client touchpoint is recorded.",
+    alerts.length > 0 ? ["alert-active"] : medicationRisk ? ["medication-plan"] : [],
+  );
+
+  pushCommitment(
+    "review_alerts",
+    alerts.length > 0,
+    alerts.length > 0 ? "high" : "low",
+    responseWindow,
+    "Open alerts should stay in the first response lane until one person is clearly acting on each one.",
+    "Counts as done when alert-specific follow-up or response ownership is explicit and the first action is recorded.",
+    alerts.length > 0 ? ["alert-active"] : [],
+  );
+
+  pushCommitment(
+    "verify_medication",
+    medicationRisk,
+    medicationRisk ? "high" : "low",
+    responseWindow,
+    "Medication reality should be confirmed in the first response window when adherence risk is active.",
+    "Counts as done when today's medication status is verified and the next follow-up step is recorded.",
+    medicationRisk ? ["medication-plan"] : [],
+  );
+
+  pushCommitment(
+    "check_sensors",
+    offlineSensors.length > 0,
+    offlineSensors.length > 0 ? "medium" : "low",
+    responseWindow,
+    "Offline or silent sensors should not be allowed to create false reassurance in the opening follow-up lane.",
+    "Counts as done when the team records whether the issue is device, connectivity, or a real client concern.",
+    offlineSensors.length > 0 ? ["sensor-status"] : [],
+  );
+
+  pushCommitment(
+    "update_care_circle",
+    familyConsent && careProviders.length > 0 && clientContactRequired,
+    responseWindow === "same_day" ? "medium" : "low",
+    responseWindow,
+    "If the approved care circle needs an update, it should follow the first grounded touchpoint rather than happen in parallel with guesswork.",
+    "Counts as done when an approved care-circle update is logged after the first client follow-up.",
+    familyConsent && careProviders.length > 0 && clientContactRequired ? ["care-circle-context", "consent-family-sharing"] : [],
+  );
+
+  pushCommitment(
+    "respect_sharing_boundary",
+    !familyConsent,
+    !familyConsent ? "high" : "low",
+    responseWindow,
+    "The opening lane should keep client-specific details inside staff or approved providers until consent is confirmed.",
+    "Counts as done when updates stay inside staff or approved providers until consent changes.",
+    ["consent-family-sharing"],
+  );
+
+  const freshnessTaskNeeded =
+    evidenceDigest?.freshness_gap
+    || freshnessGapReasons.length > 0
+    || (generationAssessment?.confidence === "low" && generationAssessment?.unknown_freshness_signal_count > 0);
+  const recommendedActionCode =
+    freshnessTaskNeeded ? "refresh_live_status"
+      : !ownerName ? "assign_owner"
+        : clientContactRequired ? "contact_client"
+          : alerts.length > 0 ? "review_alerts"
+            : medicationRisk ? "verify_medication"
+              : offlineSensors.length > 0 ? "check_sensors"
+                : !familyConsent ? "respect_sharing_boundary"
+                  : familyConsent && careProviders.length > 0 && clientContactRequired ? "update_care_circle" : null;
+
+  const review = {
+    response_expectation: responseWindow,
+    next_moves: freshnessTaskNeeded
+      ? [{
+          code: "enrich_live_context",
+          priority: responseWindow === "same_day" ? "high" : "medium",
+          text: freshnessGapReasons[0]?.detail
+            || evidenceDigest?.summary_text
+            || "The team should refresh the live picture before assuming the calmer interpretation is still true.",
+        }]
+      : [],
+  };
+
+  const executionPack = buildHealthPlanExecutionPack(
+    { generation_assessment_json: generationAssessment },
+    profile,
+    predictiveContext,
+    organization,
+    new Date(),
+    { response_expectation: responseWindow },
+    review,
+    {
+      response_window: responseWindow,
+      owner_name: ownerName,
+      owner_missing: !ownerName,
+      recommended_action_code: recommendedActionCode,
+      commitments,
+    },
+  );
+
+  if (!executionPack) return null;
+  const triageTasks = Array.isArray(executionPack.tasks) ? executionPack.tasks.slice(0, 3) : [];
+  return {
+    state: executionPack.state,
+    response_window: executionPack.response_window,
+    owner_name: executionPack.owner_name,
+    owner_missing: executionPack.owner_missing,
+    summary_text: executionPack.summary_text,
+    next_task_code: executionPack.next_task_code,
+    next_task_title: executionPack.next_task_title,
+    opening_move_text: executionPack.next_task_title
+      ? executionPack.load_state === "overloaded"
+        ? `Start with ${executionPack.next_task_title.toLowerCase()} and keep only the first ${triageTasks.length} same-day tasks active until one of them lands.`
+        : executionPack.load_state === "busy"
+          ? `Start with ${executionPack.next_task_title.toLowerCase()} and keep the next few same-day moves tightly ordered.`
+          : `Start with ${executionPack.next_task_title.toLowerCase()} and keep follow-through visible until it lands.`
+      : null,
+    high_priority_task_count: executionPack.high_priority_task_count,
+    same_day_task_count: executionPack.same_day_task_count,
+    high_priority_same_day_task_count: executionPack.high_priority_same_day_task_count,
+    deferred_task_count: Math.max(0, (Array.isArray(executionPack.tasks) ? executionPack.tasks.length : 0) - triageTasks.length),
+    load_state: executionPack.load_state,
+    load_reason_codes: executionPack.load_reason_codes,
+    triage_task_codes: executionPack.triage_task_codes,
+    triage_summary_text: executionPack.triage_summary_text,
+    triage_tasks: triageTasks.map((task) => ({
+      code: task.code,
+      title: task.title,
+      detail: task.detail,
+      priority: task.priority,
+      due_window: task.due_window,
+      audience: task.audience,
+      owner_label: task.owner_label,
+      completion_proof: task.completion_proof,
+      escalation_if_not_done: task.escalation_if_not_done,
+      signal_ids: task.signal_ids,
+    })),
+  };
+}
+
+function healthPlanTaskSectionAffinity(sectionName, task = null) {
+  const code = nullIfBlank(task?.code) || "";
+  const audience = nullIfBlank(task?.audience) || "";
+  if (sectionName === "caregiver_guidance") {
+    return code === "update_care_circle" || code === "respect_sharing_boundary" || audience === "care_circle";
+  }
+  if (sectionName === "daily_support") {
+    return code === "verify_medication" || code === "contact_client" || audience === "elder";
+  }
+  if (sectionName === "monitoring") {
+    return code === "review_alerts" || code === "check_sensors" || code === "refresh_live_status" || code === "enrich_live_context";
+  }
+  if (sectionName === "escalation") {
+    return code === "assign_owner" || code === "review_alerts" || code === "contact_client" || code === "refresh_live_status";
+  }
+  if (sectionName === "goals") {
+    return code === "review_plan" || code === "assign_owner" || code === "refresh_plan";
+  }
+  return false;
+}
+
+function matchHealthPlanRecommendationTask(item, sectionName, executionPack = null) {
+  const tasks = Array.isArray(executionPack?.tasks) ? executionPack.tasks : [];
+  const itemSignalIds = new Set(
+    (Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : [])
+      .map((signalId) => nullIfBlank(signalId))
+      .filter(Boolean),
+  );
+  let bestTask = null;
+  let bestScore = 0;
+
+  for (const task of tasks) {
+    if (!task || task.status === "covered") continue;
+    const taskSignalIds = new Set(
+      (Array.isArray(task?.signal_ids) ? task.signal_ids : [])
+        .map((signalId) => nullIfBlank(signalId))
+        .filter(Boolean),
+    );
+    const overlapCount = [...itemSignalIds].filter((signalId) => taskSignalIds.has(signalId)).length;
+    const samePriority = normalizeHealthPlanItemPriority(item?.priority, null) === normalizeHealthPlanItemPriority(task?.priority, null);
+    const sameDueWindow = normalizeHealthPlanDueWindow(item?.due_window, null) === normalizeHealthPlanDueWindow(task?.due_window, null);
+    const sectionAffinity = healthPlanTaskSectionAffinity(sectionName, task);
+    const nextTaskBoost = nullIfBlank(executionPack?.next_task_code) && nullIfBlank(executionPack?.next_task_code) === nullIfBlank(task?.code);
+    const score = (overlapCount * 10) + (sectionAffinity ? 4 : 0) + (sameDueWindow ? 2 : 0) + (samePriority ? 1 : 0) + (nextTaskBoost ? 1 : 0);
+    if (score > bestScore) {
+      bestTask = task;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? bestTask : null;
+}
+
+function enrichHealthPlanSectionExecutionMetadata(items, sectionName, executionPack = null, coordination = null) {
+  return normalizeHealthPlanSectionItems(items).map((item) => {
+    const matchedTask = matchHealthPlanRecommendationTask(item, sectionName, executionPack);
+    const fallbackOwnerLabel = nullIfBlank(executionPack?.owner_name) || nullIfBlank(coordination?.owner_name) || null;
+    return {
+      ...item,
+      ...(matchedTask?.owner_label || fallbackOwnerLabel ? { owner_label: matchedTask?.owner_label || fallbackOwnerLabel } : {}),
+      ...(matchedTask?.completion_proof ? { completion_proof: matchedTask.completion_proof } : {}),
+      ...(matchedTask?.escalation_if_not_done ? { escalation_if_not_done: matchedTask.escalation_if_not_done } : {}),
+      ...(matchedTask?.code ? { source_task_code: matchedTask.code } : {}),
+    };
+  });
+}
+
+function enrichHealthPlanRecommendationExecutionMetadata(plan, executionPack = null, coordination = null) {
+  if (!plan || typeof plan !== "object") return plan;
+  return {
+    ...plan,
+    goals_json: enrichHealthPlanSectionExecutionMetadata(plan.goals_json, "goals", executionPack, coordination),
+    daily_support_json: enrichHealthPlanSectionExecutionMetadata(plan.daily_support_json, "daily_support", executionPack, coordination),
+    monitoring_json: enrichHealthPlanSectionExecutionMetadata(plan.monitoring_json, "monitoring", executionPack, coordination),
+    escalation_json: enrichHealthPlanSectionExecutionMetadata(plan.escalation_json, "escalation", executionPack, coordination),
+    caregiver_guidance_json: enrichHealthPlanSectionExecutionMetadata(plan.caregiver_guidance_json, "caregiver_guidance", executionPack, coordination),
+  };
+}
+
+function healthPlanFocusPriorityRank(priority) {
+  if (priority === "high") return 3;
+  if (priority === "low") return 1;
+  return 2;
+}
+
+function deriveHealthPlanFocusSectionTargets(code, signalIds = [], requiredSections = []) {
+  const sections = new Set(
+    (Array.isArray(requiredSections) ? requiredSections : [])
+      .map((section) => nullIfBlank(section))
+      .filter(Boolean),
+  );
+  const normalizedCode = nullIfBlank(code) || "";
+  const normalizedSignals = new Set(
+    (Array.isArray(signalIds) ? signalIds : [])
+      .map((signalId) => nullIfBlank(signalId))
+      .filter(Boolean),
+  );
+
+  if (
+    normalizedSignals.has("medication-plan")
+    || normalizedCode.includes("medication")
+    || normalizedCode.includes("actionability")
+  ) {
+    sections.add("daily_support");
+    sections.add("monitoring");
+  }
+  if (
+    normalizedSignals.has("sensor-status")
+    || normalizedSignals.has("sensor-battery")
+    || normalizedCode.includes("sensor")
+  ) {
+    sections.add("monitoring");
+    sections.add("escalation");
+  }
+  if (
+    normalizedSignals.has("alert-active")
+    || normalizedSignals.has("risk-latest-score")
+    || normalizedSignals.has("forecast-deterioration")
+    || normalizedCode.includes("alert")
+    || normalizedCode.includes("critical")
+    || normalizedCode.includes("risk")
+    || normalizedCode.includes("timeliness")
+    || normalizedCode.includes("refresh")
+    || normalizedCode.includes("outcome")
+  ) {
+    sections.add("monitoring");
+    sections.add("escalation");
+  }
+  if (
+    normalizedSignals.has("care-circle-context")
+    || normalizedSignals.has("consent-family-sharing")
+    || normalizedCode.includes("owner")
+    || normalizedCode.includes("sharing")
+    || normalizedCode.includes("boundary")
+    || normalizedCode.includes("care_circle")
+    || normalizedCode.includes("care-circle")
+  ) {
+    sections.add("caregiver_guidance");
+    sections.add("escalation");
+  }
+  if (
+    normalizedCode.includes("grounding")
+    || normalizedCode.includes("evidence")
+    || normalizedCode.includes("predictive")
+    || normalizedCode.includes("generation")
+  ) {
+    sections.add("summary");
+    sections.add("goals");
+    sections.add("monitoring");
+  }
+
+  return ["summary", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"]
+    .filter((section) => sections.has(section));
+}
+
+function buildHealthPlanRegenerationFocus(
+  plan,
+  profile,
+  predictiveContext,
+  organization = null,
+  now = new Date(),
+  existingAudit = null,
+  existingReview = null,
+  existingQuality = null,
+  existingCoordination = null,
+  existingExecutionPack = null,
+  existingApprovalGate = null,
+) {
+  if (!plan) return null;
+
+  const audit = existingAudit || buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const review = existingReview || buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const quality = existingQuality || buildHealthPlanQualitySummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const coordination = existingCoordination || buildHealthPlanCoordinationSummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const executionPack = existingExecutionPack || buildHealthPlanExecutionPack(plan, profile, predictiveContext, organization, now, audit, review, coordination);
+  const approvalGate = existingApprovalGate || buildHealthPlanApprovalGate(plan, profile, predictiveContext, organization, now, audit, review, quality, coordination);
+  const automatedReview = normalizeHealthPlanAutomatedReview(plan?.automated_review_json);
+  const generationAssessment =
+    normalizeHealthPlanGenerationAssessment(plan?.generation_assessment_json)
+    || buildHealthPlanGenerationAssessment(profile, predictiveContext, assembleRichHealthPlanSourceSignals(profile, predictiveContext), organization);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const planMemory = normalizeHealthPlanPlanMemory(contextSnapshot?.plan_memory);
+  const weakReviewDimensions = [...new Set([
+    ...(Array.isArray(planMemory?.current_plan?.weak_review_dimensions) ? planMemory.current_plan.weak_review_dimensions : []),
+    ...weakHealthPlanReviewDimensions(automatedReview?.rubric_scores),
+  ])];
+  const verificationItems = [
+    ...(Array.isArray(contextSnapshot?.open_questions) ? contextSnapshot.open_questions : []),
+    ...(Array.isArray(contextSnapshot?.next_confirmations) ? contextSnapshot.next_confirmations : []),
+  ].slice(0, 6);
+  const focusItems = [];
+  const seenFocusKeys = new Set();
+
+  const pushFocusItem = ({
+    code,
+    detail,
+    priority = "medium",
+    source = "review",
+    signal_ids = [],
+    section_targets = [],
+    due_window = null,
+  }) => {
+    const normalizedCode = nullIfBlank(code);
+    const normalizedDetail = nullIfBlank(detail);
+    const focusKey = normalizedCode || normalizedDetail;
+    if (!focusKey || seenFocusKeys.has(focusKey)) return;
+    seenFocusKeys.add(focusKey);
+    focusItems.push({
+      code: normalizedCode || slugToken(normalizedDetail, "focus-item"),
+      detail: normalizedDetail,
+      priority: priority === "high" ? "high" : priority === "low" ? "low" : "medium",
+      source,
+      signal_ids: Array.isArray(signal_ids) ? [...new Set(signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean))] : [],
+      section_targets: deriveHealthPlanFocusSectionTargets(
+        normalizedCode || normalizedDetail,
+        signal_ids,
+        section_targets,
+      ),
+      due_window: due_window === "same_day" ? "same_day" : due_window === "within_24h" ? "within_24h" : null,
+    });
+  };
+
+  for (const issue of Array.isArray(approvalGate?.blocking_issues) ? approvalGate.blocking_issues : []) {
+    pushFocusItem({
+      code: issue?.code,
+      detail: issue?.detail,
+      priority: issue?.priority || "high",
+      source: "approval",
+      signal_ids: issue?.signal_ids,
+      due_window: issue?.due_window || review?.response_expectation || null,
+    });
+  }
+  for (const issue of Array.isArray(approvalGate?.watch_issues) ? approvalGate.watch_issues : []) {
+    pushFocusItem({
+      code: issue?.code,
+      detail: issue?.detail,
+      priority: issue?.priority || "medium",
+      source: "approval",
+      signal_ids: issue?.signal_ids,
+      due_window: issue?.due_window || review?.response_expectation || null,
+    });
+  }
+  for (const reason of Array.isArray(audit?.reasons) ? audit.reasons : []) {
+    pushFocusItem({
+      code: reason?.code,
+      detail: reason?.detail,
+      priority: reason?.severity || "medium",
+      source: "audit",
+      signal_ids: reason?.signal_ids,
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const reason of Array.isArray(generationAssessment?.reasons) ? generationAssessment.reasons : []) {
+    pushFocusItem({
+      code: reason?.code,
+      detail: reason?.detail,
+      priority: reason?.severity || "medium",
+      source: "generation",
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const concern of Array.isArray(automatedReview?.concerns) ? automatedReview.concerns : []) {
+    pushFocusItem({
+      code: concern?.code,
+      detail: concern?.detail,
+      priority: concern?.severity || "medium",
+      source: "automated_review",
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const actionText of Array.isArray(automatedReview?.required_actions) ? automatedReview.required_actions.slice(0, 4) : []) {
+    pushFocusItem({
+      code: slugToken(actionText, "review-action"),
+      detail: actionText,
+      priority: automatedReview?.verdict === "block" ? "high" : "medium",
+      source: "automated_review",
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const nextMove of Array.isArray(review?.next_moves) ? review.next_moves.slice(0, 4) : []) {
+    pushFocusItem({
+      code: nextMove?.code,
+      detail: nextMove?.detail,
+      priority: nextMove?.priority || "medium",
+      source: "review",
+      signal_ids: nextMove?.signal_ids,
+      due_window: nextMove?.due_window || review?.response_expectation || null,
+    });
+  }
+  for (const requirement of Array.isArray(contextSnapshot?.must_cover) ? contextSnapshot.must_cover.slice(0, 4) : []) {
+    pushFocusItem({
+      code: requirement?.code,
+      detail: requirement?.description,
+      priority: requirement?.priority || "medium",
+      source: "coverage",
+      signal_ids: requirement?.required_signal_ids,
+      section_targets: requirement?.required_sections,
+      due_window: requirement?.due_window || review?.response_expectation || null,
+    });
+  }
+  const improvementSummary = quality?.improvement_summary || null;
+  for (const item of Array.isArray(improvementSummary?.riskier_recommendations) ? improvementSummary.riskier_recommendations.slice(0, 3) : []) {
+    pushFocusItem({
+      code: `riskier-${slugToken(item?.comparison_key || item?.detail, "recommendation")}`,
+      detail: `Recommendation became riskier than the previous saved version: ${item?.detail || "unnamed recommendation"}.`,
+      priority: "high",
+      source: "version_delta",
+      section_targets: item?.section ? [item.section] : [],
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const item of Array.isArray(improvementSummary?.weakened_recommendations) ? improvementSummary.weakened_recommendations.slice(0, 3) : []) {
+    pushFocusItem({
+      code: `weakened-${slugToken(item?.comparison_key || item?.detail, "recommendation")}`,
+      detail: `Recommendation backing weakened compared with the previous saved version: ${item?.detail || "unnamed recommendation"}.`,
+      priority: "medium",
+      source: "version_delta",
+      section_targets: item?.section ? [item.section] : [],
+      due_window: review?.response_expectation || null,
+    });
+  }
+  for (const item of Array.isArray(improvementSummary?.strengthened_recommendations) ? improvementSummary.strengthened_recommendations.slice(0, 2) : []) {
+    pushFocusItem({
+      code: `strengthened-${slugToken(item?.comparison_key || item?.detail, "recommendation")}`,
+      detail: `Recommendation looks stronger than in the previous saved version: ${item?.detail || "unnamed recommendation"}.`,
+      priority: "low",
+      source: "version_delta",
+      section_targets: item?.section ? [item.section] : [],
+      due_window: review?.response_expectation || null,
+    });
+  }
+
+  focusItems.sort((left, right) => {
+    const priorityDelta = healthPlanFocusPriorityRank(right?.priority) - healthPlanFocusPriorityRank(left?.priority);
+    if (priorityDelta !== 0) return priorityDelta;
+    const dueWindowRank = (value) => (value === "same_day" ? 2 : value === "within_24h" ? 1 : 0);
+    const dueWindowDelta = dueWindowRank(right?.due_window) - dueWindowRank(left?.due_window);
+    if (dueWindowDelta !== 0) return dueWindowDelta;
+    return String(left?.code || "").localeCompare(String(right?.code || ""));
+  });
+
+  const mustIncludeFocusCodes = new Set([
+    ...focusItems
+      .filter((item) => item?.source === "version_delta" && item?.priority === "high")
+      .slice(0, 2)
+      .map((item) => item?.code)
+      .filter(Boolean),
+    ...focusItems
+      .filter((item) => item?.source === "coverage" && item?.priority === "high")
+      .slice(0, 1)
+      .map((item) => item?.code)
+      .filter(Boolean),
+  ]);
+  const visibleFocusItems = focusItems.filter((item) => mustIncludeFocusCodes.has(item?.code));
+  for (const item of focusItems) {
+    if (visibleFocusItems.length >= 6) break;
+    if (visibleFocusItems.some((existing) => existing?.code === item?.code)) continue;
+    visibleFocusItems.push(item);
+  }
+
+  const recommendedSectionTargets = [...new Set([
+    ...focusItems.flatMap((item) => Array.isArray(item?.section_targets) ? item.section_targets : []),
+    ...(
+      Array.isArray(contextSnapshot?.must_cover)
+        ? contextSnapshot.must_cover.flatMap((requirement) => Array.isArray(requirement?.required_sections) ? requirement.required_sections : [])
+        : []
+    ),
+  ])].slice(0, 6);
+  const primaryTarget = focusItems[0] || null;
+  const outcomeTrajectory = quality?.outcome_trajectory || planMemory?.current_plan?.outcome_trajectory || null;
+
+  let state = "ready";
+  if (
+    approvalGate?.must_regenerate
+    || quality?.recommended_action === "regenerate"
+    || automatedReview?.verdict === "block"
+    || outcomeTrajectory === "worsened"
+  ) {
+    state = "regenerate";
+  } else if (
+    approvalGate?.state === "review"
+    || approvalGate?.state === "blocked"
+    || quality?.recommended_action === "review"
+    || automatedReview?.verdict === "revise"
+    || weakReviewDimensions.length > 0
+    || verificationItems.length > 0
+  ) {
+    state = "refine";
+  }
+
+  const summaryText = state === "regenerate"
+    ? primaryTarget?.detail
+      ? `Regenerate this plan around the live blockers first: ${primaryTarget.detail}`
+      : "Regenerate this plan around the highest-risk open gaps before relying on it again."
+    : state === "refine"
+      ? primaryTarget?.detail
+        ? `Refine the current plan before broader use: ${primaryTarget.detail}`
+        : "Refine the current plan so the next move, evidence, and follow-through are clearer."
+      : "This plan is in a stable state. The next regeneration can focus on freshness, follow-through, and preserving what is already working.";
+
+  const nextTaskCode = executionPack?.next_task_code || null;
+  const nextTaskTitle = nextTaskCode
+    ? (Array.isArray(executionPack?.tasks) ? executionPack.tasks.find((task) => task?.code === nextTaskCode)?.title : null) || null
+    : null;
+
+  return {
+    state,
+    summary_text: summaryText,
+    primary_target_code: primaryTarget?.code || null,
+    primary_target_detail: primaryTarget?.detail || null,
+    confidence: generationAssessment?.confidence || null,
+    readiness: generationAssessment?.readiness || null,
+    outcome_trajectory: outcomeTrajectory,
+    weak_review_dimensions: weakReviewDimensions,
+    blocking_issue_codes: Array.isArray(approvalGate?.blocking_issue_codes) ? approvalGate.blocking_issue_codes : [],
+    watch_issue_codes: Array.isArray(approvalGate?.watch_issue_codes) ? approvalGate.watch_issue_codes : [],
+    recommended_section_targets: recommendedSectionTargets,
+    focus_items: visibleFocusItems,
+    verification_items: verificationItems,
+    learning_highlights: Array.isArray(planMemory?.learning_highlights) ? planMemory.learning_highlights.slice(0, 4) : [],
+    planning_cautions: Array.isArray(planMemory?.planning_cautions) ? planMemory.planning_cautions.slice(0, 4) : [],
+    next_task_code: nextTaskCode,
+    next_task_title: nextTaskTitle,
+  };
+}
+
+function enrichHealthPlanWithAudit(plan, profile, predictiveContext, organization = null, now = new Date()) {
+  if (!plan) return null;
+  const audit = buildHealthPlanAudit(plan, profile, predictiveContext, organization, now);
+  const review = buildHealthPlanReviewerAssessment(plan, profile, predictiveContext, organization, audit);
+  const quality = buildHealthPlanQualitySummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const coordination = buildHealthPlanCoordinationSummary(plan, profile, predictiveContext, organization, now, audit, review);
+  const executionPack = buildHealthPlanExecutionPack(plan, profile, predictiveContext, organization, now, audit, review, coordination);
+  const approvalGate = buildHealthPlanApprovalGate(plan, profile, predictiveContext, organization, now, audit, review, quality, coordination);
+  const trustEnrichedPlan = enrichHealthPlanRecommendationTrustMetadata(plan);
+  const rationaleEnrichedPlan = enrichHealthPlanRecommendationRationale(trustEnrichedPlan);
+  const evidenceReviewEnrichedPlan = enrichHealthPlanRecommendationEvidenceReview(rationaleEnrichedPlan);
+  const provenanceEnrichedPlan = enrichHealthPlanRecommendationProvenance(evidenceReviewEnrichedPlan);
+  const useGuidancePlan = enrichHealthPlanRecommendationUseGuidance(provenanceEnrichedPlan);
+  const verificationTimedPlan = enrichHealthPlanRecommendationVerificationTiming(useGuidancePlan, now);
+  const executionEnrichedPlan = enrichHealthPlanRecommendationExecutionMetadata(verificationTimedPlan, executionPack, coordination);
+  return {
+    ...executionEnrichedPlan,
+    audit,
+    review,
+    quality,
+    coordination,
+    execution_pack: executionPack,
+    approval_gate: approvalGate,
+    regeneration_focus: buildHealthPlanRegenerationFocus(
+      plan,
+      profile,
+      predictiveContext,
+      organization,
+      now,
+      audit,
+      review,
+      quality,
+      coordination,
+      executionPack,
+      approvalGate,
+    ),
+  };
+}
+
+function sourceSignalIdSet(value) {
+  return new Set(normalizeHealthPlanSourceSignals(value).map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+}
+
+function buildDashboardHealthPlanAuditSummary(input, now = new Date()) {
+  const reviewStatus = nullIfBlank(input?.review_status);
+  const generatorProvider = nullIfBlank(input?.generator_provider);
+  const generatedAt = normalizeTimestampValue(input?.generated_at);
+  if (!reviewStatus && !generatorProvider && !generatedAt) return null;
+
+  const signalIds = sourceSignalIdSet(input?.source_signals_json);
+  const activeAlerts = Number(input?.active_alerts || 0);
+  const criticalAlerts = Number(input?.critical_alerts || 0);
+  const missedMeds7d = Number(input?.missed_meds_7d || 0);
+  const offlineSensors = Number(input?.offline_sensors || 0);
+  const careProviderCount = Number(input?.care_provider_count || 0);
+  const riskScore = Number(input?.risk_score || 0);
+  const reasons = [];
+
+  if (reviewStatus !== "reviewed") {
+    reasons.push({ code: "draft_review_required", severity: "medium" });
+  }
+  if (generatorProvider === "fallback") {
+    reasons.push({ code: "fallback_generation", severity: "medium" });
+  }
+
+  const generatedDate = generatedAt ? new Date(generatedAt) : null;
+  const ageHours =
+    generatedDate && !Number.isNaN(generatedDate.getTime())
+      ? Math.max(0, (now.getTime() - generatedDate.getTime()) / (1000 * 60 * 60))
+      : null;
+
+  if (!generatedAt) {
+    reasons.push({ code: "missing_generation_time", severity: "high" });
+  } else if ((criticalAlerts > 0 || activeAlerts > 0 || riskScore >= 80) && ageHours != null && ageHours > 24) {
+    reasons.push({ code: "stale_same_day_window", severity: "high" });
+  } else if (ageHours != null && ageHours > 24 * 7) {
+    reasons.push({ code: "stale_review_window", severity: "medium" });
+  }
+
+  if (criticalAlerts > 0 && !signalIds.has("alert-active")) {
+    reasons.push({ code: "new_critical_signals", severity: "high" });
+  }
+  if (missedMeds7d > 0 && !signalIds.has("medication-plan")) {
+    reasons.push({ code: "new_critical_signals", severity: "high" });
+  }
+  if (offlineSensors > 0 && !signalIds.has("sensor-status")) {
+    reasons.push({ code: "new_critical_signals", severity: "high" });
+  }
+  if (careProviderCount === 0 && !signalIds.has("care-circle-context")) {
+    reasons.push({ code: "new_critical_signals", severity: "high" });
+  }
+
+  const dedupedReasons = Array.from(
+    new Map(reasons.map((reason) => [`${reason.code}:${reason.severity}`, reason])).values(),
+  );
+  const status = dedupedReasons.some((reason) => reason.severity === "high")
+    ? "needs_regeneration"
+    : dedupedReasons.length
+      ? "needs_review"
+      : "ready";
+
+  return {
+    status,
+    review_required: status !== "ready",
+    regeneration_recommended: status === "needs_regeneration",
+    reviewed: reviewStatus === "reviewed",
+    generated_at: generatedAt,
+    checked_at: now.toISOString(),
+    reason_codes: dedupedReasons.map((reason) => reason.code),
+    reasons: dedupedReasons,
   };
 }
 
@@ -672,6 +7280,35 @@ function summarizeServiceStatus(service, label) {
   return { label, detail: details.join(" · ") };
 }
 
+function healthPlanStrengthFromRiskBand(value) {
+  const band = String(value || "").trim().toLowerCase();
+  if (["critical", "high", "urgent"].includes(band)) return "high";
+  if (["medium", "elevated", "moderate", "review"].includes(band)) return "medium";
+  return "low";
+}
+
+function healthPlanStrengthFromMedicationStatus(value, disabledCount = 0) {
+  const status = String(value || "").trim().toLowerCase();
+  if (["missed", "late", "skipped", "unconfirmed"].includes(status) || disabledCount > 0) return "high";
+  if (status) return "medium";
+  return "low";
+}
+
+function healthPlanStrengthFromAlerts(alerts) {
+  const severities = (Array.isArray(alerts) ? alerts : []).map((alert) => String(alert?.severity || "").trim().toLowerCase());
+  if (severities.some((severity) => ["critical", "high", "urgent"].includes(severity))) return "high";
+  if (severities.some(Boolean)) return "medium";
+  return "low";
+}
+
+function healthPlanStrengthFromService(service) {
+  if (!service) return "low";
+  if (service.enabled === false || normalizeTimestampValue(firstValue(service.paused_until, service.pausedUntil))) return "medium";
+  const lastOutcome = String(firstValue(service.last_outcome, service.lastOutcome, service.status) || "").trim().toLowerCase();
+  if (["missed", "failed", "unconfirmed", "escalated"].includes(lastOutcome)) return "high";
+  return "low";
+}
+
 function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   const user = profile?.user || {};
   const health = profile?.health || {};
@@ -685,6 +7322,7 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
     const score = Number(predictiveContext.latestScore.composite_score);
     const band = nullIfBlank(predictiveContext.latestScore.risk_band) || "unknown";
     const delta = predictiveContext.latestScore.delta_from_prior == null ? null : Number(predictiveContext.latestScore.delta_from_prior);
+    const riskStrength = healthPlanStrengthFromRiskBand(band);
     signalItems.push({
       label: `Predictive risk score ${Number.isFinite(score) ? score.toFixed(0) : "unknown"} (${band})`,
       detail: [
@@ -717,6 +7355,7 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   }
 
   if (alerts.length) {
+    const alertStrength = healthPlanStrengthFromAlerts(alerts);
     signalItems.push({
       label: `${alerts.length} active alert${alerts.length === 1 ? "" : "s"}`,
       detail: alerts.slice(0, 3).map((alert) => nullIfBlank(alert.message) || nullIfBlank(alert.alert_type)).filter(Boolean).join(" · "),
@@ -770,6 +7409,3274 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   return normalizeHealthPlanSourceSignals(signalItems);
 }
 
+function assembleRichHealthPlanSourceSignals(profile, predictiveContext, planMemory = null) {
+  const user = profile?.user || {};
+  const health = profile?.health || {};
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts.filter((alert) => !alert?.resolved_at) : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const signalItems = [];
+  const latestAlertObservedAt = latestTimestamp(alerts.map((alert) => alert?.created_at));
+  const latestMedicationObservedAt = latestTimestamp([
+    profile?.medicationActivity?.occurred_at,
+    profile?.medicationActivity?.reported_at,
+  ]);
+  const latestSensorObservedAt = latestTimestamp(sensors.map((sensor) => sensor?.last_reading_at));
+  const latestPredictiveObservedAt = timestampFromDateOnly(predictiveContext?.latestScore?.score_date);
+
+  if (predictiveContext?.latestScore) {
+    const score = Number(predictiveContext.latestScore.composite_score);
+    const band = nullIfBlank(predictiveContext.latestScore.risk_band) || "unknown";
+    const delta = predictiveContext.latestScore.delta_from_prior == null ? null : Number(predictiveContext.latestScore.delta_from_prior);
+    const riskStrength = healthPlanStrengthFromRiskBand(band);
+    signalItems.push({
+      id: "risk-latest-score",
+      label: `Predictive risk score ${Number.isFinite(score) ? score.toFixed(0) : "unknown"} (${band})`,
+      detail: [
+        predictiveContext.latestScore.score_date ? `As of ${predictiveContext.latestScore.score_date}` : null,
+        delta == null || Number.isNaN(delta)
+          ? null
+          : delta === 0
+            ? "No change from prior score"
+            : delta > 0
+              ? `Up ${delta.toFixed(0)} from prior`
+              : `Down ${Math.abs(delta).toFixed(0)} from prior`,
+      ].filter(Boolean).join(" Â· "),
+      category: "risk",
+      strength: riskStrength,
+      observed_at: latestPredictiveObservedAt,
+      freshness: inferHealthPlanSignalFreshness(latestPredictiveObservedAt, { category: "risk", strength: riskStrength }),
+    });
+  } else {
+    signalItems.push({
+      id: "context-live-profile-only",
+      label: "Predictive insights unavailable",
+      detail: "This plan used live profile, service, medication, caregiver, and sensor data instead.",
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (Array.isArray(predictiveContext?.forecastRows) && predictiveContext.forecastRows.length) {
+    const nextForecast = predictiveContext.forecastRows
+      .slice(0, 3)
+      .map((row) => {
+        const score = Number(row.predicted_score);
+        return `Day ${row.horizon_day}: ${Number.isFinite(score) ? score.toFixed(0) : "unknown"}`;
+      })
+      .join(" Â· ");
+    const forecastStrength = predictiveContext?.latestScore?.risk_band ? healthPlanStrengthFromRiskBand(predictiveContext.latestScore.risk_band) : "medium";
+    signalItems.push({
+      id: "forecast-near-term",
+      label: "Risk forecast",
+      detail: nextForecast,
+      category: "forecast",
+      strength: forecastStrength,
+      observed_at: latestPredictiveObservedAt,
+      freshness: inferHealthPlanSignalFreshness(latestPredictiveObservedAt, { category: "forecast", strength: forecastStrength }),
+    });
+  }
+
+  if (alerts.length) {
+    const alertStrength = healthPlanStrengthFromAlerts(alerts);
+    signalItems.push({
+      id: "alert-active",
+      label: `${alerts.length} active alert${alerts.length === 1 ? "" : "s"}`,
+      detail: alerts
+        .slice(0, 3)
+        .map((alert) => nullIfBlank(alert.message) || nullIfBlank(alert.alert_type))
+        .filter(Boolean)
+        .join(" Â· "),
+      category: "alert",
+      strength: alertStrength,
+      observed_at: latestAlertObservedAt,
+      freshness: inferHealthPlanSignalFreshness(latestAlertObservedAt, { category: "alert", strength: alertStrength }),
+    });
+  }
+
+  if (medications.length) {
+    const disabled = medications.filter((med) => med?.reminders_enabled === false).length;
+    const times = medications
+      .flatMap((med) => (Array.isArray(med?.schedule_times) ? med.schedule_times : []))
+      .filter(Boolean)
+      .slice(0, 4)
+      .join(", ");
+    const medicationStrength = healthPlanStrengthFromMedicationStatus(profile?.medicationActivity?.status, disabled);
+    signalItems.push({
+      id: "medication-plan",
+      label: `${medications.length} medication${medications.length === 1 ? "" : "s"} on file`,
+      detail: [
+        disabled ? `${disabled} reminder${disabled === 1 ? "" : "s"} currently off` : null,
+        times ? `Saved reminder times ${times}` : null,
+        profile?.medicationActivity?.status ? `Latest adherence ${profile.medicationActivity.status}` : null,
+      ].filter(Boolean).join(" Â· "),
+      category: "medication",
+      strength: medicationStrength,
+      observed_at: latestMedicationObservedAt,
+      freshness: inferHealthPlanSignalFreshness(latestMedicationObservedAt, { category: "medication", strength: medicationStrength }),
+    });
+  }
+
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  signalItems.push({
+    id: "consent-family-sharing",
+    label: familyConsent ? "Family sharing consent active" : "Family sharing consent not confirmed",
+    detail: familyConsent
+      ? "Updates can be shared with approved family or caregivers."
+      : "Keep plan-sharing guidance within staff or approved care providers until consent is confirmed.",
+    category: "care-circle",
+    strength: familyConsent ? "low" : "medium",
+    freshness: "unknown",
+  });
+
+  const checkinsStrength = healthPlanStrengthFromService(profile?.checkins);
+  const checkinsObservedAt = normalizeTimestampValue(firstValue(profile?.checkins?.last_outcome_at, profile?.checkins?.lastOutcomeAt));
+  signalItems.push({
+    id: "service-checkins",
+    ...summarizeServiceStatus(profile?.checkins, "Check-ins"),
+    category: "service",
+    strength: checkinsStrength,
+    ...(checkinsObservedAt ? { observed_at: checkinsObservedAt } : {}),
+    freshness: inferHealthPlanSignalFreshness(checkinsObservedAt, { category: "service", strength: checkinsStrength }),
+  });
+  const brainCoachStrength = healthPlanStrengthFromService(profile?.brainCoach);
+  const brainCoachObservedAt = normalizeTimestampValue(firstValue(profile?.brainCoach?.last_outcome_at, profile?.brainCoach?.lastOutcomeAt));
+  signalItems.push({
+    id: "service-brain-coach",
+    ...summarizeServiceStatus(profile?.brainCoach, "Brain Coach"),
+    category: "service",
+    strength: brainCoachStrength,
+    ...(brainCoachObservedAt ? { observed_at: brainCoachObservedAt } : {}),
+    freshness: inferHealthPlanSignalFreshness(brainCoachObservedAt, { category: "service", strength: brainCoachStrength }),
+  });
+
+  if (sensors.length) {
+    const offline = sensors.filter((sensor) => String(sensor?.status || "").toLowerCase() !== "online").length;
+    const sensorStrength = offline ? "high" : "low";
+    signalItems.push({
+      id: "sensor-status",
+      label: `${sensors.length} sensor${sensors.length === 1 ? "" : "s"} linked`,
+      detail: offline ? `${offline} offline or not reporting` : "All currently reporting",
+      category: "sensor",
+      strength: sensorStrength,
+      observed_at: latestSensorObservedAt,
+      freshness: inferHealthPlanSignalFreshness(latestSensorObservedAt, { category: "sensor", strength: sensorStrength }),
+    });
+  }
+
+  const healthHighlights = [
+    ...(Array.isArray(health?.health_conditions) ? health.health_conditions : []),
+    ...(Array.isArray(health?.mobility_needs) ? health.mobility_needs : []),
+  ].filter(Boolean);
+  const livingContext = normalizeLivingContextValue(firstValue(user.living_context, user.livingContext));
+  if (healthHighlights.length || careProviders.length || livingContext) {
+    const missingSupportCoverage = !careProviders.length;
+    signalItems.push({
+      id: "care-circle-context",
+      label: "Profile context",
+      detail: [
+        livingContext ? `Living context ${livingContext}` : null,
+        healthHighlights.slice(0, 4).join(", ") || null,
+        careProviders.length ? `${careProviders.length} care provider assignment${careProviders.length === 1 ? "" : "s"}` : null,
+      ].filter(Boolean).join(" Â· "),
+      category: missingSupportCoverage ? "care-circle" : "context",
+      strength: missingSupportCoverage ? "high" : healthHighlights.length ? "medium" : "low",
+      freshness: "unknown",
+    });
+  }
+
+  const evidenceTension = buildHealthPlanEvidenceTension(profile, predictiveContext);
+
+  const normalizedSignals = normalizeHealthPlanSourceSignals([
+    ...signalItems,
+    ...buildHealthPlanOutcomeSignals(profile),
+    ...buildHealthPlanExecutionFeedback(profile, signalItems, null).signals,
+    ...evidenceTension.signals,
+    ...buildHealthPlanPlanMemorySignals(planMemory),
+  ]);
+  const usefulnessOverlay = buildHealthPlanSignalUsefulnessOverlay(normalizedSignals, planMemory);
+  return normalizedSignals
+    .map((signal) => {
+      const usefulness = usefulnessOverlay.get(signal.id) || null;
+      const usefulnessScoreDelta = Number.isFinite(Number(usefulness?.usefulness_score_delta))
+        ? Math.round(Number(usefulness.usefulness_score_delta))
+        : 0;
+      const usefulnessReasonCodes = Array.isArray(usefulness?.usefulness_reason_codes)
+        ? usefulness.usefulness_reason_codes
+        : [];
+      return {
+        ...signal,
+        ...(usefulnessScoreDelta || usefulnessReasonCodes.length || usefulness?.supported_tactic_families?.length || usefulness?.contradicted_tactic_families?.length || usefulness?.stalled_tactic_families?.length
+          ? {
+              usefulness_score_delta: usefulnessScoreDelta,
+              usefulness_reason_codes: usefulnessReasonCodes,
+              ...(Array.isArray(usefulness?.supported_tactic_families) && usefulness.supported_tactic_families.length
+                ? { supported_tactic_families: usefulness.supported_tactic_families }
+                : {}),
+              ...(Array.isArray(usefulness?.contradicted_tactic_families) && usefulness.contradicted_tactic_families.length
+                ? { contradicted_tactic_families: usefulness.contradicted_tactic_families }
+                : {}),
+              ...(Array.isArray(usefulness?.stalled_tactic_families) && usefulness.stalled_tactic_families.length
+                ? { stalled_tactic_families: usefulness.stalled_tactic_families }
+                : {}),
+            }
+          : {}),
+        priority_score: Math.max(0, Math.round(healthPlanSignalPriorityScore(signal) + usefulnessScoreDelta)),
+        priority_reason_codes: [
+          ...new Set([
+            ...healthPlanSignalPriorityReasonCodes(signal),
+            ...usefulnessReasonCodes,
+          ]),
+        ],
+      };
+    })
+    .sort((left, right) => {
+      const scoreDelta = healthPlanSignalPriorityScore(right) - healthPlanSignalPriorityScore(left);
+      if (scoreDelta !== 0) return scoreDelta;
+      const freshnessOrder = { live: 3, recent: 2, stale: 1, unknown: 0 };
+      const freshnessDelta =
+        (freshnessOrder[normalizeHealthPlanSignalFreshness(right?.freshness, "unknown")] || 0)
+        - (freshnessOrder[normalizeHealthPlanSignalFreshness(left?.freshness, "unknown")] || 0);
+      if (freshnessDelta !== 0) return freshnessDelta;
+      const observedDelta =
+        new Date(right?.observed_at || 0).getTime()
+        - new Date(left?.observed_at || 0).getTime();
+      if (!Number.isNaN(observedDelta) && observedDelta !== 0) return observedDelta;
+      return String(left?.id || "").localeCompare(String(right?.id || ""));
+    });
+}
+
+function timestampFromDateOnly(value) {
+  const normalized = normalizeDateValue(value);
+  return normalized ? normalizeTimestampValue(`${normalized}T00:00:00.000Z`) : null;
+}
+
+function timestampValues(values) {
+  return (Array.isArray(values) ? values : [values])
+    .map((value) => normalizeTimestampValue(value))
+    .filter(Boolean);
+}
+
+function latestTimestamp(values) {
+  const normalized = timestampValues(values);
+  if (!normalized.length) return null;
+  return normalized
+    .slice()
+    .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] || null;
+}
+
+function healthPlanReceiptFreshnessWindow(responseExpectation = "review within 24 hours") {
+  const sameDay = responseExpectation === "same-day review" || responseExpectation === "same_day";
+  return {
+    fresh_hours: sameDay ? 4 : 12,
+    stale_hours: sameDay ? 10 : 24,
+  };
+}
+
+function assessHealthPlanProofFreshness(timestamp, responseExpectation = "review within 24 hours", now = new Date()) {
+  const normalizedTimestamp = normalizeTimestampValue(timestamp);
+  const currentNow = now instanceof Date ? now : new Date(now || Date.now());
+  if (!normalizedTimestamp) {
+    return {
+      state: "missing",
+      hours_since: null,
+    };
+  }
+  const proofDate = new Date(normalizedTimestamp);
+  if (Number.isNaN(proofDate.getTime())) {
+    return {
+      state: "missing",
+      hours_since: null,
+    };
+  }
+  const hoursSince = Math.max(0, (currentNow.getTime() - proofDate.getTime()) / (1000 * 60 * 60));
+  const window = healthPlanReceiptFreshnessWindow(responseExpectation);
+  if (hoursSince <= window.fresh_hours) {
+    return {
+      state: "fresh",
+      hours_since: hoursSince,
+    };
+  }
+  if (hoursSince <= window.stale_hours) {
+    return {
+      state: "aging",
+      hours_since: hoursSince,
+    };
+  }
+  return {
+    state: "stale",
+    hours_since: hoursSince,
+  };
+}
+
+function healthPlanConfidenceRank(value) {
+  return value === "high" ? 3 : value === "medium" ? 2 : value === "low" ? 1 : 0;
+}
+
+function healthPlanConfidenceFromRank(rank) {
+  if (rank >= 3) return "high";
+  if (rank === 2) return "medium";
+  return "low";
+}
+
+function downgradeHealthPlanConfidence(value, steps = 1) {
+  const normalizedSteps = Number.isFinite(Number(steps)) ? Math.max(0, Math.floor(Number(steps))) : 0;
+  return healthPlanConfidenceFromRank(Math.max(1, healthPlanConfidenceRank(value) - normalizedSteps));
+}
+
+function inferHealthPlanSignalFreshness(timestamp, signalOrCategory = null, responseExpectation = null) {
+  return assessHealthPlanSignalFreshness(timestamp, new Date(), signalOrCategory, responseExpectation).freshness;
+}
+
+const HEALTH_PLAN_OUTREACH_NOTE_PREFIX = "#VYVA_OUTREACH ";
+const HEALTH_PLAN_HANDOFF_NOTE_PREFIX = "#VYVA_HANDOFF ";
+const HEALTH_PLAN_HANDOFF_STATUS_NOTE_PREFIX = "#VYVA_HANDOFF_STATUS ";
+const HEALTH_PLAN_INCIDENT_NOTE_PREFIX = "#VYVA_INCIDENT ";
+
+function parseStructuredHealthPlanNotes(notes, prefix, mapper) {
+  if (!notes) return [];
+  return String(notes)
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const match = block.match(/^\[([^\]]+)\]\s*([\s\S]+)$/);
+      const rawHeader = match?.[1] || "";
+      const noteText = (match?.[2] || block).trim();
+      if (!noteText.startsWith(prefix)) return null;
+      try {
+        const parsed = JSON.parse(noteText.slice(prefix.length));
+        const separator = rawHeader.indexOf(" - ");
+        const timestamp = separator >= 0 ? rawHeader.slice(0, separator) : rawHeader || null;
+        const author = separator >= 0 ? rawHeader.slice(separator + 3) : null;
+        return mapper(parsed, timestamp, author);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function normalizeHealthPlanOutreachAudience(value) {
+  return value === "care_circle" ? "care_circle" : "client";
+}
+
+function normalizeHealthPlanOutreachChannel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "whatsapp") return "whatsapp";
+  if (normalized === "app") return "app";
+  if (normalized === "in_person") return "in_person";
+  return "phone";
+}
+
+function parseHealthPlanOutreachEntries(notes) {
+  return parseStructuredHealthPlanNotes(notes, HEALTH_PLAN_OUTREACH_NOTE_PREFIX, (parsed, timestamp, author) => ({
+    timestamp,
+    author,
+    audience: normalizeHealthPlanOutreachAudience(parsed.audience),
+    channel: normalizeHealthPlanOutreachChannel(parsed.channel),
+    state: parsed.state === "ready" || parsed.state === "review" || parsed.state === "hold" ? parsed.state : null,
+  }));
+}
+
+function parseHealthPlanHandoffEntries(notes) {
+  return parseStructuredHealthPlanNotes(notes, HEALTH_PLAN_HANDOFF_NOTE_PREFIX, (parsed, timestamp, author) => ({
+    timestamp,
+    author,
+    priority: parsed.priority === "high" || parsed.priority === "medium" ? parsed.priority : "low",
+    response_window: parsed.responseWindow === "same_day" ? "same_day" : "within_24h",
+    sharing_boundary: parsed.sharingBoundary === "staff_only" ? "staff_only" : "approved_circle",
+    owner_name: nullIfBlank(parsed.ownerName),
+    owner_missing: Boolean(parsed.ownerMissing),
+    active_alert_count: Number(parsed.activeAlertCount || 0),
+    offline_sensor_count: Number(parsed.offlineSensorCount || 0),
+    missed_medication: Boolean(parsed.missedMedication),
+    high_risk: Boolean(parsed.highRisk),
+    actions: Array.isArray(parsed.actions) ? parsed.actions.map((action) => nullIfBlank(action)).filter(Boolean) : [],
+  }));
+}
+
+function parseHealthPlanHandoffStatusEntries(notes) {
+  return parseStructuredHealthPlanNotes(notes, HEALTH_PLAN_HANDOFF_STATUS_NOTE_PREFIX, (parsed, timestamp, author) => ({
+    timestamp,
+    author,
+    status:
+      parsed.status === "owner_assigned" || parsed.status === "first_contact_made" || parsed.status === "escalation_closed"
+        ? parsed.status
+        : "owner_assigned",
+    owner_name: nullIfBlank(parsed.ownerName),
+    response_window:
+      parsed.responseWindow === "same_day" || parsed.responseWindow === "within_24h"
+        ? parsed.responseWindow
+        : null,
+  }));
+}
+
+function parseHealthPlanIncidentEntries(notes) {
+  return parseStructuredHealthPlanNotes(notes, HEALTH_PLAN_INCIDENT_NOTE_PREFIX, (parsed, timestamp, author) => {
+    const code =
+      parsed.code === "urgent_welfare_check" || parsed.code === "medication_recovery" || parsed.code === "sensor_fallback"
+        ? parsed.code
+        : null;
+    if (!code) return null;
+    return {
+      timestamp,
+      author,
+      code,
+      status: parsed.status === "closed" ? "closed" : "open",
+      owner_name: nullIfBlank(parsed.ownerName),
+      response_window:
+        parsed.responseWindow === "same_day" || parsed.responseWindow === "within_24h"
+          ? parsed.responseWindow
+          : null,
+    };
+  });
+}
+
+function latestTimestampedEntry(entries) {
+  let latest = null;
+  let latestTime = -Infinity;
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const time = new Date(entry?.timestamp || 0).getTime();
+    if (Number.isNaN(time) || time <= latestTime) continue;
+    latest = entry;
+    latestTime = time;
+  }
+  return latest;
+}
+
+function uniqueHealthPlanOutcomeCodes(entries) {
+  return [...new Set((Array.isArray(entries) ? entries : []).map((entry) => nullIfBlank(entry?.code)).filter(Boolean))];
+}
+
+function describeHealthPlanOutreachChannel(channel) {
+  if (channel === "in_person") return "in-person";
+  return String(channel || "phone").replace(/_/g, " ");
+}
+
+function buildHealthPlanResponsePath(profile) {
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const latestClientOutreach = latestTimestampedEntry(
+    outcomeState.outreachEntries.filter((entry) => entry?.audience === "client"),
+  );
+  const latestCareCircleOutreach = latestTimestampedEntry(
+    outcomeState.outreachEntries.filter((entry) => entry?.audience === "care_circle"),
+  );
+  const clientRouteChannels = [...new Set(
+    outcomeState.outreachEntries
+      .filter((entry) => entry?.audience === "client")
+      .map((entry) => normalizeHealthPlanOutreachChannel(entry?.channel))
+      .filter(Boolean),
+  )];
+  const repeatedClientChannel =
+    latestClientOutreach
+    && outcomeState.outreachEntries.filter((entry) =>
+      entry?.audience === "client"
+      && normalizeHealthPlanOutreachChannel(entry?.channel) === normalizeHealthPlanOutreachChannel(latestClientOutreach.channel),
+    ).length >= 2
+      ? normalizeHealthPlanOutreachChannel(latestClientOutreach.channel)
+      : null;
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const careCircleRouteAvailable =
+    outcomeState.latestHandoff?.sharing_boundary === "approved_circle"
+      || (!outcomeState.latestHandoff && familyConsent);
+
+  return normalizeHealthPlanResponsePath({
+    latest_outreach: outcomeState.latestOutreach,
+    latest_client_outreach: latestClientOutreach,
+    latest_care_circle_outreach: latestCareCircleOutreach,
+    handoff_open: outcomeState.handoffOpen,
+    owner_assigned: outcomeState.ownerAssigned,
+    first_contact_recorded: outcomeState.firstContactMade,
+    escalation_closed: outcomeState.escalationClosed,
+    client_route_attempt_count: outcomeState.outreachEntries.filter((entry) => entry?.audience === "client").length,
+    client_route_channels: clientRouteChannels,
+    repeated_client_channel: repeatedClientChannel,
+    care_circle_route_available: careCircleRouteAvailable,
+    care_circle_route_used: Boolean(latestCareCircleOutreach),
+    alternate_audience_open: careCircleRouteAvailable && !latestCareCircleOutreach,
+  });
+}
+
+function healthPlanIncidentCodeLabel(code) {
+  if (code === "urgent_welfare_check") return "urgent welfare check";
+  if (code === "medication_recovery") return "medication recovery";
+  if (code === "sensor_fallback") return "sensor fallback";
+  return "incident follow-up";
+}
+
+function buildHealthPlanOutcomeState(profile) {
+  const notes = nullIfBlank(firstValue(profile?.user?.emergency_notes, profile?.user?.emergencyNotes));
+  const outreachEntries = parseHealthPlanOutreachEntries(notes);
+  const handoffEntries = parseHealthPlanHandoffEntries(notes);
+  const handoffStatusEntries = parseHealthPlanHandoffStatusEntries(notes);
+  const incidentEntries = parseHealthPlanIncidentEntries(notes);
+  const latestOutreach = latestTimestampedEntry(outreachEntries);
+  const latestHandoff = latestTimestampedEntry(handoffEntries);
+  const latestHandoffStatus = latestTimestampedEntry(handoffStatusEntries);
+  const ownerAssigned = handoffStatusEntries.some((entry) => entry.status === "owner_assigned");
+  const firstContactMade = handoffStatusEntries.some((entry) => entry.status === "first_contact_made");
+  const escalationClosed = handoffStatusEntries.some((entry) => entry.status === "escalation_closed");
+  const latestIncidentByCode = uniqueHealthPlanOutcomeCodes(incidentEntries)
+    .map((code) => latestTimestampedEntry(incidentEntries.filter((entry) => entry.code === code)))
+    .filter(Boolean);
+  const latestOpenIncidents = latestIncidentByCode.filter((entry) => entry?.status === "open");
+  const latestClosedIncidents = latestIncidentByCode.filter((entry) => entry?.status === "closed");
+  const latestOutcomeAt = latestTimestamp([
+    latestOutreach?.timestamp,
+    latestHandoff?.timestamp,
+    latestHandoffStatus?.timestamp,
+    ...incidentEntries.map((entry) => entry?.timestamp),
+  ]);
+
+  return {
+    notes,
+    outreachEntries,
+    latestOutreach,
+    handoffEntries,
+    handoffStatusEntries,
+    latestHandoff,
+    latestHandoffStatus,
+    ownerAssigned,
+    firstContactMade,
+    escalationClosed,
+    handoffOpen: Boolean(latestHandoff) && !(ownerAssigned && firstContactMade && escalationClosed),
+    incidentEntries,
+    latestOpenIncidents,
+    latestClosedIncidents,
+    latestOutcomeAt,
+  };
+}
+
+function buildHealthPlanOutcomeSignals(profile) {
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const signalItems = [];
+
+  if (outcomeState.latestOutreach) {
+    signalItems.push({
+      id: "outcome-latest-outreach",
+      label: "Recent health-plan outreach logged",
+      detail: [
+        `Audience ${outcomeState.latestOutreach.audience === "care_circle" ? "care circle" : "client"}`,
+        `Channel ${outcomeState.latestOutreach.channel.replace("_", " ")}`,
+        outcomeState.latestOutreach.timestamp ? `At ${outcomeState.latestOutreach.timestamp}` : null,
+      ].filter(Boolean).join(" Â· "),
+      category: "context",
+      strength: "medium",
+      observed_at: outcomeState.latestOutreach.timestamp,
+      freshness: inferHealthPlanSignalFreshness(outcomeState.latestOutreach.timestamp, { category: "context", strength: "medium" }),
+    });
+  }
+
+  if (outcomeState.latestHandoff) {
+    signalItems.push({
+      id: outcomeState.handoffOpen ? "outcome-handoff-open" : "outcome-handoff-closed",
+      label: outcomeState.handoffOpen ? "Operational handoff still open" : "Operational handoff closure recorded",
+      detail: [
+        outcomeState.latestHandoff.owner_name ? `Owner ${outcomeState.latestHandoff.owner_name}` : null,
+        outcomeState.ownerAssigned ? "Owner assigned" : "Owner still unconfirmed",
+        outcomeState.firstContactMade ? "First contact recorded" : "First contact not yet recorded",
+        outcomeState.escalationClosed ? "Escalation closure recorded" : "Escalation still open",
+      ].filter(Boolean).join(" Â· "),
+      category: "care-circle",
+      strength: outcomeState.handoffOpen ? "high" : "low",
+      observed_at: latestTimestamp([outcomeState.latestHandoff?.timestamp, outcomeState.latestHandoffStatus?.timestamp]),
+      freshness: inferHealthPlanSignalFreshness(
+        latestTimestamp([outcomeState.latestHandoff?.timestamp, outcomeState.latestHandoffStatus?.timestamp]),
+        { category: "care-circle", strength: outcomeState.handoffOpen ? "high" : "low" },
+      ),
+    });
+  }
+
+  if (outcomeState.latestOpenIncidents.length) {
+    signalItems.push({
+      id: "outcome-incident-open",
+      label: `${outcomeState.latestOpenIncidents.length} incident playbook${outcomeState.latestOpenIncidents.length === 1 ? "" : "s"} still open`,
+      detail: outcomeState.latestOpenIncidents
+        .map((entry) => healthPlanIncidentCodeLabel(entry.code))
+        .join(" Â· "),
+      category: "context",
+      strength: "high",
+      observed_at: latestTimestamp(outcomeState.latestOpenIncidents.map((entry) => entry?.timestamp)),
+      freshness: inferHealthPlanSignalFreshness(
+        latestTimestamp(outcomeState.latestOpenIncidents.map((entry) => entry?.timestamp)),
+        { category: "context", strength: "high" },
+      ),
+    });
+  } else if (outcomeState.latestClosedIncidents.length) {
+    signalItems.push({
+      id: "outcome-incident-closed",
+      label: "Recent incident playbook closure recorded",
+      detail: outcomeState.latestClosedIncidents
+        .map((entry) => healthPlanIncidentCodeLabel(entry.code))
+        .join(" Â· "),
+      category: "context",
+      strength: "low",
+      observed_at: latestTimestamp(outcomeState.latestClosedIncidents.map((entry) => entry?.timestamp)),
+      freshness: inferHealthPlanSignalFreshness(
+        latestTimestamp(outcomeState.latestClosedIncidents.map((entry) => entry?.timestamp)),
+        { category: "context", strength: "low" },
+      ),
+    });
+  }
+
+  return normalizeHealthPlanSourceSignals(signalItems);
+}
+
+function buildHealthPlanOutcomeFeedback(profile, sourceSignals, organization = null) {
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const policy = buildHealthPlanPolicy(profile, { latestScore: null, forecastRows: [] }, organization);
+  const findSignal = (id) => findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === id);
+  const recentEvents = [];
+  const planningCautions = [];
+  const knownFacts = [];
+  const openQuestions = [];
+  const nextConfirmations = [];
+
+  if (outcomeState.latestOutreach && findSignal("outcome-latest-outreach")) {
+    recentEvents.push({
+      code: "recent-outreach-logged",
+      text: "A recent outreach was already logged, so the next plan should build from that touchpoint instead of starting from zero.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("outcome-latest-outreach")].filter(Boolean),
+    });
+    knownFacts.push({
+      code: "recent-outreach-logged",
+      text: "A recent outreach attempt is already recorded in the client history.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("outcome-latest-outreach")].filter(Boolean),
+    });
+    planningCautions.push("Do not assume that a logged outreach means the issue is resolved unless a real response or closure is also recorded.");
+  }
+
+  if (outcomeState.handoffOpen && findSignal("outcome-handoff-open")) {
+    recentEvents.push({
+      code: "open-handoff-visible",
+      text: "An operational handoff is still open, so the next plan must carry that loop forward explicitly.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-handoff-open")].filter(Boolean),
+    });
+    openQuestions.push({
+      code: "handoff-still-open",
+      text: "A prior handoff exists, but the operational loop is not yet fully closed.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-handoff-open")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "close-open-handoff",
+      text: "Confirm the named owner, record the first contact, and explicitly close the handoff once the urgent loop is resolved.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-handoff-open")].filter(Boolean),
+    });
+    planningCautions.push("Do not reset the response cycle while a prior handoff is still open. Carry the same operational loop forward until closure is recorded.");
+  } else if (outcomeState.latestHandoff && findSignal("outcome-handoff-closed")) {
+    knownFacts.push({
+      code: "handoff-closure-recorded",
+      text: "A recent operational handoff closure is already recorded in the client history.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("outcome-handoff-closed")].filter(Boolean),
+    });
+  }
+
+  if (outcomeState.latestOpenIncidents.length && findSignal("outcome-incident-open")) {
+    recentEvents.push({
+      code: "incident-open",
+      text: "At least one incident playbook is still open and must stay visible in the next plan.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-incident-open")].filter(Boolean),
+    });
+    openQuestions.push({
+      code: "incident-playbook-open",
+      text: "An incident response path is still open, so the team should not downgrade urgency prematurely.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-incident-open")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-incident-closure",
+      text: "Confirm whether the open incident playbook is still active, who owns it, and what explicit closure condition will end it.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("outcome-incident-open")].filter(Boolean),
+    });
+    planningCautions.push("Do not write as if the situation is settled while an incident playbook is still open.");
+  }
+
+  return {
+    recent_events: recentEvents,
+    planning_cautions: [...new Set(planningCautions)],
+    known_facts: knownFacts,
+    open_questions: openQuestions,
+    next_confirmations: nextConfirmations,
+  };
+}
+
+function healthPlanServiceOutcomeMissed(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["missed", "failed", "unconfirmed", "escalated", "pending", "no_answer", "no answer"].includes(normalized);
+}
+
+function healthPlanAlertSuggestsReachabilityConcern(alert) {
+  const text = [
+    nullIfBlank(alert?.message),
+    nullIfBlank(alert?.alert_type),
+  ].filter(Boolean).join(" ");
+  return /\breach|unreach|contact|answer|response|welfare|check|safety|could not be reached|no answer|missed\b/i.test(text);
+}
+
+function buildHealthPlanEvidenceTension(profile, predictiveContext, sourceSignals = [], organization = null) {
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts.filter((alert) => !alert?.resolved_at) : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const medicationConcern = ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const predictiveCalm = ["low", "medium", "moderate", "review"].includes(riskBand);
+  const reachabilityConcern = alerts.some((alert) => healthPlanAlertSuggestsReachabilityConcern(alert));
+  const latestAlertAt = latestTimestamp(alerts.map((alert) => alert?.created_at));
+  const latestSensorAt = latestTimestamp(sensors.map((sensor) => sensor?.last_reading_at));
+  const onlineSensorFresh = sensors.some((sensor) => {
+    const status = String(sensor?.status || "").trim().toLowerCase();
+    if (status !== "online") return false;
+    const freshness = inferHealthPlanSignalFreshness(sensor?.last_reading_at, {
+      category: "sensor",
+      strength: String(sensor?.status || "").trim().toLowerCase() === "online" ? "low" : "high",
+    });
+    return freshness === "live" || freshness === "recent";
+  });
+  const liveOperationalConcern =
+    alerts.length > 0
+    || medicationConcern
+    || outcomeState.handoffOpen
+    || outcomeState.latestOpenIncidents.length > 0;
+  const predictiveLiveMismatch = predictiveCalm && liveOperationalConcern;
+  const passiveConflict =
+    onlineSensorFresh
+    && (reachabilityConcern || outcomeState.handoffOpen || responsePath?.alternate_audience_open || responsePath?.client_route_attempt_count > 0)
+    && !outcomeState.firstContactMade;
+  const observedAt = latestTimestamp([
+    latestAlertAt,
+    latestSensorAt,
+    outcomeState.latestOutcomeAt,
+    profile?.medicationActivity?.occurred_at,
+    profile?.medicationActivity?.reported_at,
+  ]);
+  const sameDay = buildHealthPlanPolicy(profile, predictiveContext, organization).response_expectation === "same-day review";
+
+  const signals = [];
+  if (predictiveLiveMismatch) {
+    signals.push({
+      id: "evidence-predictive-live-mismatch",
+      label: "Live operational risk is sharper than the predictive trend",
+      detail: [
+        riskBand ? `Predictive band ${riskBand}` : "Predictive band appears calmer",
+        alerts.length ? `${alerts.length} active alert${alerts.length === 1 ? "" : "s"}` : null,
+        medicationConcern ? `Medication status still ${medicationStatus}` : null,
+        outcomeState.handoffOpen ? "An operational follow-up loop is still open" : null,
+      ].filter(Boolean).join(" · "),
+      category: "risk",
+      strength: "high",
+      observed_at: observedAt,
+      freshness: inferHealthPlanSignalFreshness(observedAt, { category: "risk", strength: "high" }),
+    });
+  }
+  if (passiveConflict) {
+    signals.push({
+      id: "evidence-passive-signal-conflict",
+      label: "Passive signals do not yet resolve the live concern",
+      detail: [
+        onlineSensorFresh ? "A sensor is still reporting recently" : null,
+        reachabilityConcern ? "Reachability or welfare concern is still open" : null,
+        outcomeState.handoffOpen ? "The operational loop is still open" : null,
+      ].filter(Boolean).join(" · "),
+      category: "sensor",
+      strength: sameDay ? "high" : "medium",
+      observed_at: observedAt || latestSensorAt,
+      freshness: inferHealthPlanSignalFreshness(observedAt || latestSensorAt, { category: "sensor", strength: sameDay ? "high" : "medium" }),
+    });
+  }
+
+  const normalizedSignals = normalizeHealthPlanSourceSignals(signals);
+  const signalPool = Array.isArray(sourceSignals) && sourceSignals.length ? sourceSignals : normalizedSignals;
+  const findSignal = (id) => findHealthPlanSignalId(signalPool, (signal) => signal?.id === id);
+  const knownFacts = [];
+  const openQuestions = [];
+  const nextConfirmations = [];
+  const planningCautions = [];
+
+  if (predictiveLiveMismatch && findSignal("evidence-predictive-live-mismatch")) {
+    knownFacts.push({
+      code: "live-risk-overrides-predictive-trend",
+      text: "The live operational picture is currently sharper than the calmer predictive trend, so the team should not downscale urgency yet.",
+      priority: "high",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-predictive-live-mismatch")].filter(Boolean),
+    });
+    openQuestions.push({
+      code: "predictive-live-mismatch",
+      text: "The predictive trend and the live care picture do not line up cleanly yet.",
+      priority: "high",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-predictive-live-mismatch")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-live-risk-before-downscaling",
+      text: "Confirm by direct contact or named-owner verification whether the live concern is truly easing before reducing urgency.",
+      priority: "high",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-predictive-live-mismatch")].filter(Boolean),
+    });
+    planningCautions.push("Do not let a calmer predictive trend override fresher operational concern until a real touchpoint confirms it.");
+  }
+
+  if (passiveConflict && findSignal("evidence-passive-signal-conflict")) {
+    knownFacts.push({
+      code: "passive-signals-not-resolution",
+      text: "Fresh passive reporting does not yet count as proof that the live reachability or safety concern is resolved.",
+      priority: sameDay ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-passive-signal-conflict")].filter(Boolean),
+    });
+    openQuestions.push({
+      code: "passive-signal-conflict",
+      text: "Passive monitoring and the live operational concern still need to be reconciled.",
+      priority: sameDay ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-passive-signal-conflict")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "reconcile-passive-and-live-signals",
+      text: "Use direct contact, named-owner confirmation, or an approved care-circle check to reconcile the passive signal with the live concern.",
+      priority: sameDay ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("evidence-passive-signal-conflict")].filter(Boolean),
+    });
+    planningCautions.push("Do not treat passive sensor reporting as a substitute for real contact while the operational loop is still open.");
+  }
+
+  return {
+    signals: normalizedSignals,
+    known_facts: knownFacts,
+    open_questions: openQuestions,
+    next_confirmations: nextConfirmations,
+    planning_cautions: [...new Set(planningCautions)],
+  };
+}
+
+function buildHealthPlanExecutionFeedback(profile, sourceSignals, organization = null, now = new Date()) {
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const currentNow = now instanceof Date ? now : new Date(now || Date.now());
+  const responseExpectation = buildHealthPlanPolicy(profile, { latestScore: null, forecastRows: [] }, organization).response_expectation;
+  const sameDay = responseExpectation === "same-day review";
+  const latestMovementAt = latestTimestamp([
+    outcomeState.latestOutreach?.timestamp,
+    outcomeState.latestHandoffStatus?.timestamp,
+    outcomeState.latestHandoff?.timestamp,
+    ...outcomeState.incidentEntries.map((entry) => entry?.timestamp),
+    firstValue(profile?.checkins?.last_outcome_at, profile?.checkins?.lastOutcomeAt),
+    firstValue(profile?.brainCoach?.last_outcome_at, profile?.brainCoach?.lastOutcomeAt),
+    firstValue(profile?.medicationActivity?.occurred_at, profile?.medicationActivity?.reported_at),
+  ]);
+  const latestMovementDate = latestMovementAt ? new Date(latestMovementAt) : null;
+  const hoursSinceMovement =
+    latestMovementDate && !Number.isNaN(latestMovementDate.getTime())
+      ? Math.max(0, (currentNow.getTime() - latestMovementDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const staleAfterHours = sameDay ? 3 : 12;
+  const checkinMissed = healthPlanServiceOutcomeMissed(firstValue(profile?.checkins?.last_outcome, profile?.checkins?.lastOutcome));
+  const brainCoachMissed = healthPlanServiceOutcomeMissed(firstValue(profile?.brainCoach?.last_outcome, profile?.brainCoach?.lastOutcome));
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const medicationNotLanding = ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+  const contactAttemptLogged = Boolean(outcomeState.latestOutreach || outcomeState.latestHandoff);
+  const firstContactConfirmed = Boolean(outcomeState.firstContactMade);
+  const executionStalled =
+    Boolean(outcomeState.handoffOpen)
+    && Boolean(contactAttemptLogged)
+    && !firstContactConfirmed
+    && hoursSinceMovement != null
+    && hoursSinceMovement >= staleAfterHours;
+  const contactPathWeak =
+    Boolean(contactAttemptLogged)
+    && !firstContactConfirmed
+    && (checkinMissed || brainCoachMissed || medicationNotLanding || executionStalled);
+  const responseNotLanding =
+    checkinMissed
+    || brainCoachMissed
+    || medicationNotLanding
+    || executionStalled;
+  const repeatedClientChannel = nullIfBlank(responsePath?.repeated_client_channel);
+  const alternateAudienceOpen =
+    Boolean(responsePath?.care_circle_route_available)
+    && !Boolean(responsePath?.care_circle_route_used)
+    && contactPathWeak;
+  const latestClientOutreach = responsePath?.latest_client_outreach || null;
+  const latestClientChannelLabel = describeHealthPlanOutreachChannel(latestClientOutreach?.channel);
+
+  const signals = [];
+  if (responseNotLanding) {
+    signals.push({
+      id: "execution-followthrough-open",
+      label: "Live follow-through still not landing cleanly",
+      detail: [
+        checkinMissed ? "Recent check-in outcome was missed or not confirmed" : null,
+        brainCoachMissed ? "Recent Brain Coach outcome was missed or not confirmed" : null,
+        medicationNotLanding ? `Medication adherence still ${medicationStatus || "not confirmed"}` : null,
+      ].filter(Boolean).join(" Â· "),
+      category: "service",
+      strength: executionStalled ? "high" : "medium",
+      observed_at: latestMovementAt,
+      freshness: inferHealthPlanSignalFreshness(latestMovementAt, { category: "service", strength: executionStalled ? "high" : "medium" }),
+    });
+  }
+  if (contactPathWeak) {
+    signals.push({
+      id: "execution-contact-path-weak",
+      label: "The current contact path may not be landing",
+      detail: [
+        contactAttemptLogged ? "A recent outreach or handoff was already logged" : null,
+        !firstContactConfirmed ? "No first-contact receipt is recorded yet" : null,
+        checkinMissed || brainCoachMissed ? "Scheduled service outcomes still show missed or unconfirmed contact" : null,
+      ].filter(Boolean).join(" Â· "),
+      category: "context",
+      strength: executionStalled ? "high" : "medium",
+      observed_at: latestMovementAt,
+      freshness: inferHealthPlanSignalFreshness(latestMovementAt, { category: "context", strength: executionStalled ? "high" : "medium" }),
+    });
+  }
+  if (repeatedClientChannel && latestClientOutreach) {
+    signals.push({
+      id: "execution-same-channel-repeated",
+      label: "The same client outreach channel has already been repeated",
+      detail: [
+        `Client outreach has already repeated on ${latestClientChannelLabel}`,
+        !firstContactConfirmed ? "No first-contact receipt is recorded yet" : null,
+      ].filter(Boolean).join(" · "),
+      category: "context",
+      strength: executionStalled ? "high" : "medium",
+      observed_at: latestClientOutreach.timestamp,
+      freshness: inferHealthPlanSignalFreshness(latestClientOutreach.timestamp, { category: "context", strength: executionStalled ? "high" : "medium" }),
+    });
+  }
+  if (alternateAudienceOpen) {
+    signals.push({
+      id: "execution-care-circle-route-open",
+      label: "An approved care-circle route is still available",
+      detail: [
+        "The direct client route has not landed yet",
+        "No approved care-circle outreach is logged yet",
+      ].join(" · "),
+      category: "care-circle",
+      strength: executionStalled ? "high" : "medium",
+      observed_at: latestMovementAt,
+      freshness: inferHealthPlanSignalFreshness(latestMovementAt, { category: "care-circle", strength: executionStalled ? "high" : "medium" }),
+    });
+  }
+  if (executionStalled) {
+    signals.push({
+      id: "execution-stalled",
+      label: "Follow-through appears stalled",
+      detail: `No fresh movement has been recorded within the expected ${sameDay ? "same-day" : "24-hour"} response window.`,
+      category: "context",
+      strength: "high",
+      observed_at: latestMovementAt,
+      freshness: inferHealthPlanSignalFreshness(latestMovementAt, { category: "context", strength: "high" }),
+    });
+  }
+
+  const normalizedSignals = normalizeHealthPlanSourceSignals(signals);
+  const findSignal = (id) => findHealthPlanSignalId(normalizedSignals, (signal) => signal?.id === id);
+  const openQuestions = [];
+  const nextConfirmations = [];
+  const knownFacts = [];
+
+  if (responseNotLanding && findSignal("execution-followthrough-open")) {
+    knownFacts.push({
+      code: "followthrough-still-open",
+      text: "Recent follow-through signals suggest that the current support loop is still not landing cleanly.",
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-followthrough-open")].filter(Boolean),
+    });
+  }
+
+  if (contactPathWeak && findSignal("execution-contact-path-weak")) {
+    openQuestions.push({
+      code: "contact-path-not-landing",
+      text: "The current contact path may not be working, so the team still needs to confirm whether a different route is required.",
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-contact-path-weak")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-alternate-contact-path",
+      text: "Confirm the next alternate contact path if the current route is still not producing a real touchpoint.",
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-contact-path-weak")].filter(Boolean),
+    });
+  }
+  if (repeatedClientChannel && findSignal("execution-same-channel-repeated")) {
+    openQuestions.push({
+      code: "same-channel-repeated",
+      text: `The client route has already repeated on ${latestClientChannelLabel} without a recorded receipt.`,
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-same-channel-repeated")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "change-client-channel",
+      text: `If ${latestClientChannelLabel} is still not landing, switch the next client touchpoint to a different approved channel and record the result.`,
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-same-channel-repeated")].filter(Boolean),
+    });
+  }
+  if (alternateAudienceOpen && findSignal("execution-care-circle-route-open")) {
+    openQuestions.push({
+      code: "care-circle-route-unused",
+      text: "The approved care-circle route is still available but has not been activated yet.",
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-care-circle-route-open")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "activate-care-circle-route",
+      text: "If direct client contact still does not land, activate the approved care-circle or named-owner route now and document who takes it.",
+      priority: executionStalled ? "high" : "medium",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-care-circle-route-open")].filter(Boolean),
+    });
+  }
+
+  if (executionStalled && findSignal("execution-stalled")) {
+    openQuestions.push({
+      code: "followthrough-stalled",
+      text: "Follow-through appears stalled inside the current response window.",
+      priority: "high",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-stalled")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "unstick-followthrough-loop",
+      text: "Move the case off the current blocked path by naming the next alternate route, owner, and proof of contact.",
+      priority: "high",
+      due_window: sameDay ? "same_day" : "within_24h",
+      signal_ids: [findSignal("execution-stalled")].filter(Boolean),
+    });
+  }
+
+  const executionBrief = normalizeHealthPlanExecutionBrief({
+    route_state:
+      executionStalled
+        ? "stalled"
+        : contactPathWeak
+          ? "weak"
+          : firstContactConfirmed
+            ? "landed"
+            : contactAttemptLogged
+              ? "attempted"
+              : "idle",
+    summary_text:
+      executionStalled
+        ? "The current follow-through route looks stalled and still lacks a first-contact or closure receipt."
+        : contactPathWeak
+          ? "The current route is active but not yet convincing as a landed follow-through path."
+          : firstContactConfirmed
+            ? "The latest route has at least one recorded first-contact receipt."
+            : contactAttemptLogged
+              ? "A route was attempted recently, but the first-contact result is still thin."
+              : "No recent routed follow-through is recorded yet.",
+    latest_client_channel: latestClientOutreach?.channel || null,
+    route_attempt_count: Number(responsePath?.client_route_attempt_count || 0),
+    repeated_client_channel: repeatedClientChannel,
+    first_contact_recorded: firstContactConfirmed,
+    handoff_open: Boolean(outcomeState.handoffOpen),
+    escalation_closed: Boolean(outcomeState.escalationClosed),
+    alternate_audience_open: alternateAudienceOpen,
+    recommended_next_route:
+      alternateAudienceOpen
+        ? "approved_care_circle"
+        : repeatedClientChannel && !firstContactConfirmed
+          ? "switch_client_channel"
+          : contactPathWeak || executionStalled
+            ? "named_owner_escalation"
+            : "confirm_current_route",
+    missing_receipt:
+      outcomeState.handoffOpen && !firstContactConfirmed
+        ? "first_contact"
+        : outcomeState.handoffOpen && !outcomeState.escalationClosed
+          ? "closure"
+          : executionStalled || contactPathWeak
+            ? "followthrough"
+            : null,
+  });
+
+  return {
+    signals: normalizedSignals,
+    known_facts: knownFacts,
+    open_questions: openQuestions,
+    next_confirmations: nextConfirmations,
+    execution_brief: executionBrief,
+  };
+}
+
+function healthPlanRouteLabel(route, language = "en") {
+  const copy = {
+    en: {
+      approved_care_circle: "approved care-circle route",
+      switch_client_channel: "different approved client channel",
+      named_owner_escalation: "named owner route",
+      confirm_current_route: "current route",
+    },
+    de: {
+      approved_care_circle: "freigegebener Betreuungskreisweg",
+      switch_client_channel: "anderer freigegebener Klientenkanal",
+      named_owner_escalation: "benannter Verantwortungsweg",
+      confirm_current_route: "aktueller Weg",
+    },
+    es: {
+      approved_care_circle: "ruta aprobada del circulo de cuidado",
+      switch_client_channel: "canal aprobado diferente para contactar al cliente",
+      named_owner_escalation: "ruta de la persona responsable",
+      confirm_current_route: "ruta actual",
+    },
+  };
+  return (copy[language] || copy.en)[route] || (copy.en[route] || "next route");
+}
+
+function buildHealthPlanRouteLearning(profile, sourceSignals, organization = null, planMemory = null) {
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const policy = buildHealthPlanPolicy(profile, { latestScore: null, forecastRows: [] }, organization);
+  const executionFeedback = buildHealthPlanExecutionFeedback(profile, sourceSignals, organization);
+  const executionBrief = normalizeHealthPlanExecutionBrief(executionFeedback?.execution_brief);
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  const familyExecutionLearning = Array.isArray(memory?.family_execution_learning) ? memory.family_execution_learning : [];
+  const sourceSignalIds = new Set(
+    (Array.isArray(sourceSignals) ? sourceSignals : [])
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter(Boolean),
+  );
+  const normalizeIds = (ids) => [...new Set((Array.isArray(ids) ? ids : []).map((id) => nullIfBlank(id)).filter((id) => id && sourceSignalIds.has(id)))];
+  const sharingBoundaryLearning = familyExecutionLearning.find((entry) => entry?.family === "sharing_boundary") || null;
+  const contactPathLearning = familyExecutionLearning.find((entry) => entry?.family === "contact_path") || null;
+  const escalationLearning = familyExecutionLearning.find((entry) => entry?.family === "risk_escalation") || null;
+  const verificationLearning = familyExecutionLearning.find((entry) => entry?.family === "verification") || null;
+  const preferredRoute = executionBrief?.recommended_next_route || "confirm_current_route";
+  const currentPlan = memory?.current_plan || null;
+
+  const relevantLearning =
+    preferredRoute === "approved_care_circle"
+      ? sharingBoundaryLearning
+      : preferredRoute === "switch_client_channel"
+        ? contactPathLearning
+        : preferredRoute === "named_owner_escalation"
+          ? escalationLearning
+          : contactPathLearning?.learning_state === "validated"
+            ? contactPathLearning
+            : verificationLearning;
+  const routeProofAt = latestTimestamp(
+    preferredRoute === "approved_care_circle"
+      ? [
+        responsePath?.latest_care_circle_outreach?.timestamp,
+        relevantLearning?.latest_updated_at,
+        currentPlan?.recommendation_receipts?.latest_updated_at,
+      ]
+      : preferredRoute === "switch_client_channel"
+        ? [
+          responsePath?.latest_client_outreach?.timestamp,
+          relevantLearning?.latest_updated_at,
+          currentPlan?.recommendation_receipts?.latest_updated_at,
+        ]
+        : preferredRoute === "named_owner_escalation"
+          ? [
+            outcomeState?.latestHandoffStatus?.timestamp,
+            outcomeState?.latestHandoff?.timestamp,
+            relevantLearning?.latest_updated_at,
+            currentPlan?.recommendation_receipts?.latest_updated_at,
+          ]
+          : [
+            responsePath?.latest_client_outreach?.timestamp,
+            outcomeState?.latestHandoffStatus?.timestamp,
+            relevantLearning?.latest_updated_at,
+            currentPlan?.recommendation_receipts?.latest_updated_at,
+          ],
+  );
+  const routeProofFreshness = assessHealthPlanProofFreshness(routeProofAt, policy.response_expectation);
+  const historicalValidationAged =
+    relevantLearning?.learning_state === "validated"
+    && (routeProofFreshness.state === "aging" || routeProofFreshness.state === "stale");
+
+  let confidence = "medium";
+  if (preferredRoute === "approved_care_circle") {
+    confidence =
+      sharingBoundaryLearning?.learning_state === "validated"
+        ? "high"
+        : responsePath?.care_circle_route_available
+          ? "medium"
+          : "low";
+  } else if (preferredRoute === "switch_client_channel") {
+    confidence =
+      contactPathLearning?.learning_state === "validated"
+        ? "medium"
+        : responsePath?.repeated_client_channel
+          ? "high"
+          : "low";
+  } else if (preferredRoute === "named_owner_escalation") {
+    confidence =
+      escalationLearning?.learning_state === "needs_stronger_route"
+      || executionBrief?.route_state === "stalled"
+        ? "high"
+        : responsePath?.handoff_open
+          ? "medium"
+          : "low";
+  } else if (executionBrief?.route_state === "landed" || contactPathLearning?.learning_state === "validated") {
+    confidence = "high";
+  } else if (executionBrief?.route_state === "attempted") {
+    confidence = "medium";
+  } else {
+    confidence = "low";
+  }
+
+  if (historicalValidationAged) {
+    confidence = downgradeHealthPlanConfidence(
+      confidence,
+      1,
+    );
+  } else if (
+    executionBrief?.route_state === "landed"
+    && (routeProofFreshness.state === "aging" || routeProofFreshness.state === "stale")
+  ) {
+    confidence = downgradeHealthPlanConfidence(
+      confidence,
+      routeProofFreshness.state === "stale" ? 2 : 1,
+    );
+  }
+
+  const supportingSignalIds = normalizeIds(
+    preferredRoute === "approved_care_circle"
+      ? ["execution-care-circle-route-open", "outcome-handoff-open", "consent-family-sharing"]
+      : preferredRoute === "switch_client_channel"
+        ? ["execution-same-channel-repeated", "execution-contact-path-weak", "outcome-latest-outreach"]
+        : preferredRoute === "named_owner_escalation"
+          ? ["execution-stalled", "execution-contact-path-weak", "outcome-handoff-open"]
+          : ["outcome-latest-outreach", "service-checkins", "service-brain-coach"],
+  );
+
+  const routeCautions = [];
+  if (responsePath?.repeated_client_channel) {
+    routeCautions.push(`Do not keep repeating ${describeHealthPlanOutreachChannel(responsePath.repeated_client_channel)} without a recorded receipt.`);
+  }
+  if (responsePath?.alternate_audience_open && !responsePath?.care_circle_route_used) {
+    routeCautions.push("An approved care-circle route is available but still unused.");
+  }
+  if (executionBrief?.missing_receipt === "first_contact") {
+    routeCautions.push("Do not treat the route as landed until first contact is actually recorded.");
+  } else if (executionBrief?.missing_receipt === "closure") {
+    routeCautions.push("Do not treat the route as closed until the closure receipt is recorded.");
+  } else if (executionBrief?.missing_receipt === "followthrough") {
+    routeCautions.push("Do not treat the route as working until follow-through is actually recorded.");
+  }
+
+  let summaryText = "Use the next route that is most likely to produce a real recorded follow-through result.";
+  let proofRequirementText = "Counts as landed when the route produces a real recorded follow-through result.";
+  if (preferredRoute === "approved_care_circle") {
+    summaryText = "The direct client route looks weak and an approved care-circle path is still open, so the next plan should move there rather than retrying the same blocked route.";
+    proofRequirementText = "Counts as landed when approved care-circle outreach is recorded with who received the update and what changed.";
+  } else if (preferredRoute === "switch_client_channel") {
+    summaryText = "The same client channel has already repeated without a receipt, so the next plan should change the client channel before escalating further.";
+    proofRequirementText = "Counts as landed when a different approved client channel produces a first-contact receipt.";
+  } else if (preferredRoute === "named_owner_escalation") {
+    summaryText = "The current route looks stalled, so the next plan should move to the named owner path now instead of waiting on the same route.";
+    proofRequirementText = "Counts as landed when one named owner records first contact or a documented closure result.";
+  } else if (executionBrief?.route_state === "landed") {
+    summaryText = "The current route already has a recorded receipt, so the next plan can keep it while still requiring fresh proof inside the response window.";
+    proofRequirementText = "Counts as landed when the current route records a fresh first-contact or closure receipt inside the response window.";
+  } else {
+    summaryText = "The current route has some movement but still needs a fresh receipt before the plan treats it as reliable.";
+    proofRequirementText = "Counts as landed when the current route records first contact or documented closure.";
+  }
+
+  if (verificationLearning?.learning_state === "needs_followthrough" || verificationLearning?.learning_state === "mixed") {
+    routeCautions.push("Keep the proof step explicit, because earlier route follow-through still had open or mixed receipts.");
+  }
+  if (historicalValidationAged) {
+    routeCautions.push(
+      routeProofFreshness.state === "stale"
+        ? "Earlier proof that this route landed is now older than the current response window, so the next plan should require a fresh receipt before trusting it again."
+        : "Earlier proof that this route landed exists, but it now needs a fresh receipt before the team treats it as reliable again today.",
+    );
+  } else if (executionBrief?.route_state === "landed" && routeProofFreshness.state === "stale") {
+    routeCautions.push("A previously landed route is on record, but the proof is no longer fresh enough to trust without a new recorded receipt.");
+  }
+
+  if (executionBrief?.route_state === "landed" && routeProofFreshness.state === "aging") {
+    summaryText = "A previously landed route is on record, but the team should still re-prove it inside the current response window before assuming it will keep landing.";
+    proofRequirementText = "Counts as landed when the route records a fresh first-contact or closure receipt inside the current response window.";
+  } else if (executionBrief?.route_state === "landed" && routeProofFreshness.state === "stale") {
+    summaryText = "A previously landed route is on record, but that proof is now stale, so the next plan should re-earn trust with a fresh recorded receipt before preserving it.";
+    proofRequirementText = "Counts as landed only after a fresh first-contact or closure receipt is recorded again.";
+  }
+
+  return normalizeHealthPlanRouteLearning({
+    preferred_route: preferredRoute,
+    preferred_route_label: healthPlanRouteLabel(preferredRoute, "en"),
+    confidence,
+    summary_text: summaryText,
+    proof_requirement_text: proofRequirementText,
+    route_cautions: routeCautions,
+    supporting_signal_ids: supportingSignalIds,
+  });
+}
+
+function healthPlanTacticFamilyLabel(family) {
+  switch (family) {
+    case "contact_path":
+      return "contact path";
+    case "medication_followup":
+      return "medication follow-up";
+    case "sensor_reliability":
+      return "sensor reliability";
+    case "risk_escalation":
+      return "risk escalation";
+    case "sharing_boundary":
+      return "sharing boundary";
+    case "verification":
+      return "verification";
+    case "service_routine":
+      return "service routine";
+    default:
+      return String(family || "tactic").replace(/_/g, " ");
+  }
+}
+
+function healthPlanMedicationFollowupOpen(medications = [], medicationActivity = null) {
+  const status = String(medicationActivity?.status || "").trim().toLowerCase();
+  return medications.some((medication) =>
+    medication?.reminders_enabled === false
+    || !Array.isArray(medication?.schedule_times)
+    || medication.schedule_times.filter(Boolean).length === 0,
+  ) || ["missed", "late", "skipped", "unconfirmed", "pending"].includes(status);
+}
+
+function buildHealthPlanEffectiveTacticContradictions(profile, effectiveFamilies = []) {
+  const families = [...new Set((Array.isArray(effectiveFamilies) ? effectiveFamilies : []).map((item) => nullIfBlank(item)).filter(Boolean))];
+  if (!families.length) return [];
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const checkinMissed = healthPlanServiceOutcomeMissed(firstValue(profile?.checkins?.last_outcome, profile?.checkins?.lastOutcome));
+  const brainCoachMissed = healthPlanServiceOutcomeMissed(firstValue(profile?.brainCoach?.last_outcome, profile?.brainCoach?.lastOutcome));
+  const medicationFollowupOpen = healthPlanMedicationFollowupOpen(medications, profile?.medicationActivity);
+  const offlineSensors = sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const contradictions = [];
+  for (const family of families) {
+    if (family === "service_routine" && (checkinMissed || brainCoachMissed)) {
+      contradictions.push({
+        family,
+        reason_code: "service_outcomes_not_landing",
+        detail: "Recent check-in or Brain Coach outcomes are missed, pending, or still unconfirmed.",
+      });
+      continue;
+    }
+    if (family === "medication_followup" && medicationFollowupOpen) {
+      contradictions.push({
+        family,
+        reason_code: "medication_followup_open",
+        detail: "Medication follow-up still shows missed, late, disabled, or unconfirmed reminder coverage.",
+      });
+      continue;
+    }
+    if (
+      family === "contact_path"
+      && responsePath?.latest_client_outreach
+      && !responsePath?.first_contact_recorded
+      && (
+        responsePath?.repeated_client_channel
+        || responsePath?.alternate_audience_open
+        || responsePath?.handoff_open
+      )
+    ) {
+      contradictions.push({
+        family,
+        reason_code: "contact_path_not_landing",
+        detail: "The current outreach route has already been tried but still has no first-contact receipt or clean closure.",
+      });
+      continue;
+    }
+    if (family === "sensor_reliability" && offlineSensors) {
+      contradictions.push({
+        family,
+        reason_code: "sensor_reliability_degraded",
+        detail: "Sensor coverage is now offline or incomplete, so the previous reliability pattern cannot be assumed unchanged.",
+      });
+    }
+  }
+  return contradictions;
+}
+
+function healthPlanTacticFamilySignalIds(family, sourceSignalIds = new Set()) {
+  const ids = new Set();
+  const add = (signalId) => {
+    if (signalId && (!sourceSignalIds.size || sourceSignalIds.has(signalId))) ids.add(signalId);
+  };
+  if (family === "service_routine") {
+    add("service-checkins");
+    add("service-brain-coach");
+    add("execution-followthrough-open");
+  } else if (family === "medication_followup") {
+    add("medication-plan");
+    add("execution-followthrough-open");
+  } else if (family === "sharing_boundary") {
+    add("consent-family-sharing");
+    add("care-circle-context");
+  } else if (family === "sensor_reliability") {
+    add("sensor-status");
+  } else if (family === "risk_escalation") {
+    add("risk-latest-score");
+    add("alert-active");
+    add("outcome-handoff-open");
+  } else if (family === "verification") {
+    add("risk-latest-score");
+    add("outcome-latest-outreach");
+    add("execution-followthrough-open");
+  } else if (family === "contact_path") {
+    add("care-circle-context");
+    add("outcome-latest-outreach");
+    add("execution-contact-path-weak");
+    add("execution-same-channel-repeated");
+    add("execution-stalled");
+    add("execution-care-circle-route-open");
+  }
+  return [...ids];
+}
+
+function healthPlanServiceRoutineOpen(checkins = null, brainCoach = null) {
+  return Boolean(
+    healthPlanServiceOutcomeMissed(firstValue(checkins?.last_outcome, checkins?.lastOutcome))
+    || healthPlanServiceOutcomeMissed(firstValue(brainCoach?.last_outcome, brainCoach?.lastOutcome)),
+  );
+}
+
+function buildHealthPlanTacticOutcomeStateFromSnapshot(snapshotValue) {
+  const snapshot = normalizeHealthPlanContextSnapshot(snapshotValue);
+  if (!snapshot) return null;
+  const responsePath = normalizeHealthPlanResponsePath(snapshot.response_path);
+  const medications = Array.isArray(snapshot.medications) ? snapshot.medications : [];
+  const sensors = Array.isArray(snapshot.sensors) ? snapshot.sensors : [];
+  const alerts = Array.isArray(snapshot.alerts) ? snapshot.alerts : [];
+  return {
+    handoff_open: Boolean(responsePath?.handoff_open),
+    first_contact_recorded: Boolean(responsePath?.first_contact_recorded),
+    escalation_closed: Boolean(responsePath?.escalation_closed),
+    repeated_client_channel: nullIfBlank(responsePath?.repeated_client_channel),
+    alternate_audience_open: Boolean(responsePath?.alternate_audience_open),
+    care_circle_route_available: Boolean(responsePath?.care_circle_route_available),
+    care_circle_route_used: Boolean(responsePath?.care_circle_route_used),
+    medication_followup_open: healthPlanMedicationFollowupOpen(medications, snapshot.medication_activity),
+    service_routine_open: healthPlanServiceRoutineOpen(snapshot.checkins, snapshot.brain_coach),
+    sensor_issue_open: sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online"),
+    alert_open: alerts.length > 0,
+  };
+}
+
+function buildHealthPlanTacticOutcomeStateFromProfile(profile) {
+  if (!profile || typeof profile !== "object") return null;
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts.filter((alert) => !alert?.resolved_at) : [];
+  return {
+    handoff_open: Boolean(responsePath?.handoff_open),
+    first_contact_recorded: Boolean(responsePath?.first_contact_recorded),
+    escalation_closed: Boolean(responsePath?.escalation_closed),
+    repeated_client_channel: nullIfBlank(responsePath?.repeated_client_channel),
+    alternate_audience_open: Boolean(responsePath?.alternate_audience_open),
+    care_circle_route_available: Boolean(responsePath?.care_circle_route_available),
+    care_circle_route_used: Boolean(responsePath?.care_circle_route_used),
+    medication_followup_open: healthPlanMedicationFollowupOpen(medications, profile?.medicationActivity),
+    service_routine_open: healthPlanServiceRoutineOpen(profile?.checkins, profile?.brainCoach),
+    sensor_issue_open: sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online"),
+    alert_open: alerts.length > 0,
+  };
+}
+
+function buildHealthPlanOutcomeEvidenceTimestamp(profile) {
+  if (!profile || typeof profile !== "object") return null;
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  return latestTimestamp([
+    outcomeState?.latestOutcomeAt,
+    nullIfBlank(profile?.medicationActivity?.occurred_at),
+    nullIfBlank(profile?.medicationActivity?.reported_at),
+    ...alerts.flatMap((alert) => [
+      nullIfBlank(alert?.created_at),
+      nullIfBlank(alert?.resolved_at),
+    ]),
+    ...sensors.map((sensor) => nullIfBlank(sensor?.last_reading_at)),
+  ]);
+}
+
+function healthPlanOutcomeStateRiskScore(state) {
+  if (!state) return 0;
+  let score = 0;
+  if (state.handoff_open) score += 3;
+  if (state.alert_open) score += 3;
+  if (state.medication_followup_open) score += 2;
+  if (state.service_routine_open) score += 1;
+  if (state.sensor_issue_open) score += 1;
+  if (state.alternate_audience_open) score += 1;
+  if (state.repeated_client_channel) score += 1;
+  return score;
+}
+
+function buildHealthPlanOutcomeTrajectory(beforeState, afterState) {
+  if (!beforeState || !afterState) return null;
+  const beforeScore = healthPlanOutcomeStateRiskScore(beforeState);
+  const afterScore = healthPlanOutcomeStateRiskScore(afterState);
+  const reasonCodes = [];
+
+  if (!beforeState.alert_open && afterState.alert_open) reasonCodes.push("alert_opened");
+  if (beforeState.alert_open && !afterState.alert_open) reasonCodes.push("alert_cleared");
+  if (!beforeState.handoff_open && afterState.handoff_open) reasonCodes.push("handoff_opened");
+  if (beforeState.handoff_open && !afterState.handoff_open) reasonCodes.push("handoff_closed");
+  if (!beforeState.medication_followup_open && afterState.medication_followup_open) reasonCodes.push("medication_followup_opened");
+  if (beforeState.medication_followup_open && !afterState.medication_followup_open) reasonCodes.push("medication_followup_cleared");
+  if (!beforeState.service_routine_open && afterState.service_routine_open) reasonCodes.push("service_routine_broke");
+  if (beforeState.service_routine_open && !afterState.service_routine_open) reasonCodes.push("service_routine_stabilized");
+  if (!beforeState.sensor_issue_open && afterState.sensor_issue_open) reasonCodes.push("sensor_issue_opened");
+  if (beforeState.sensor_issue_open && !afterState.sensor_issue_open) reasonCodes.push("sensor_issue_cleared");
+  if (!beforeState.first_contact_recorded && afterState.first_contact_recorded) reasonCodes.push("first_contact_recorded");
+  if (!beforeState.escalation_closed && afterState.escalation_closed) reasonCodes.push("escalation_closed");
+
+  if (
+    afterScore >= beforeScore + 2
+    || (!beforeState.alert_open && afterState.alert_open)
+    || (!beforeState.handoff_open && afterState.handoff_open)
+  ) {
+    return {
+      status: "worsened",
+      reason_codes: reasonCodes.length ? reasonCodes : ["risk_load_increased"],
+      detail: "Later live evidence suggests the overall care burden increased after the previous saved plan rather than settling.",
+      before_score: beforeScore,
+      after_score: afterScore,
+    };
+  }
+
+  if (
+    afterScore <= beforeScore - 2
+    || (beforeState.handoff_open && !afterState.handoff_open)
+    || (beforeState.alert_open && !afterState.alert_open)
+    || (!beforeState.first_contact_recorded && afterState.first_contact_recorded)
+  ) {
+    return {
+      status: "improved",
+      reason_codes: reasonCodes.length ? reasonCodes : ["risk_load_reduced"],
+      detail: "Later live evidence suggests the previous saved plan helped reduce the overall care burden or move the response loop forward.",
+      before_score: beforeScore,
+      after_score: afterScore,
+    };
+  }
+
+  if (afterScore > 0 || beforeScore > 0) {
+    return {
+      status: "stalled",
+      reason_codes: reasonCodes.length ? reasonCodes : ["risk_load_still_open"],
+      detail: "Later live evidence suggests the overall care burden stayed materially open after the previous saved plan.",
+      before_score: beforeScore,
+      after_score: afterScore,
+    };
+  }
+
+  return null;
+}
+
+function buildHealthPlanOutcomeConfidenceSummary(
+  beforeState,
+  afterState,
+  {
+    generatedAt = null,
+    liveEvidenceAt = null,
+    outcomeTrajectory = null,
+    receiptGap = null,
+    recommendationReceipts = null,
+    now = new Date(),
+  } = {},
+) {
+  if (!beforeState || !afterState || !outcomeTrajectory?.status) return null;
+  const currentNow = now instanceof Date ? now : new Date(now || Date.now());
+  const generatedDate = generatedAt ? new Date(generatedAt) : null;
+  const liveEvidenceDate = liveEvidenceAt ? new Date(liveEvidenceAt) : null;
+  const hoursSinceGenerated =
+    generatedDate && !Number.isNaN(generatedDate.getTime())
+      ? Math.max(0, (currentNow.getTime() - generatedDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const hoursSinceEvidence =
+    liveEvidenceDate && !Number.isNaN(liveEvidenceDate.getTime())
+      ? Math.max(0, (currentNow.getTime() - liveEvidenceDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const hasFreshEvidence = hoursSinceEvidence != null && hoursSinceEvidence <= 24;
+  const evidenceIsStale = hoursSinceEvidence == null ? hoursSinceGenerated != null && hoursSinceGenerated > 24 : hoursSinceEvidence > 24;
+  const confirmedRecommendationCount = Number(recommendationReceipts?.confirmed_count || 0);
+  const openRecommendationCount = Number(recommendationReceipts?.open_count || 0);
+  const escalatedRecommendationCount = Number(recommendationReceipts?.escalated_count || 0);
+  const deferredRecommendationCount = Number(recommendationReceipts?.deferred_count || 0);
+  const explicitFirstContact = !beforeState.first_contact_recorded && afterState.first_contact_recorded;
+  const explicitClosure = !beforeState.escalation_closed && afterState.escalation_closed;
+  const explicitHandoffClosure = beforeState.handoff_open && !afterState.handoff_open;
+  const explicitAlertClosure = beforeState.alert_open && !afterState.alert_open;
+  const explicitImprovement =
+    explicitFirstContact
+    || explicitClosure
+    || explicitHandoffClosure
+    || (explicitAlertClosure && confirmedRecommendationCount > 0);
+  const unresolvedExecution = Boolean(receiptGap?.status) || openRecommendationCount > 0;
+  const reasonCodes = [];
+
+  if (hasFreshEvidence) reasonCodes.push("fresh_live_evidence");
+  else if (evidenceIsStale) reasonCodes.push("stale_live_evidence");
+  else reasonCodes.push("live_evidence_timestamp_missing");
+
+  if (explicitFirstContact) reasonCodes.push("first_contact_recorded");
+  if (explicitClosure) reasonCodes.push("escalation_closed");
+  if (explicitHandoffClosure) reasonCodes.push("handoff_closed");
+  if (explicitAlertClosure) reasonCodes.push("alert_cleared");
+  if (confirmedRecommendationCount > 0) reasonCodes.push("confirmed_recommendation_receipts");
+  if (escalatedRecommendationCount > 0) reasonCodes.push("escalated_recommendation_receipts");
+  if (deferredRecommendationCount > 0) reasonCodes.push("deferred_recommendation_receipts");
+  if (unresolvedExecution) reasonCodes.push("execution_receipts_still_open");
+
+  let confidenceState = "inferred";
+  let detail = "The observed shift looks directionally useful, but it still needs cleaner confirmation before the next plan treats it as proven.";
+
+  if (outcomeTrajectory.status === "improved") {
+    if (evidenceIsStale) {
+      confidenceState = "stale";
+      detail = "The previous plan appears to have helped, but the improvement signal is now old or thin, so the next plan should re-confirm it before treating it as stable.";
+    } else if (explicitImprovement && hasFreshEvidence && !unresolvedExecution) {
+      confidenceState = "verified";
+      detail = "The previous plan's improvement is backed by fresh operational proof such as first contact, closure, or other confirmed follow-through.";
+    } else if ((explicitImprovement || confirmedRecommendationCount > 0) && hasFreshEvidence) {
+      confidenceState = "mixed";
+      detail = "The previous plan shows some real improvement evidence, but open receipts or unresolved follow-through mean the next plan should preserve the pattern carefully and keep proof visible.";
+    } else {
+      confidenceState = "inferred";
+      detail = "The previous plan may have helped, but the improvement is mostly inferred from a calmer picture rather than from explicit operational receipts.";
+      if (!reasonCodes.includes("improvement_without_explicit_receipts")) reasonCodes.push("improvement_without_explicit_receipts");
+    }
+  } else if (outcomeTrajectory.status === "worsened") {
+    const openOperationalLoop =
+      afterState.handoff_open
+      || afterState.alert_open
+      || afterState.alternate_audience_open
+      || afterState.medication_followup_open
+      || afterState.service_routine_open;
+    if (evidenceIsStale && !openOperationalLoop) {
+      confidenceState = "stale";
+      detail = "The worsening signal is older and should be re-checked before the team assumes the current burden is still this high.";
+    } else if (hasFreshEvidence && openOperationalLoop) {
+      confidenceState = unresolvedExecution ? "mixed" : "verified";
+      detail = unresolvedExecution
+        ? "Fresh evidence still shows heavier care burden, but some execution proof is missing, so the next plan should strengthen the route while confirming the open loop."
+        : "Fresh live evidence confirms that the care burden worsened after the previous plan, so the next plan should clearly change course.";
+    } else {
+      confidenceState = "inferred";
+      detail = "The worsening signal is plausible, but the team should still verify today's live burden before over-committing to the same narrative.";
+    }
+  } else if (outcomeTrajectory.status === "stalled") {
+    const stillOperationallyOpen =
+      afterState.handoff_open
+      || afterState.alert_open
+      || afterState.medication_followup_open
+      || afterState.service_routine_open
+      || afterState.sensor_issue_open;
+    if (evidenceIsStale && !stillOperationallyOpen) {
+      confidenceState = "stale";
+      detail = "The stalled signal is no longer fresh enough to trust on its own, so the next plan should verify whether the loop is still materially open.";
+    } else if (hasFreshEvidence && stillOperationallyOpen) {
+      confidenceState = unresolvedExecution ? "mixed" : "verified";
+      detail = unresolvedExecution
+        ? "Fresh evidence still suggests the loop is not fully moving, but some follow-through proof remains open."
+        : "Fresh evidence confirms that the response loop stayed materially open after the previous plan.";
+    } else {
+      confidenceState = "inferred";
+      detail = "The lack of movement is plausible, but the team should verify whether the operational loop is still open before treating the stall as settled fact.";
+    }
+  }
+
+  return {
+    confidence_state: confidenceState,
+    reason_codes: [...new Set(reasonCodes)],
+    detail,
+    evidence_at: liveEvidenceDate && !Number.isNaN(liveEvidenceDate.getTime()) ? liveEvidenceDate.toISOString() : null,
+  };
+}
+
+function buildHealthPlanExecutionReceiptGap(
+  beforeState,
+  afterState,
+  {
+    generatedAt = null,
+    responseExpectation = "review within 24 hours",
+    outcomeTrajectory = null,
+    now = new Date(),
+  } = {},
+) {
+  if (!beforeState || !afterState) return null;
+  const currentNow = now instanceof Date ? now : new Date(now || Date.now());
+  const generatedDate = generatedAt ? new Date(generatedAt) : null;
+  const hoursSinceGenerated =
+    generatedDate && !Number.isNaN(generatedDate.getTime())
+      ? Math.max(0, (currentNow.getTime() - generatedDate.getTime()) / (1000 * 60 * 60))
+      : null;
+  const sameDay = responseExpectation === "same-day review";
+  const staleAfterHours = sameDay ? 3 : 12;
+  const missingReceipts = [];
+  const reasonCodes = [];
+
+  if (beforeState.handoff_open && !afterState.first_contact_recorded) {
+    missingReceipts.push("first-contact receipt");
+    reasonCodes.push("first_contact_missing");
+  }
+  if (beforeState.handoff_open && !afterState.escalation_closed) {
+    missingReceipts.push("closure receipt");
+    reasonCodes.push("closure_missing");
+  }
+  if (
+    (beforeState.care_circle_route_available || beforeState.alternate_audience_open)
+    && afterState.alternate_audience_open
+    && !afterState.care_circle_route_used
+    && !afterState.first_contact_recorded
+  ) {
+    missingReceipts.push("alternate-route result");
+    reasonCodes.push("alternate_route_unused");
+  }
+  if (beforeState.medication_followup_open && afterState.medication_followup_open) {
+    missingReceipts.push("medication follow-through proof");
+    reasonCodes.push("medication_followthrough_unproven");
+  }
+  if (beforeState.service_routine_open && afterState.service_routine_open) {
+    missingReceipts.push("service follow-through proof");
+    reasonCodes.push("service_followthrough_unproven");
+  }
+
+  if (!reasonCodes.length) return null;
+
+  const overdue = hoursSinceGenerated != null && hoursSinceGenerated >= staleAfterHours;
+  const highRiskGap =
+    reasonCodes.includes("first_contact_missing")
+    || reasonCodes.includes("closure_missing")
+    || reasonCodes.includes("alternate_route_unused");
+  const status =
+    overdue && (highRiskGap || reasonCodes.length >= 3 || outcomeTrajectory?.status === "worsened")
+      ? "stalled"
+      : "open";
+  const detailPrefix = overdue
+    ? "The previous plan is already past its expected response window and still lacks recorded proof of"
+    : "The previous plan still lacks recorded proof of";
+
+  return {
+    status,
+    reason_codes: [...new Set(reasonCodes)],
+    missing_receipts: [...new Set(missingReceipts)],
+    overdue,
+    detail: `${detailPrefix} ${[...new Set(missingReceipts)].join(", ")}.`,
+  };
+}
+
+function buildHealthPlanFamilyExecutionLearning(plan) {
+  const trackedItems = healthPlanTrackedRecommendationItems(plan);
+  if (!trackedItems.length) return [];
+  const familyMap = new Map();
+  const ensureFamily = (family) => {
+    const normalizedFamily = nullIfBlank(family);
+    if (!normalizedFamily) return null;
+    if (!familyMap.has(normalizedFamily)) {
+      familyMap.set(normalizedFamily, {
+        family: normalizedFamily,
+        tracked_count: 0,
+        confirmed_count: 0,
+        deferred_count: 0,
+        escalated_count: 0,
+        open_count: 0,
+        latest_updated_at: null,
+      });
+    }
+    return familyMap.get(normalizedFamily);
+  };
+
+  for (const item of trackedItems) {
+    const families = inferHealthPlanRecommendationTacticFamilies(item, item?.section);
+    if (!families.length) continue;
+    for (const family of families) {
+      const entry = ensureFamily(family);
+      if (!entry) continue;
+      entry.tracked_count += 1;
+      if (item.disposition === "confirmed") entry.confirmed_count += 1;
+      else if (item.disposition === "deferred") entry.deferred_count += 1;
+      else if (item.disposition === "escalated") entry.escalated_count += 1;
+      else entry.open_count += 1;
+      const updatedAt = normalizeTimestampValue(item?.updated_at);
+      if (updatedAt && (!entry.latest_updated_at || new Date(updatedAt).getTime() > new Date(entry.latest_updated_at).getTime())) {
+        entry.latest_updated_at = updatedAt;
+      }
+    }
+  }
+
+  return [...familyMap.values()]
+    .map((entry) => {
+      const learningState = entry.escalated_count > 0
+        ? "needs_stronger_route"
+        : entry.open_count > 0 || entry.deferred_count > 0
+          ? entry.confirmed_count > 0
+            ? "mixed"
+            : "needs_followthrough"
+          : entry.confirmed_count > 0
+            ? "validated"
+            : "mixed";
+      const detailParts = [];
+      if (entry.confirmed_count) detailParts.push(`${entry.confirmed_count} confirmed`);
+      if (entry.deferred_count) detailParts.push(`${entry.deferred_count} deferred`);
+      if (entry.escalated_count) detailParts.push(`${entry.escalated_count} escalated`);
+      if (entry.open_count) detailParts.push(`${entry.open_count} still open`);
+      return normalizeHealthPlanPlanMemoryFamilyExecutionLearningEntry({
+        ...entry,
+        learning_state: learningState,
+        detail: detailParts.join(" · ") || `${entry.tracked_count} tracked recommendation${entry.tracked_count === 1 ? "" : "s"}`,
+      });
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const severityRank = { needs_stronger_route: 4, needs_followthrough: 3, mixed: 2, validated: 1 };
+      const severityDelta = (severityRank[right?.learning_state] || 0) - (severityRank[left?.learning_state] || 0);
+      if (severityDelta !== 0) return severityDelta;
+      const trackedDelta = Number(right?.tracked_count || 0) - Number(left?.tracked_count || 0);
+      if (trackedDelta !== 0) return trackedDelta;
+      return String(left?.family || "").localeCompare(String(right?.family || ""));
+    });
+}
+
+function buildHealthPlanFamilyOutcomeLearning(familyOutcomes) {
+  const rows = Array.isArray(familyOutcomes) ? familyOutcomes.map((entry) => normalizeHealthPlanPlanMemoryFamilyOutcome(entry)).filter(Boolean) : [];
+  if (!rows.length) return [];
+  const familyMap = new Map();
+  for (const row of rows) {
+    if (!familyMap.has(row.family)) {
+      familyMap.set(row.family, {
+        family: row.family,
+        helped_count: 0,
+        stalled_count: 0,
+        recent_rows: [],
+        latest_outcome: null,
+        latest_compared_to_version: Number.NEGATIVE_INFINITY,
+      });
+    }
+    const entry = familyMap.get(row.family);
+    if (row.outcome === "helped") entry.helped_count += 1;
+    if (row.outcome === "stalled") entry.stalled_count += 1;
+    entry.recent_rows.push(row);
+    const comparedToVersion = Number.isFinite(Number(row.compared_to_version)) ? Number(row.compared_to_version) : Number.NEGATIVE_INFINITY;
+    if (comparedToVersion >= entry.latest_compared_to_version) {
+      entry.latest_compared_to_version = comparedToVersion;
+      entry.latest_outcome = row.outcome;
+    }
+  }
+
+  return [...familyMap.values()]
+    .map((entry) => {
+      const recentRows = entry.recent_rows
+        .slice()
+        .sort((left, right) => Number(right?.compared_to_version || 0) - Number(left?.compared_to_version || 0))
+        .slice(0, 2);
+      const recentHelpedCount = recentRows.filter((row) => row?.outcome === "helped").length;
+      const recentStalledCount = recentRows.filter((row) => row?.outcome === "stalled").length;
+      const latestRecentOutcome = recentRows[0]?.outcome || entry.latest_outcome || null;
+      let consistencyState = "single_signal";
+      if (entry.helped_count >= 2 && entry.stalled_count === 0) consistencyState = "reliably_helpful";
+      else if (entry.stalled_count >= 2 && entry.helped_count === 0) consistencyState = "repeatedly_stalled";
+      else if (entry.helped_count > 0 && entry.stalled_count > 0) consistencyState = "mixed";
+      let recencyState = null;
+      if (latestRecentOutcome === "stalled" && entry.helped_count > 0) recencyState = "recently_slipping";
+      else if (latestRecentOutcome === "helped" && entry.stalled_count > 0) recencyState = "recently_recovered";
+      else if (latestRecentOutcome === "helped") recencyState = "recently_helping";
+      else if (latestRecentOutcome === "stalled") recencyState = "recently_stalled";
+      const detail = consistencyState === "reliably_helpful"
+        ? `Helped ${entry.helped_count} time${entry.helped_count === 1 ? "" : "s"} with no later stalls recorded.`
+        : consistencyState === "repeatedly_stalled"
+          ? `Stalled ${entry.stalled_count} time${entry.stalled_count === 1 ? "" : "s"} with no later improvement recorded.`
+          : consistencyState === "mixed"
+            ? `Mixed history: helped ${entry.helped_count} time${entry.helped_count === 1 ? "" : "s"} and stalled ${entry.stalled_count} time${entry.stalled_count === 1 ? "" : "s"}; recent pattern is ${recencyState === "recently_slipping" ? "slipping" : recencyState === "recently_recovered" ? "recovering" : recencyState === "recently_stalled" ? "still stalled" : "improving"}.`
+            : `${entry.latest_outcome === "helped" ? "Most recent outcome helped." : entry.latest_outcome === "stalled" ? "Most recent outcome stalled." : "Only one outcome signal recorded so far."}`;
+      return normalizeHealthPlanPlanMemoryFamilyOutcomeLearningEntry({
+        family: entry.family,
+        helped_count: entry.helped_count,
+        stalled_count: entry.stalled_count,
+        recent_helped_count: recentHelpedCount,
+        recent_stalled_count: recentStalledCount,
+        latest_outcome: entry.latest_outcome,
+        consistency_state: consistencyState,
+        recency_state: recencyState,
+        detail,
+      });
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const severityRank = { repeatedly_stalled: 4, mixed: 3, reliably_helpful: 2, single_signal: 1 };
+      const severityDelta = (severityRank[right?.consistency_state] || 0) - (severityRank[left?.consistency_state] || 0);
+      if (severityDelta !== 0) return severityDelta;
+      const volumeDelta =
+        (Number(right?.helped_count || 0) + Number(right?.stalled_count || 0))
+        - (Number(left?.helped_count || 0) + Number(left?.stalled_count || 0));
+      if (volumeDelta !== 0) return volumeDelta;
+      return String(left?.family || "").localeCompare(String(right?.family || ""));
+    });
+}
+
+function inferHealthPlanTacticFamiliesFromText(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return [];
+  const families = [];
+  if (/\bcontact|touchpoint|reach|outreach|call|phone|whatsapp|owner|care circle|follow[- ]?up\b/i.test(text)) families.push("contact_path");
+  if (/\bmedic|dose|pill|adherence|reminder\b/i.test(text)) families.push("medication_followup");
+  if (/\bsensor|device|battery|connectiv|offline\b/i.test(text)) families.push("sensor_reliability");
+  if (/\balert|escalat|urgent|risk\b/i.test(text)) families.push("risk_escalation");
+  if (/\bconsent|share|family|caregiver|approved provider\b/i.test(text)) families.push("sharing_boundary");
+  if (/\bverify|confirm|refresh|re[- ]?check|proof|receipt\b/i.test(text)) families.push("verification");
+  if (/\bcheck-?in|brain coach|routine|schedule|support rhythm\b/i.test(text)) families.push("service_routine");
+  return [...new Set(families)];
+}
+
+function inferHealthPlanTacticFamiliesFromSection(section) {
+  if (section === "daily_support") return ["service_routine"];
+  if (section === "monitoring") return ["verification"];
+  if (section === "escalation") return ["risk_escalation"];
+  if (section === "caregiver_guidance") return ["sharing_boundary"];
+  return [];
+}
+
+function inferHealthPlanRecommendationTacticFamilies(item, section = null) {
+  return [...new Set([
+    ...inferHealthPlanTacticFamiliesFromSection(section || nullIfBlank(item?.section)),
+    ...inferHealthPlanTacticFamiliesFromText(item?.text),
+    ...inferHealthPlanTacticFamiliesFromText(item?.note),
+    ...inferHealthPlanTacticFamiliesFromText(item?.completion_proof),
+    ...inferHealthPlanTacticFamiliesFromText(item?.source_task_code),
+    ...((Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []).flatMap((signalId) => inferHealthPlanTacticFamiliesFromText(signalId))),
+  ])];
+}
+
+function collectHealthPlanTacticFamilies(changeSummary, automatedReview, reviewAttestation) {
+
+  const families = new Set();
+  for (const code of [
+    ...((Array.isArray(reviewAttestation?.blocking_issue_codes) ? reviewAttestation.blocking_issue_codes : []).filter(Boolean)),
+    ...((Array.isArray(reviewAttestation?.watch_issue_codes) ? reviewAttestation.watch_issue_codes : []).filter(Boolean)),
+    ...((Array.isArray(automatedReview?.concerns) ? automatedReview.concerns : []).map((item) => nullIfBlank(item?.code)).filter(Boolean)),
+  ]) {
+    for (const family of inferHealthPlanTacticFamiliesFromText(code)) families.add(family);
+  }
+  for (const text of Array.isArray(automatedReview?.required_actions) ? automatedReview.required_actions : []) {
+    for (const family of inferHealthPlanTacticFamiliesFromText(text)) families.add(family);
+  }
+  for (const section of Array.isArray(changeSummary?.changed_sections) ? changeSummary.changed_sections : []) {
+    for (const family of inferHealthPlanTacticFamiliesFromSection(section)) families.add(family);
+  }
+  return [...families];
+}
+
+function evaluateHealthPlanTacticOutcome(family, beforeState, afterState) {
+  if (!beforeState || !afterState) return null;
+  switch (family) {
+    case "contact_path":
+      if (!beforeState.handoff_open && !beforeState.alternate_audience_open && !beforeState.repeated_client_channel) return null;
+      if (afterState.first_contact_recorded || afterState.care_circle_route_used || (beforeState.handoff_open && !afterState.handoff_open)) {
+        return {
+          outcome: "helped",
+          reason_code: afterState.first_contact_recorded ? "first_contact_recorded" : afterState.care_circle_route_used ? "alternate_route_landed" : "handoff_closed",
+          detail: "Later evidence shows contact progress was recorded after this tactic family was used.",
+        };
+      }
+      if (afterState.handoff_open || afterState.repeated_client_channel || afterState.alternate_audience_open) {
+        return {
+          outcome: "stalled",
+          reason_code: "contact_path_still_open",
+          detail: "Later evidence still shows an open or repeating contact path with no recorded receipt of contact.",
+        };
+      }
+      return null;
+    case "risk_escalation":
+      if (!beforeState.handoff_open && !beforeState.alert_open) return null;
+      if (afterState.escalation_closed || (beforeState.handoff_open && !afterState.handoff_open && !afterState.alert_open)) {
+        return {
+          outcome: "helped",
+          reason_code: afterState.escalation_closed ? "escalation_closed" : "risk_loop_cooled",
+          detail: "Later evidence shows the urgent loop cooled or formally closed after this escalation tactic.",
+        };
+      }
+      if (afterState.handoff_open || afterState.alert_open) {
+        return {
+          outcome: "stalled",
+          reason_code: "risk_loop_still_open",
+          detail: "Later evidence still shows the urgent loop open after this escalation tactic.",
+        };
+      }
+      return null;
+    case "medication_followup":
+      if (!beforeState.medication_followup_open) return null;
+      return afterState.medication_followup_open
+        ? {
+            outcome: "stalled",
+            reason_code: "medication_followup_still_open",
+            detail: "Later evidence still shows medication follow-up concerns after this tactic family.",
+          }
+        : {
+            outcome: "helped",
+            reason_code: "medication_followup_cleared",
+            detail: "Later evidence suggests medication follow-up concerns eased after this tactic family.",
+          };
+    case "sensor_reliability":
+      if (!beforeState.sensor_issue_open) return null;
+      return afterState.sensor_issue_open
+        ? {
+            outcome: "stalled",
+            reason_code: "sensor_issue_still_open",
+            detail: "Later evidence still shows sensor reliability concerns after this tactic family.",
+          }
+        : {
+            outcome: "helped",
+            reason_code: "sensor_issue_cleared",
+            detail: "Later evidence suggests sensor reliability improved after this tactic family.",
+          };
+    case "service_routine":
+      if (!beforeState.service_routine_open) return null;
+      return afterState.service_routine_open
+        ? {
+            outcome: "stalled",
+            reason_code: "service_routine_still_open",
+            detail: "Later evidence still shows missed or weak routine follow-up after this tactic family.",
+          }
+        : {
+            outcome: "helped",
+            reason_code: "service_routine_stabilized",
+            detail: "Later evidence suggests the routine follow-up stabilized after this tactic family.",
+          };
+    case "sharing_boundary":
+      if (!beforeState.care_circle_route_available && !beforeState.alternate_audience_open) return null;
+      if (afterState.care_circle_route_used) {
+        return {
+          outcome: "helped",
+          reason_code: "approved_route_used",
+          detail: "Later evidence shows the approved care-circle route was actually used after this tactic family.",
+        };
+      }
+      if (afterState.alternate_audience_open) {
+        return {
+          outcome: "stalled",
+          reason_code: "approved_route_still_unused",
+          detail: "Later evidence still shows an available sharing route that has not yet been activated.",
+        };
+      }
+      return null;
+    default:
+      return null;
+  }
+}
+
+function buildHealthPlanPlanMemory(currentPlan, history = [], profile = null) {
+  const normalizedCurrent = currentPlan ? normalizeHealthPlanRow(currentPlan) || currentPlan : null;
+  const normalizedCurrentSnapshot = normalizeHealthPlanContextSnapshot(normalizedCurrent?.context_snapshot_json);
+  const normalizedHistory = (Array.isArray(history) ? history : [])
+    .map((entry) => normalizeHealthPlanRevisionRow(entry) || entry)
+    .filter(Boolean)
+    .sort((left, right) => {
+      const versionDelta = Number(right?.version_number || 0) - Number(left?.version_number || 0);
+      if (versionDelta !== 0) return versionDelta;
+      return new Date(right?.created_at || 0).getTime() - new Date(left?.created_at || 0).getTime();
+    });
+
+  if (!normalizedCurrent && !normalizedHistory.length) {
+    return normalizeHealthPlanPlanMemory(null);
+  }
+
+  const recentVersions = normalizedHistory.slice(0, 3).map((revision) => {
+    const changeSummary = normalizeHealthPlanChangeSummary(revision?.change_summary_json);
+    const automatedReview = normalizeHealthPlanAutomatedReview(revision?.automated_review_json);
+    const reviewAttestation = normalizeHealthPlanReviewAttestation(revision?.review_attestation_json);
+    return {
+      version_number: Number(revision?.version_number || 1),
+      action_type: normalizeHealthPlanActionType(revision?.action_type, "edited"),
+      created_at: normalizeTimestampValue(revision?.created_at),
+      review_status: revision?.review_status === "reviewed" ? "reviewed" : "draft",
+      generation_confidence: normalizeHealthPlanGenerationConfidence(revision?.generation_confidence, null),
+      automated_review_verdict: automatedReview?.verdict || null,
+      changed_sections: Array.isArray(changeSummary?.changed_sections) ? changeSummary.changed_sections : [],
+      entry_codes: Array.isArray(changeSummary?.entries) ? changeSummary.entries.map((entry) => entry?.code).filter(Boolean) : [],
+      unresolved_required_actions: Array.isArray(automatedReview?.required_actions) ? automatedReview.required_actions : [],
+      open_issue_codes: [
+        ...new Set([
+          ...((Array.isArray(reviewAttestation?.blocking_issue_codes) ? reviewAttestation.blocking_issue_codes : []).filter(Boolean)),
+          ...((Array.isArray(reviewAttestation?.watch_issue_codes) ? reviewAttestation.watch_issue_codes : []).filter(Boolean)),
+          ...((Array.isArray(automatedReview?.concerns) ? automatedReview.concerns : []).map((item) => nullIfBlank(item?.code)).filter(Boolean)),
+        ]),
+      ],
+    };
+  });
+
+  const currentChangeSummary = normalizeHealthPlanChangeSummary(normalizedCurrent?.change_summary_json);
+  const currentAutomatedReview = normalizeHealthPlanAutomatedReview(normalizedCurrent?.automated_review_json);
+  const currentReviewAttestation = normalizeHealthPlanReviewAttestation(normalizedCurrent?.review_attestation_json);
+  const currentReviewRubricScores = normalizeHealthPlanAutomatedReviewRubricScores(currentAutomatedReview?.rubric_scores);
+  const weakReviewDimensions = weakHealthPlanReviewDimensions(currentReviewRubricScores);
+  const recommendationReceiptSummary = buildHealthPlanRecommendationReceiptSummary(normalizedCurrent);
+  const familyExecutionLearning = buildHealthPlanFamilyExecutionLearning(normalizedCurrent);
+  const reviewReopened = Boolean(
+    currentChangeSummary?.review_transition === "reviewed_to_draft"
+    || recentVersions.some((version) => Array.isArray(version?.entry_codes) && version.entry_codes.includes("review_reopened")),
+  );
+  const evidenceDriftWithoutRewrite = Boolean(
+    Array.isArray(currentChangeSummary?.entries) && currentChangeSummary.entries.some((entry) => entry?.code === "content_stable_evidence_shifted"),
+  );
+  const repeatedRegenerations = recentVersions.filter((version) => version?.action_type === "regenerated").length;
+  const recurringIssueCounts = new Map();
+  const tacticFamilyCounts = new Map();
+  for (const code of [
+    ...((Array.isArray(currentReviewAttestation?.blocking_issue_codes) ? currentReviewAttestation.blocking_issue_codes : []).filter(Boolean)),
+    ...((Array.isArray(currentReviewAttestation?.watch_issue_codes) ? currentReviewAttestation.watch_issue_codes : []).filter(Boolean)),
+    ...recentVersions.flatMap((version) => Array.isArray(version?.open_issue_codes) ? version.open_issue_codes : []),
+  ]) {
+    recurringIssueCounts.set(code, (recurringIssueCounts.get(code) || 0) + 1);
+    for (const family of collectHealthPlanTacticFamilies(
+      { changed_sections: [] },
+      { concerns: [{ code }], required_actions: [] },
+      { blocking_issue_codes: [], watch_issue_codes: [] },
+    )) {
+      tacticFamilyCounts.set(family, (tacticFamilyCounts.get(family) || 0) + 1);
+    }
+  }
+  for (const text of [
+    ...(Array.isArray(currentAutomatedReview?.required_actions) ? currentAutomatedReview.required_actions : []),
+    ...recentVersions.flatMap((version) => Array.isArray(version?.unresolved_required_actions) ? version.unresolved_required_actions : []),
+  ]) {
+    for (const family of collectHealthPlanTacticFamilies(
+      { changed_sections: [] },
+      { concerns: [], required_actions: [text] },
+      { blocking_issue_codes: [], watch_issue_codes: [] },
+    )) {
+      tacticFamilyCounts.set(family, (tacticFamilyCounts.get(family) || 0) + 1);
+    }
+  }
+  for (const section of [
+    ...(Array.isArray(currentChangeSummary?.changed_sections) ? currentChangeSummary.changed_sections : []),
+    ...recentVersions.flatMap((version) => Array.isArray(version?.changed_sections) ? version.changed_sections : []),
+  ]) {
+    for (const family of collectHealthPlanTacticFamilies(
+      { changed_sections: [section] },
+      { concerns: [], required_actions: [] },
+      { blocking_issue_codes: [], watch_issue_codes: [] },
+    )) {
+      tacticFamilyCounts.set(family, (tacticFamilyCounts.get(family) || 0) + 1);
+    }
+  }
+  const recurringIssueCodes = [...recurringIssueCounts.entries()]
+    .filter(([, count]) => count >= 2)
+    .map(([code]) => code);
+  const repeatedTacticFamilies = [...tacticFamilyCounts.entries()]
+    .filter(([, count]) => count >= 2)
+    .sort((left, right) => right[1] - left[1])
+    .map(([family]) => family);
+  const responseExpectation = profile
+    ? buildHealthPlanPolicy(profile, { latestScore: null, forecastRows: [] }).response_expectation
+    : nullIfBlank(normalizedCurrentSnapshot?.policy?.response_expectation) || "review within 24 hours";
+  const liveOutcomeState = profile
+    ? buildHealthPlanTacticOutcomeStateFromProfile(profile)
+    : buildHealthPlanTacticOutcomeStateFromSnapshot(normalizedCurrent?.context_snapshot_json);
+  const currentPlanOutcomeState = buildHealthPlanTacticOutcomeStateFromSnapshot(normalizedCurrent?.context_snapshot_json);
+  const currentPlanOutcomeTrajectory = buildHealthPlanOutcomeTrajectory(currentPlanOutcomeState, liveOutcomeState);
+  const currentPlanReceiptGap = buildHealthPlanExecutionReceiptGap(currentPlanOutcomeState, liveOutcomeState, {
+    generatedAt: normalizedCurrent?.generated_at || normalizedCurrentSnapshot?.captured_at,
+    responseExpectation,
+    outcomeTrajectory: currentPlanOutcomeTrajectory,
+  });
+  const currentPlanOutcomeConfidence = buildHealthPlanOutcomeConfidenceSummary(currentPlanOutcomeState, liveOutcomeState, {
+    generatedAt: normalizedCurrent?.generated_at || normalizedCurrentSnapshot?.captured_at,
+    liveEvidenceAt: buildHealthPlanOutcomeEvidenceTimestamp(profile),
+    outcomeTrajectory: currentPlanOutcomeTrajectory,
+    receiptGap: currentPlanReceiptGap,
+    recommendationReceipts: recommendationReceiptSummary,
+  });
+  const familyOutcomeRows = normalizedHistory
+    .slice(0, 4)
+    .slice()
+    .sort((left, right) => Number(left?.version_number || 0) - Number(right?.version_number || 0))
+    .map((revision) => {
+      const changeSummary = normalizeHealthPlanChangeSummary(revision?.change_summary_json);
+      const automatedReview = normalizeHealthPlanAutomatedReview(revision?.automated_review_json);
+      const reviewAttestation = normalizeHealthPlanReviewAttestation(revision?.review_attestation_json);
+      return {
+        version_number: Number(revision?.version_number || 1),
+        tactic_families: collectHealthPlanTacticFamilies(changeSummary, automatedReview, reviewAttestation),
+        state: buildHealthPlanTacticOutcomeStateFromSnapshot(revision?.context_snapshot_json),
+      };
+    })
+    .filter((entry) => entry.state && entry.tactic_families.length);
+  const familyOutcomes = [];
+  for (let index = 0; index < familyOutcomeRows.length; index += 1) {
+    const currentRow = familyOutcomeRows[index];
+    const nextRow = familyOutcomeRows[index + 1];
+    const afterState = nextRow?.state || liveOutcomeState;
+    if (!afterState) continue;
+    for (const family of currentRow.tactic_families) {
+      const outcome = evaluateHealthPlanTacticOutcome(family, currentRow.state, afterState);
+      if (!outcome) continue;
+      familyOutcomes.push({
+        family,
+        outcome: outcome.outcome,
+        reason_code: outcome.reason_code,
+        detail: outcome.detail,
+        from_version: currentRow.version_number,
+        compared_to_version: nextRow?.version_number || normalizedCurrent?.current_version || null,
+      });
+    }
+  }
+  const latestFamilyOutcomeByFamily = new Map();
+  for (const outcome of familyOutcomes) {
+    latestFamilyOutcomeByFamily.set(outcome.family, outcome);
+  }
+  const effectiveTacticFamilies = [...latestFamilyOutcomeByFamily.values()]
+    .filter((outcome) => outcome.outcome === "helped")
+    .map((outcome) => outcome.family);
+  const historicallyEffectiveTacticFamilies = [...new Set(
+    familyOutcomes
+      .filter((outcome) => outcome.outcome === "helped")
+      .map((outcome) => outcome.family)
+      .filter(Boolean),
+  )];
+  const stalledTacticFamilies = [...latestFamilyOutcomeByFamily.values()]
+    .filter((outcome) => outcome.outcome === "stalled")
+    .map((outcome) => outcome.family);
+  const familyOutcomeLearning = buildHealthPlanFamilyOutcomeLearning(familyOutcomes);
+  const effectiveTacticContradictions = buildHealthPlanEffectiveTacticContradictions(profile, historicallyEffectiveTacticFamilies);
+  const contradictedEffectiveTacticFamilies = [...new Set(
+    effectiveTacticContradictions.map((item) => nullIfBlank(item?.family)).filter(Boolean),
+  )];
+
+  const learningHighlights = [];
+  const planningCautions = [];
+  if (normalizedCurrent?.review_status !== "reviewed") {
+    learningHighlights.push("The most recent saved plan was still draft-only and had not yet reached an approved reviewed state.");
+  }
+  if (currentAutomatedReview?.verdict === "block") {
+    learningHighlights.push("The most recent automated review found a blocking gap, so the next plan should fix that weakness explicitly.");
+    planningCautions.push("Do not broaden reliance until the blocking review gap is clearly addressed in the new plan.");
+  } else if (currentAutomatedReview?.verdict === "revise") {
+    learningHighlights.push("The most recent automated review still requested revisions before broader reliance.");
+  }
+  if (weakReviewDimensions.includes("actionability")) {
+    learningHighlights.push("The last automated review judged the plan weak on actionability, so the next version should be executable without staff guessing the next step.");
+    planningCautions.push("Do not leave owners, timing, branches, or completion receipts implicit when the previous plan already felt too vague to act on.");
+  }
+  if (weakReviewDimensions.includes("grounding")) {
+    learningHighlights.push("The last automated review judged the plan weak on grounding, so the next version should tie its major moves more explicitly to the live evidence.");
+    planningCautions.push("Do not let polished language outrun the current evidence. Make the grounding and verification path visible.");
+  }
+  if (weakReviewDimensions.includes("timeliness")) {
+    planningCautions.push("Do not leave the response window implied. Make same-day or next-24-hour timing explicit.");
+  }
+  if (weakReviewDimensions.includes("safety")) {
+    planningCautions.push("Do not soften safety boundaries or uncertainty language when the previous review already flagged safety weakness.");
+  }
+  if (weakReviewDimensions.includes("shareability")) {
+    planningCautions.push("Keep the wording calm, concrete, and shareable without dropping the staff-only boundary where it still applies.");
+  }
+  if (currentPlanOutcomeTrajectory?.status === "worsened") {
+    learningHighlights.push("Later live evidence suggests the previous saved plan was followed by a heavier care burden rather than stabilization.");
+    planningCautions.push("Do not reuse the same response framing casually when the current situation appears to have worsened after the previous plan.");
+  } else if (currentPlanOutcomeTrajectory?.status === "stalled") {
+    learningHighlights.push("Later live evidence suggests the previous saved plan did not create enough movement in the response loop.");
+    planningCautions.push("Do not treat the previous plan as sufficient when the core care burden still looks materially open.");
+  } else if (currentPlanOutcomeTrajectory?.status === "improved") {
+    learningHighlights.push("Later live evidence suggests the previous saved plan did help reduce the care burden or move the loop forward.");
+  }
+  if (currentPlanReceiptGap?.status === "stalled") {
+    learningHighlights.push("The previous saved plan still has overdue execution receipts missing, which means the next version should drive toward documented proof instead of adding more polished wording.");
+    planningCautions.push("Do not treat a planned step as complete until first contact, closure, or follow-through proof is actually recorded.");
+  } else if (currentPlanReceiptGap?.status === "open") {
+    learningHighlights.push("The previous saved plan still has open execution receipts, so the next version should make the missing proof path explicit.");
+    planningCautions.push("Keep the missing contact, closure, or follow-through receipt visible until it is actually documented.");
+  }
+  if (evidenceDriftWithoutRewrite) {
+    learningHighlights.push("The last saved wording stayed mostly stable even though the underlying evidence shifted, so the new plan should re-check whether that wording still fits.");
+    planningCautions.push("Do not carry forward polished wording unchanged when the live evidence underneath it has moved.");
+  }
+  if (recommendationReceiptSummary?.confirmed_count) {
+    learningHighlights.push(`Staff already confirmed ${recommendationReceiptSummary.confirmed_count} recommendation${recommendationReceiptSummary.confirmed_count === 1 ? "" : "s"} on the previous plan, so the next version can build from those validated steps instead of rewriting from zero.`);
+  }
+  if (recommendationReceiptSummary?.deferred_count) {
+    learningHighlights.push(`Staff deferred ${recommendationReceiptSummary.deferred_count} recommendation${recommendationReceiptSummary.deferred_count === 1 ? "" : "s"} on the previous plan, so the next version should keep those open choices visible.`);
+    planningCautions.push("Do not quietly treat deferred recommendations as completed. Carry the reason for deferral or the next verification step forward.");
+  }
+  if (recommendationReceiptSummary?.escalated_count) {
+    learningHighlights.push(`Staff already escalated ${recommendationReceiptSummary.escalated_count} recommendation${recommendationReceiptSummary.escalated_count === 1 ? "" : "s"} on the previous plan, so the next version should respect that stronger route.`);
+    planningCautions.push("Do not step back below an already-escalated recommendation unless today's live evidence clearly explains why.");
+  }
+  if (recommendationReceiptSummary?.open_count) {
+    learningHighlights.push(`Some previous recommendations still have no recorded staff receipt (${recommendationReceiptSummary.open_count} open).`);
+    planningCautions.push("Keep unconfirmed recommendation receipts visible until staff either confirm, defer, or escalate them.");
+  }
+  const freshValidatedExecutionFamilies = familyExecutionLearning
+    .filter((entry) =>
+      entry?.learning_state === "validated"
+      && assessHealthPlanProofFreshness(entry?.latest_updated_at, responseExpectation).state === "fresh")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const staleValidatedExecutionFamilies = familyExecutionLearning
+    .filter((entry) =>
+      entry?.learning_state === "validated"
+      && assessHealthPlanProofFreshness(entry?.latest_updated_at, responseExpectation).state !== "fresh")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const unresolvedExecutionFamilies = familyExecutionLearning
+    .filter((entry) => entry?.learning_state === "needs_followthrough" || entry?.learning_state === "mixed")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const escalatedExecutionFamilies = familyExecutionLearning
+    .filter((entry) => entry?.learning_state === "needs_stronger_route")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  if (freshValidatedExecutionFamilies.length) {
+    learningHighlights.push(`Staff already confirmed fresh execution receipts for these tactic families: ${freshValidatedExecutionFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (staleValidatedExecutionFamilies.length) {
+    planningCautions.push(`Older execution receipts exist for these tactic families, but they now need a fresh re-check before the next plan treats them as proven: ${staleValidatedExecutionFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (unresolvedExecutionFamilies.length) {
+    planningCautions.push(`Do not assume these tactic families already landed without fresh proof: ${unresolvedExecutionFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (escalatedExecutionFamilies.length) {
+    learningHighlights.push(`Some tactic families already required a stronger route in practice: ${escalatedExecutionFamilies.slice(0, 3).join(", ")}.`);
+    planningCautions.push(`Respect the stronger route already triggered for these tactic families instead of quietly downgrading them: ${escalatedExecutionFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (reviewReopened) {
+    learningHighlights.push("A previously reviewed plan was reopened after material edits, which means the next version should explain what changed and why.");
+  }
+  if (repeatedRegenerations >= 2) {
+    planningCautions.push("Recent versions were regenerated multiple times, so the next plan should avoid cosmetic rewrites and focus on the unresolved operational gaps.");
+  }
+  if (recurringIssueCodes.length) {
+    learningHighlights.push("Some review or coordination issue codes have recurred across recent plan versions.");
+  }
+  if (repeatedTacticFamilies.length) {
+    learningHighlights.push(`Recent plan versions kept revisiting these tactic families: ${repeatedTacticFamilies.slice(0, 3).join(", ")}.`);
+    planningCautions.push("Do not retry the same tactic family without naming what is materially different this time and what receipt will prove progress.");
+  }
+  if (effectiveTacticFamilies.length) {
+    learningHighlights.push(`Recent plan history suggests these tactic families did help move the case forward: ${effectiveTacticFamilies.slice(0, 3).map((family) => healthPlanTacticFamilyLabel(family)).join(", ")}.`);
+  }
+  if (contradictedEffectiveTacticFamilies.length) {
+    learningHighlights.push(`Some tactic families previously helped but now look contradicted by today's live picture: ${contradictedEffectiveTacticFamilies.slice(0, 3).map((family) => healthPlanTacticFamilyLabel(family)).join(", ")}.`);
+    planningCautions.push("Do not preserve a previously helpful tactic unchanged when today's evidence suggests it is no longer landing. Name the stronger replacement, alternate route, or verification step.");
+  }
+  if (stalledTacticFamilies.length) {
+    learningHighlights.push(`Some tactic families still looked unresolved after they were tried: ${stalledTacticFamilies.slice(0, 3).map((family) => healthPlanTacticFamilyLabel(family)).join(", ")}.`);
+    planningCautions.push("Do not rerun a stalled tactic family unchanged. Name the stronger fallback, alternate route, or closure proof this time.");
+  }
+  const reliablyHelpfulFamilies = familyOutcomeLearning
+    .filter((entry) => entry?.consistency_state === "reliably_helpful")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const repeatedlyStalledFamilies = familyOutcomeLearning
+    .filter((entry) => entry?.consistency_state === "repeatedly_stalled")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const mixedOutcomeFamilies = familyOutcomeLearning
+    .filter((entry) => entry?.consistency_state === "mixed")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const slippingOutcomeFamilies = familyOutcomeLearning
+    .filter((entry) => entry?.recency_state === "recently_slipping")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const recoveredOutcomeFamilies = familyOutcomeLearning
+    .filter((entry) => entry?.recency_state === "recently_recovered")
+    .map((entry) => healthPlanTacticFamilyLabel(entry.family));
+  const recommendationSnapshot = buildHealthPlanRecommendationSnapshot(normalizedCurrent);
+  if (reliablyHelpfulFamilies.length) {
+    learningHighlights.push(`Some tactic families have repeatedly helped across versions: ${reliablyHelpfulFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (repeatedlyStalledFamilies.length) {
+    learningHighlights.push(`Some tactic families have repeatedly stalled across versions: ${repeatedlyStalledFamilies.slice(0, 3).join(", ")}.`);
+    planningCautions.push(`Do not keep recycling repeatedly stalled tactic families without a stronger route or materially different proof path: ${repeatedlyStalledFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (mixedOutcomeFamilies.length) {
+    planningCautions.push(`Some tactic families have mixed historical results, so keep the proof step explicit before treating them as reliable: ${mixedOutcomeFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (slippingOutcomeFamilies.length) {
+    learningHighlights.push(`Some tactic families used to help but are slipping in the most recent picture: ${slippingOutcomeFamilies.slice(0, 3).join(", ")}.`);
+    planningCautions.push(`Do not rely on a formerly helpful tactic unchanged when the recent pattern is slipping: ${slippingOutcomeFamilies.slice(0, 3).join(", ")}.`);
+  }
+  if (recoveredOutcomeFamilies.length) {
+    learningHighlights.push(`Some tactic families show recent recovery after earlier stalls: ${recoveredOutcomeFamilies.slice(0, 3).join(", ")}.`);
+  }
+
+  return normalizeHealthPlanPlanMemory({
+    has_existing_plan: Boolean(normalizedCurrent || recentVersions.length),
+    current_plan: normalizedCurrent
+      ? {
+          current_version: normalizedCurrent.current_version,
+          review_status: normalizedCurrent.review_status,
+          last_action_type: normalizedCurrent.last_action_type,
+          generation_confidence: normalizedCurrent.generation_confidence,
+          generated_at: normalizedCurrent.generated_at,
+          automated_review_verdict: currentAutomatedReview?.verdict || null,
+          approval_gate_state: currentReviewAttestation?.approval_gate_state || null,
+          quality_score: Number.isFinite(Number(currentReviewAttestation?.quality_score)) ? Number(currentReviewAttestation.quality_score) : null,
+          quality_trust_level: currentReviewAttestation?.quality_trust_level || null,
+          review_rubric_scores: currentReviewRubricScores,
+          weak_review_dimensions: weakReviewDimensions,
+          outcome_trajectory: currentPlanOutcomeTrajectory?.status || null,
+          outcome_confidence_state: currentPlanOutcomeConfidence?.confidence_state || null,
+          outcome_confidence_reason_codes: Array.isArray(currentPlanOutcomeConfidence?.reason_codes) ? currentPlanOutcomeConfidence.reason_codes : [],
+          outcome_confidence_detail: currentPlanOutcomeConfidence?.detail || null,
+          outcome_evidence_at: currentPlanOutcomeConfidence?.evidence_at || null,
+          outcome_reason_codes: Array.isArray(currentPlanOutcomeTrajectory?.reason_codes) ? currentPlanOutcomeTrajectory.reason_codes : [],
+          outcome_detail: currentPlanOutcomeTrajectory?.detail || null,
+          receipt_gap_status: currentPlanReceiptGap?.status || null,
+          receipt_gap_reason_codes: Array.isArray(currentPlanReceiptGap?.reason_codes) ? currentPlanReceiptGap.reason_codes : [],
+          receipt_gap_detail: currentPlanReceiptGap?.detail || null,
+          receipt_gap_missing_receipts: Array.isArray(currentPlanReceiptGap?.missing_receipts) ? currentPlanReceiptGap.missing_receipts : [],
+          receipt_gap_overdue: Boolean(currentPlanReceiptGap?.overdue),
+          evidence_drift_without_rewrite: evidenceDriftWithoutRewrite,
+          reopened_after_review: reviewReopened,
+          unresolved_required_actions: Array.isArray(currentAutomatedReview?.required_actions) ? currentAutomatedReview.required_actions.slice(0, 4) : [],
+          open_issue_codes: [
+            ...new Set([
+              ...((Array.isArray(currentReviewAttestation?.blocking_issue_codes) ? currentReviewAttestation.blocking_issue_codes : []).filter(Boolean)),
+              ...((Array.isArray(currentReviewAttestation?.watch_issue_codes) ? currentReviewAttestation.watch_issue_codes : []).filter(Boolean)),
+            ]),
+          ],
+          watch_issue_codes: Array.isArray(currentReviewAttestation?.watch_issue_codes) ? currentReviewAttestation.watch_issue_codes : [],
+          recommendation_receipts: recommendationReceiptSummary,
+          recommendation_snapshot: recommendationSnapshot,
+          changed_sections: Array.isArray(currentChangeSummary?.changed_sections) ? currentChangeSummary.changed_sections : [],
+        }
+      : null,
+    recent_versions: recentVersions,
+    family_outcomes: familyOutcomes,
+    family_outcome_learning: familyOutcomeLearning,
+    family_execution_learning: familyExecutionLearning,
+    effective_tactic_families: effectiveTacticFamilies,
+    contradicted_effective_tactic_families: contradictedEffectiveTacticFamilies,
+    effective_tactic_contradictions: effectiveTacticContradictions,
+    stalled_tactic_families: stalledTacticFamilies,
+    recurring_issue_codes: recurringIssueCodes,
+    repeated_tactic_families: repeatedTacticFamilies,
+    learning_highlights: learningHighlights,
+    planning_cautions: [...new Set(planningCautions)],
+  });
+}
+
+function buildHealthPlanPlanMemorySignals(planMemory) {
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  if (!memory.has_existing_plan || !memory.current_plan) return [];
+  const signalItems = [];
+  const currentPlan = memory.current_plan;
+  const outcomeConfidenceState = nullIfBlank(currentPlan.outcome_confidence_state);
+  const outcomeConfidenceDetail = nullIfBlank(currentPlan.outcome_confidence_detail);
+
+  if (currentPlan.review_status !== "reviewed") {
+    signalItems.push({
+      id: "plan-memory-review-open",
+      label: "Previous health plan still needed review",
+      detail: `Version ${currentPlan.current_version} was still draft-only after the last save.`,
+      category: "context",
+      strength: "high",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.automated_review_verdict === "block" || currentPlan.unresolved_required_actions.length) {
+    signalItems.push({
+      id: "plan-memory-review-actions",
+      label: "Previous health plan still had unresolved review actions",
+      detail: currentPlan.unresolved_required_actions.slice(0, 3).join(" Â· ") || "The previous plan still had review follow-up pending.",
+      category: "context",
+      strength: currentPlan.automated_review_verdict === "block" ? "high" : "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.evidence_drift_without_rewrite) {
+    signalItems.push({
+      id: "plan-memory-evidence-drift",
+      label: "Previous plan wording lagged behind new evidence",
+      detail: "Recent history shows evidence drift without a full rewrite of the saved guidance.",
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.reopened_after_review) {
+    signalItems.push({
+      id: "plan-memory-reopened",
+      label: "A reviewed plan was reopened after material edits",
+      detail: "The previous reviewed version was reopened, so the next plan should explain what changed.",
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (memory.recurring_issue_codes.length) {
+    signalItems.push({
+      id: "plan-memory-recurring-issues",
+      label: "Some plan review gaps have recurred across recent versions",
+      detail: memory.recurring_issue_codes.slice(0, 4).join(" Â· "),
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (memory.repeated_tactic_families.length) {
+    signalItems.push({
+      id: "plan-memory-repeated-tactics",
+      label: "Recent plan versions kept revisiting the same tactic families",
+      detail: memory.repeated_tactic_families.slice(0, 4).join(" · "),
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (memory.effective_tactic_families.length) {
+    signalItems.push({
+      id: "plan-memory-effective-tactics",
+      label: "Some tactic families previously helped move the case forward",
+      detail: memory.effective_tactic_families.slice(0, 4).map((family) => healthPlanTacticFamilyLabel(family)).join(" · "),
+      category: "context",
+      strength: "low",
+      freshness: "unknown",
+    });
+  }
+
+  if (memory.effective_tactic_contradictions.length) {
+    signalItems.push({
+      id: "plan-memory-effective-tactics-contradicted",
+      label: "Some previously helpful tactics are now contradicted by today's evidence",
+      detail: memory.effective_tactic_contradictions
+        .slice(0, 3)
+        .map((entry) => `${healthPlanTacticFamilyLabel(entry.family)}: ${entry.detail || "current evidence no longer supports preserving it unchanged"}`)
+        .join(" Â· "),
+      category: "context",
+      strength: "high",
+      freshness: "unknown",
+    });
+  }
+
+  if (memory.stalled_tactic_families.length) {
+    signalItems.push({
+      id: "plan-memory-stalled-tactics",
+      label: "Some tactic families were tried without later evidence of progress",
+      detail: memory.stalled_tactic_families.slice(0, 4).map((family) => healthPlanTacticFamilyLabel(family)).join(" · "),
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.receipt_gap_status) {
+    signalItems.push({
+      id: "plan-memory-receipt-gap",
+      label: currentPlan.receipt_gap_overdue
+        ? "The previous plan still lacks overdue execution proof"
+        : "The previous plan still lacks recorded execution proof",
+      detail: currentPlan.receipt_gap_detail
+        || currentPlan.receipt_gap_missing_receipts.slice(0, 4).join(" | ")
+        || "First contact, closure, or follow-through proof is still missing from the previous plan.",
+      category: "context",
+      strength: currentPlan.receipt_gap_status === "stalled" || currentPlan.receipt_gap_overdue ? "high" : "medium",
+      freshness: "unknown",
+    });
+  }
+
+  const recommendationReceipts = currentPlan.recommendation_receipts;
+  if (recommendationReceipts?.confirmed_count) {
+    signalItems.push({
+      id: "plan-memory-recommendations-confirmed",
+      label: `${recommendationReceipts.confirmed_count} prior recommendation${recommendationReceipts.confirmed_count === 1 ? "" : "s"} already confirmed by staff`,
+      detail: recommendationReceipts.confirmed_items.slice(0, 3).map((item) => item.text).join(" Ã‚Â· ") || "Staff already confirmed some earlier recommendations.",
+      category: "context",
+      strength: "low",
+      freshness: "unknown",
+    });
+  }
+
+  if (recommendationReceipts?.deferred_count) {
+    signalItems.push({
+      id: "plan-memory-recommendations-deferred",
+      label: `${recommendationReceipts.deferred_count} prior recommendation${recommendationReceipts.deferred_count === 1 ? "" : "s"} deferred by staff`,
+      detail: recommendationReceipts.deferred_items
+        .slice(0, 3)
+        .map((item) => item.note ? `${item.text}: ${item.note}` : item.text)
+        .join(" Ã‚Â· ")
+        || "Some earlier recommendations were deferred and still need a next step.",
+      category: "context",
+      strength: "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (recommendationReceipts?.escalated_count) {
+    signalItems.push({
+      id: "plan-memory-recommendations-escalated",
+      label: `${recommendationReceipts.escalated_count} prior recommendation${recommendationReceipts.escalated_count === 1 ? "" : "s"} already escalated by staff`,
+      detail: recommendationReceipts.escalated_items
+        .slice(0, 3)
+        .map((item) => item.note ? `${item.text}: ${item.note}` : item.text)
+        .join(" Ã‚Â· ")
+        || "Staff already escalated some earlier recommendations.",
+      category: "context",
+      strength: "high",
+      freshness: "unknown",
+    });
+  }
+
+  if (recommendationReceipts?.open_count) {
+    signalItems.push({
+      id: "plan-memory-recommendations-open",
+      label: `${recommendationReceipts.open_count} prior recommendation${recommendationReceipts.open_count === 1 ? "" : "s"} still lack a staff receipt`,
+      detail: recommendationReceipts.open_items.slice(0, 3).map((item) => item.text).join(" Ã‚Â· ") || "Some earlier recommendations still need staff confirmation, deferral, or escalation.",
+      category: "context",
+      strength: recommendationReceipts.open_count > 1 ? "high" : "medium",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.weak_review_dimensions.includes("actionability")) {
+    signalItems.push({
+      id: "plan-memory-actionability-weak",
+      label: "The previous plan was too vague to execute cleanly",
+      detail: "The last automated review still judged actionability as weak, so the next plan should name owner, timing, branch, and proof more concretely.",
+      category: "context",
+      strength: "high",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.weak_review_dimensions.includes("grounding")) {
+    signalItems.push({
+      id: "plan-memory-grounding-weak",
+      label: "The previous plan was not grounded strongly enough in live evidence",
+      detail: "The last automated review still judged grounding as weak, so the next plan should tie its key moves more explicitly to current signals.",
+      category: "context",
+      strength: "high",
+      freshness: "unknown",
+    });
+  }
+
+  if (currentPlan.outcome_trajectory === "worsened") {
+    signalItems.push({
+      id: "plan-memory-outcome-worsened",
+      label:
+        outcomeConfidenceState === "stale"
+          ? "A previously worse care picture should be re-checked"
+          : outcomeConfidenceState === "inferred"
+            ? "The care burden may have worsened after the previous plan"
+            : "The overall care burden worsened after the previous plan",
+      detail: outcomeConfidenceDetail || currentPlan.outcome_detail || "Later live evidence suggests the previous plan did not stabilize the case.",
+      category: "context",
+      strength: outcomeConfidenceState === "verified" ? "high" : outcomeConfidenceState === "mixed" ? "medium" : "low",
+      observed_at: currentPlan.outcome_evidence_at || null,
+      freshness: inferHealthPlanSignalFreshness(
+        currentPlan.outcome_evidence_at,
+        { category: "context", strength: outcomeConfidenceState === "verified" ? "high" : "medium" },
+      ) || "unknown",
+    });
+  } else if (currentPlan.outcome_trajectory === "stalled") {
+    signalItems.push({
+      id: "plan-memory-outcome-stalled",
+      label:
+        outcomeConfidenceState === "stale"
+          ? "A previously stalled response loop should be re-checked"
+          : outcomeConfidenceState === "inferred"
+            ? "The care burden may have stayed materially open after the previous plan"
+            : "The overall care burden stayed materially open after the previous plan",
+      detail: outcomeConfidenceDetail || currentPlan.outcome_detail || "Later live evidence suggests the response loop did not move far enough after the previous plan.",
+      category: "context",
+      strength: outcomeConfidenceState === "verified" ? "medium" : outcomeConfidenceState === "mixed" ? "medium" : "low",
+      observed_at: currentPlan.outcome_evidence_at || null,
+      freshness: inferHealthPlanSignalFreshness(
+        currentPlan.outcome_evidence_at,
+        { category: "context", strength: "medium" },
+      ) || "unknown",
+    });
+  } else if (currentPlan.outcome_trajectory === "improved") {
+    signalItems.push({
+      id: "plan-memory-outcome-improved",
+      label:
+        outcomeConfidenceState === "verified"
+          ? "The overall care burden improved after the previous plan"
+          : outcomeConfidenceState === "mixed"
+            ? "The overall care burden improved, but proof is still incomplete"
+            : outcomeConfidenceState === "stale"
+              ? "A previously improved care picture should be re-confirmed"
+              : "The care burden may have improved after the previous plan",
+      detail: outcomeConfidenceDetail || currentPlan.outcome_detail || "Later live evidence suggests the previous plan helped reduce the care burden.",
+      category: "context",
+      strength: outcomeConfidenceState === "verified" ? "medium" : "low",
+      observed_at: currentPlan.outcome_evidence_at || null,
+      freshness: inferHealthPlanSignalFreshness(
+        currentPlan.outcome_evidence_at,
+        { category: "context", strength: outcomeConfidenceState === "verified" ? "medium" : "low" },
+      ) || "unknown",
+    });
+  }
+
+  return normalizeHealthPlanSourceSignals(signalItems);
+}
+
+function buildHealthPlanPlanMemoryFeedback(planMemory, sourceSignals, organization = null, responseExpectation = "review within 24 hours") {
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  if (!memory.has_existing_plan || !memory.current_plan) {
+    return {
+      known_facts: [],
+      open_questions: [],
+      next_confirmations: [],
+    };
+  }
+
+  const findSignal = (id) => findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === id);
+  const dueWindow = responseExpectation === "same-day review" ? "same_day" : "within_24h";
+  const knownFacts = [];
+  const openQuestions = [];
+  const nextConfirmations = [];
+
+  if (memory.current_plan.review_status !== "reviewed" && findSignal("plan-memory-review-open")) {
+    knownFacts.push({
+      code: "prior-plan-review-open",
+      text: "The most recent saved health plan was still draft-only, so the next version should close the review gap rather than repeat it.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-review-open")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.evidence_drift_without_rewrite && findSignal("plan-memory-evidence-drift")) {
+    openQuestions.push({
+      code: "prior-plan-evidence-drift",
+      text: "The last saved wording lagged behind the evidence, so the team still needs to confirm whether the old framing fits the current situation.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-evidence-drift")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-prior-wording-still-fits",
+      text: "Confirm which parts of the previous wording still match today's live picture before carrying them forward.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-evidence-drift")].filter(Boolean),
+    });
+  }
+
+  if ((memory.current_plan.automated_review_verdict === "block" || memory.current_plan.unresolved_required_actions.length) && findSignal("plan-memory-review-actions")) {
+    openQuestions.push({
+      code: "prior-review-actions-open",
+      text: "The previous plan still had explicit review actions outstanding.",
+      priority: memory.current_plan.automated_review_verdict === "block" ? "high" : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-review-actions")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "resolve-prior-review-actions",
+      text: "Carry the unresolved review actions into the next version and make sure they are concretely addressed before broader reliance.",
+      priority: memory.current_plan.automated_review_verdict === "block" ? "high" : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-review-actions")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.reopened_after_review && findSignal("plan-memory-reopened")) {
+    knownFacts.push({
+      code: "reviewed-plan-reopened",
+      text: "A previously reviewed plan was reopened after material edits, so the next version should be explicit about what changed.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-reopened")].filter(Boolean),
+    });
+  }
+
+  if (memory.recurring_issue_codes.length && findSignal("plan-memory-recurring-issues")) {
+    openQuestions.push({
+      code: "recurring-plan-gaps",
+      text: "Some review or coordination gaps have repeated across recent versions, so the next plan should break that pattern instead of rephrasing it.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recurring-issues")].filter(Boolean),
+    });
+  }
+
+  if (memory.repeated_tactic_families.length && findSignal("plan-memory-repeated-tactics")) {
+    openQuestions.push({
+      code: "prior-tactic-repetition",
+      text: "Recent plan versions kept revisiting the same tactic families, so the next version still needs to show what will be different this time.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-repeated-tactics")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "differentiate-next-tactic",
+      text: "Name what is materially different from the repeated tactic and what receipt will show that the new approach is actually working.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-repeated-tactics")].filter(Boolean),
+    });
+  }
+
+  if (memory.effective_tactic_families.length && findSignal("plan-memory-effective-tactics")) {
+    knownFacts.push({
+      code: "prior-tactics-helped",
+      text: `Recent history suggests these tactic families have helped before: ${memory.effective_tactic_families.slice(0, 3).map((family) => healthPlanTacticFamilyLabel(family)).join(", ")}.`,
+      priority: "low",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-effective-tactics")].filter(Boolean),
+    });
+  }
+
+  if (memory.effective_tactic_contradictions.length && findSignal("plan-memory-effective-tactics-contradicted")) {
+    openQuestions.push({
+      code: "prior-effective-tactic-contradicted",
+      text: `Some tactics that previously helped no longer look safe to preserve unchanged today: ${memory.effective_tactic_contradictions.slice(0, 3).map((entry) => healthPlanTacticFamilyLabel(entry.family)).join(", ")}.`,
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-effective-tactics-contradicted")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "reverify-or-retire-effective-tactic",
+      text: "Make explicit which previously helpful tactic still stands, which one now needs re-verification, and which stronger replacement should take over if the old pattern is no longer landing.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-effective-tactics-contradicted")].filter(Boolean),
+    });
+  }
+
+  if (memory.stalled_tactic_families.length && findSignal("plan-memory-stalled-tactics")) {
+    openQuestions.push({
+      code: "prior-tactic-stalled",
+      text: "Some tactic families were already tried without later evidence that they changed the situation.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-stalled-tactics")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "upgrade-stalled-tactic",
+      text: "Name the stronger fallback, alternate route, or closure proof for the stalled tactic family instead of rerunning it unchanged.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-stalled-tactics")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.receipt_gap_status && findSignal("plan-memory-receipt-gap")) {
+    openQuestions.push({
+      code: "prior-plan-receipts-open",
+      text: memory.current_plan.receipt_gap_overdue
+        ? "The previous plan is already past its response window and still lacks proof that the key follow-through steps actually landed."
+        : "The previous plan still lacks recorded proof that the key follow-through steps actually landed.",
+      priority:
+        memory.current_plan.receipt_gap_status === "stalled" || memory.current_plan.receipt_gap_overdue
+          ? "high"
+          : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-receipt-gap")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "record-missing-prior-receipts",
+      text: `Record the missing receipt path now: ${memory.current_plan.receipt_gap_missing_receipts.slice(0, 3).join(", ") || "first contact, closure, or follow-through proof"}.`,
+      priority:
+        memory.current_plan.receipt_gap_status === "stalled" || memory.current_plan.receipt_gap_overdue
+          ? "high"
+          : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-receipt-gap")].filter(Boolean),
+    });
+  }
+
+  const recommendationReceipts = memory.current_plan.recommendation_receipts;
+  if (recommendationReceipts?.confirmed_count && findSignal("plan-memory-recommendations-confirmed")) {
+    knownFacts.push({
+      code: "prior-recommendations-confirmed",
+      text: `Staff already confirmed ${recommendationReceipts.confirmed_count} prior recommendation${recommendationReceipts.confirmed_count === 1 ? "" : "s"}, so the next plan can build from those validated steps.`,
+      priority: "low",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-confirmed")].filter(Boolean),
+    });
+  }
+
+  if (recommendationReceipts?.deferred_count && findSignal("plan-memory-recommendations-deferred")) {
+    openQuestions.push({
+      code: "prior-recommendations-deferred",
+      text: "Some previous recommendations were deferred by staff and still need a concrete next step or explicit re-check.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-deferred")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "resolve-deferred-recommendations",
+      text: "Carry the deferred recommendation forward with a concrete reason, next timing, or replacement route instead of letting it disappear.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-deferred")].filter(Boolean),
+    });
+  }
+
+  if (recommendationReceipts?.escalated_count && findSignal("plan-memory-recommendations-escalated")) {
+    knownFacts.push({
+      code: "prior-recommendations-escalated",
+      text: "Staff already escalated some earlier recommendations, so the next version should respect that stronger route rather than silently stepping back.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-escalated")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "carry-forward-escalated-recommendations",
+      text: "Make explicit which already-escalated recommendation still stands, what stronger route it triggered, and what proof now closes it.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-escalated")].filter(Boolean),
+    });
+  }
+
+  if (recommendationReceipts?.open_count && findSignal("plan-memory-recommendations-open")) {
+    openQuestions.push({
+      code: "prior-recommendations-unconfirmed",
+      text: "Some previous recommendations still lack a recorded staff receipt, so the team cannot treat them as complete yet.",
+      priority: recommendationReceipts.open_count > 1 ? "high" : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-open")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "close-prior-recommendation-receipts",
+      text: "Record whether the still-open recommendations are now confirmed, deferred, or escalated before assuming the prior step actually landed.",
+      priority: recommendationReceipts.open_count > 1 ? "high" : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-recommendations-open")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.weak_review_dimensions.includes("actionability") && findSignal("plan-memory-actionability-weak")) {
+    openQuestions.push({
+      code: "prior-plan-actionability-weak",
+      text: "The previous plan still felt too vague to execute without staff guessing the next move.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-actionability-weak")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "make-next-plan-actionable",
+      text: "Name the next owner, timing, contingency branch, and completion receipt so the next version can be executed without improvisation.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-actionability-weak")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.weak_review_dimensions.includes("grounding") && findSignal("plan-memory-grounding-weak")) {
+    openQuestions.push({
+      code: "prior-plan-grounding-weak",
+      text: "The previous plan still did not tie its key recommendations clearly enough to the live evidence.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-grounding-weak")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "strengthen-next-plan-grounding",
+      text: "Make sure each major recommendation clearly points back to the current signals or to a fresh verification step if the evidence is still incomplete.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-grounding-weak")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.outcome_trajectory === "worsened" && findSignal("plan-memory-outcome-worsened")) {
+    knownFacts.push({
+      code: "prior-plan-outcome-worsened",
+      text: memory.current_plan.outcome_confidence_state === "stale"
+        ? "A previously worse care picture is on record, but it now needs a fresh check before the team assumes the burden is still that high."
+        : memory.current_plan.outcome_confidence_state === "inferred"
+          ? "The previous saved plan may have been followed by a heavier care burden, but the next version should still verify the live situation."
+          : "Later live evidence suggests the previous saved plan was followed by a heavier care burden rather than stabilization.",
+      priority:
+        memory.current_plan.outcome_confidence_state === "verified"
+        || memory.current_plan.outcome_confidence_state === "mixed"
+          ? "high"
+          : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-outcome-worsened")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "change-course-after-worsening",
+      text: "Escalate or strengthen the next response path explicitly instead of reusing the previous framing as if it worked.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-outcome-worsened")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.outcome_trajectory === "stalled" && findSignal("plan-memory-outcome-stalled")) {
+    openQuestions.push({
+      code: "prior-plan-outcome-stalled",
+      text: memory.current_plan.outcome_confidence_state === "stale"
+        ? "A previously stalled response loop is on record, but it now needs a fresh check before the next plan treats it as still open."
+        : memory.current_plan.outcome_confidence_state === "inferred"
+          ? "The previous saved plan may not have created enough movement in the response loop, but the team should still verify the current state."
+          : "Later live evidence suggests the previous saved plan did not create enough movement in the response loop.",
+      priority:
+        memory.current_plan.outcome_confidence_state === "verified"
+        || memory.current_plan.outcome_confidence_state === "mixed"
+          ? "high"
+          : "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-outcome-stalled")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "unstick-after-stalled-outcome",
+      text: "Make the next version materially stronger so it does not simply preserve an already-stalled response path.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-outcome-stalled")].filter(Boolean),
+    });
+  }
+
+  if (memory.current_plan.outcome_trajectory === "improved" && findSignal("plan-memory-outcome-improved")) {
+    if (memory.current_plan.outcome_confidence_state === "verified") {
+      knownFacts.push({
+        code: "prior-plan-outcome-improved",
+        text: "Later live evidence suggests the previous saved plan did help reduce the care burden or move the loop forward.",
+        priority: "low",
+        due_window: dueWindow,
+        signal_ids: [findSignal("plan-memory-outcome-improved")].filter(Boolean),
+      });
+    } else {
+      openQuestions.push({
+        code: "prior-plan-outcome-improved-needs-confirmation",
+        text: memory.current_plan.outcome_confidence_state === "stale"
+          ? "The previous plan appears to have helped, but that improvement signal is no longer fresh enough to treat as settled."
+          : "The previous plan may have helped, but the improvement is not yet backed by enough explicit proof to rely on it blindly.",
+        priority: memory.current_plan.outcome_confidence_state === "mixed" ? "medium" : "high",
+        due_window: dueWindow,
+        signal_ids: [findSignal("plan-memory-outcome-improved")].filter(Boolean),
+      });
+      nextConfirmations.push({
+        code: "reconfirm-prior-improvement",
+        text: "Re-confirm whether the earlier improvement is still real, what proof supports it now, and which parts of the old response actually earned reuse.",
+        priority: memory.current_plan.outcome_confidence_state === "mixed" ? "medium" : "high",
+        due_window: dueWindow,
+        signal_ids: [findSignal("plan-memory-outcome-improved")].filter(Boolean),
+      });
+    }
+  }
+
+  return {
+    known_facts: knownFacts,
+    open_questions: openQuestions,
+    next_confirmations: nextConfirmations,
+  };
+}
+
+function buildHealthPlanDecisionBranches(profile, predictiveContext, sourceSignals, organization = null, planMemory = null) {
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const sameDay = policy.response_expectation === "same-day review";
+  const dueWindow = sameDay ? "same_day" : "within_24h";
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const remindersDisabled = Array.isArray(profile?.medications) && profile.medications.some((med) => med?.reminders_enabled === false);
+  const offlineSensors = Array.isArray(profile?.sensors) && profile.sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const activeAlerts = Array.isArray(profile?.alerts) && profile.alerts.some((alert) => !alert?.resolved_at);
+  const tension = buildHealthPlanEvidenceTension(profile, predictiveContext, sourceSignals, organization);
+  const tensionIds = new Set(tension.signals.map((signal) => signal?.id).filter(Boolean));
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  const branches = [];
+  const findSignal = (id) => findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === id);
+
+  if (responsePath?.handoff_open || responsePath?.client_route_attempt_count > 0 || responsePath?.alternate_audience_open) {
+    branches.push({
+      code: "branch-contact-lands",
+      text: "If the next touchpoint reaches the client, confirm today's medication status, service outcome, and whether the open loop can now be closed with a named owner.",
+      priority: sameDay ? "high" : "medium",
+      due_window: dueWindow,
+      signal_ids: [
+        findSignal("outcome-handoff-open"),
+        findSignal("execution-contact-path-weak"),
+        findSignal("medication-plan"),
+        findSignal("service-checkins"),
+      ].filter(Boolean),
+    });
+    branches.push({
+      code: "branch-contact-misses",
+      text: "If the next touchpoint still does not reach the client, switch immediately to the alternate approved route or named owner path and keep the case urgent until there is a real receipt of contact.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [
+        findSignal("execution-contact-path-weak"),
+        findSignal("execution-stalled"),
+        findSignal("execution-care-circle-route-open"),
+        findSignal("outcome-handoff-open"),
+      ].filter(Boolean),
+    });
+  }
+
+  if (["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus) || remindersDisabled) {
+    branches.push({
+      code: "branch-medication-confirmed",
+      text: "If a missed or late dose is confirmed, verify the saved reminder times, identify who is responsible for follow-up today, and treat another missed dose as an escalation trigger.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("medication-plan"), findSignal("alert-active")].filter(Boolean),
+    });
+  }
+
+  if (offlineSensors) {
+    branches.push({
+      code: "branch-sensor-explained",
+      text: "If the sensor problem is confirmed to be only a device or connectivity issue, document the manual fallback and keep watch for any mismatch with the client's reported condition.",
+      priority: "medium",
+      due_window: dueWindow,
+      signal_ids: [findSignal("sensor-status")].filter(Boolean),
+    });
+  }
+
+  if (tensionIds.has("evidence-predictive-live-mismatch") || tensionIds.has("evidence-passive-signal-conflict")) {
+    branches.push({
+      code: "branch-live-picture-worsens",
+      text: "If direct verification contradicts the calmer predictive or passive picture, let the live operational concern control the response and escalate the same day.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [
+        findSignal("evidence-predictive-live-mismatch"),
+        findSignal("evidence-passive-signal-conflict"),
+        findSignal("alert-active"),
+      ].filter(Boolean),
+    });
+  }
+
+  if (memory.stalled_tactic_families.length) {
+    branches.push({
+      code: "branch-stalled-tactic-repeats",
+      text: "If the upgraded fallback still produces no contact, closure, or proof of follow-through, stop repeating the stalled tactic family and move to the stronger escalation route the same day.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("plan-memory-stalled-tactics"), findSignal("execution-stalled")].filter(Boolean),
+    });
+  }
+
+  if (!branches.length && (activeAlerts || ["critical", "high", "urgent"].includes(riskBand))) {
+    branches.push({
+      code: "branch-verify-then-escalate",
+      text: "If the first real-world check cannot confirm that the client is safe and stable, escalate the same day instead of waiting for another passive update.",
+      priority: "high",
+      due_window: dueWindow,
+      signal_ids: [findSignal("alert-active"), findSignal("risk-latest-score")].filter(Boolean),
+    });
+  }
+
+  return branches
+    .map((item) => normalizeHealthPlanVerificationItem(item))
+    .filter(Boolean);
+}
+
+function buildHealthPlanAccountabilityCommitments(profile, predictiveContext, sourceSignals, organization = null) {
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const sameDayExpected = policy.response_expectation === "same-day review";
+  const dueWindow = sameDayExpected ? "same_day" : "within_24h";
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const alerts = (Array.isArray(profile?.alerts) ? profile.alerts : []).filter((alert) => !alert?.resolved_at);
+  const sensors = (Array.isArray(profile?.sensors) ? profile.sensors : []).filter((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const medicationRisk = ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const commitments = [];
+  const pushCommitment = (code, enabled, priority, detail, proofHint, signalIds = []) => {
+    if (!enabled) return;
+    commitments.push({
+      code,
+      status: "open",
+      priority,
+      due_window: dueWindow,
+      detail,
+      proof_hint: proofHint,
+      signal_ids: signalIds.filter(Boolean),
+    });
+  };
+
+  pushCommitment(
+    "assign_owner",
+    !careProviders.length || responsePath?.handoff_open,
+    sameDayExpected ? "high" : "medium",
+    "A named owner should be visible for the next follow-up cycle.",
+    "Counts as done when one named owner is linked on the profile or clearly recorded in the follow-up log.",
+    ["care-circle-context"],
+  );
+  pushCommitment(
+    "contact_client",
+    sameDayExpected || alerts.length > 0 || medicationRisk,
+    sameDayExpected || alerts.length > 0 ? "high" : "medium",
+    "The next client touchpoint and response timing should be explicit.",
+    sameDayExpected
+      ? "Counts as done when the first same-day client touchpoint is recorded."
+      : "Counts as done when the next client touchpoint is recorded.",
+    alerts.length > 0 ? ["alert-active"] : medicationRisk ? ["medication-plan"] : [],
+  );
+  pushCommitment(
+    "review_alerts",
+    alerts.length > 0,
+    "high",
+    "Unresolved alerts should be turned into explicit response action.",
+    "Counts as done when the first alert follow-up is recorded.",
+    ["alert-active"],
+  );
+  pushCommitment(
+    "verify_medication",
+    medicationRisk,
+    sameDayExpected ? "high" : "medium",
+    "Medication adherence risk should become a clear follow-up step.",
+    "Counts as done when today's medication status is confirmed and the follow-up result is recorded.",
+    ["medication-plan"],
+  );
+  pushCommitment(
+    "check_sensors",
+    sensors.length > 0,
+    sameDayExpected ? "medium" : "low",
+    "Offline or silent sensors should be checked so they do not create false reassurance.",
+    "Counts as done when the sensor issue is confirmed as device, connectivity, or real client concern.",
+    ["sensor-status"],
+  );
+  pushCommitment(
+    "update_care_circle",
+    familyConsent && careProviders.length > 0 && (sameDayExpected || alerts.length > 0 || medicationRisk),
+    sameDayExpected ? "medium" : "low",
+    "The approved care circle should receive a practical update once the first follow-up is complete.",
+    "Counts as done when an approved care-circle update is logged after the first client follow-up.",
+    ["care-circle-context", "consent-family-sharing"],
+  );
+  pushCommitment(
+    "respect_sharing_boundary",
+    !familyConsent,
+    "high",
+    "Personal details should stay within staff or approved providers until consent is confirmed.",
+    "Counts as done when updates stay within staff or approved providers until consent changes.",
+    ["consent-family-sharing"],
+  );
+
+  return commitments.map((item) => normalizeHealthPlanAccountabilityCommitment(item)).filter(Boolean);
+}
+
 function findHealthPlanSignalId(sourceSignals, matcher) {
   return sourceSignals.find((signal) => matcher(signal))?.id || null;
 }
@@ -784,25 +10691,2386 @@ function deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSig
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
 
   if (["critical", "high", "urgent"].includes(riskBand)) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /predictive risk score/i.test(signal?.label)));
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === "risk-latest-score"));
   }
   if (hasActiveAlerts) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /active alert/i.test(signal?.label)));
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === "alert-active"));
   }
   if (["missed", "late", "skipped", "unconfirmed"].includes(latestMedicationStatus)) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /medication/i.test(signal?.label)));
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === "medication-plan"));
   }
   if (offlineSensors) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /sensor/i.test(signal?.label)));
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === "sensor-status"));
   }
   if (!careProviders.length) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /profile context/i.test(signal?.label)));
+    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === "care-circle-context"));
   }
 
   return [...new Set(critical.filter(Boolean))];
 }
 
-function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language) {
+function buildHealthPlanChangeContext(profile, predictiveContext, sourceSignals, planMemory = null, organization = null) {
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const sourceSignalIds = new Set(
+    (Array.isArray(sourceSignals) ? sourceSignals : [])
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter(Boolean),
+  );
+  const highlights = [];
+  const reasonCodes = [];
+
+  const pushHighlight = (code, text, signalIds = [], requiredSections = ["summary", "monitoring"], priority = "medium") => {
+    const normalizedSignalIds = [...new Set(
+      (signalIds || [])
+        .map((signalId) => nullIfBlank(signalId))
+        .filter((signalId) => signalId && sourceSignalIds.has(signalId)),
+    )];
+    if (!normalizedSignalIds.length) return;
+    const normalizedSections = [...new Set((requiredSections || []).map((section) => nullIfBlank(section)).filter(Boolean))];
+    if (!normalizedSections.length) return;
+    highlights.push({
+      code,
+      text,
+      priority: priority === "high" ? "high" : priority === "low" ? "low" : "medium",
+      signal_ids: normalizedSignalIds,
+      required_sections: normalizedSections,
+    });
+    reasonCodes.push(code);
+  };
+
+  if (memory?.current_plan?.evidence_drift_without_rewrite) {
+    pushHighlight(
+      "evidence_shifted",
+      "The live evidence moved after the previous saved wording, so the next plan should say what changed instead of carrying the old framing forward unchanged.",
+      ["plan-memory-evidence-drift"],
+      ["summary", "monitoring"],
+      "high",
+    );
+  }
+
+  if (memory?.current_plan?.reopened_after_review) {
+    pushHighlight(
+      "review_reopened",
+      "A previously reviewed plan was reopened after material edits, so the next version should be explicit about what changed.",
+      ["plan-memory-reopened"],
+      ["summary", "monitoring"],
+      "medium",
+    );
+  }
+
+  if (memory?.repeated_tactic_families?.length) {
+    pushHighlight(
+      "repeated_tactics",
+      "Recent versions kept revisiting the same tactic family, so the next plan should name what is materially different this time.",
+      ["plan-memory-repeated-tactics"],
+      ["summary", "monitoring", "escalation"],
+      "medium",
+    );
+  }
+
+  if (memory?.current_plan?.recommendation_receipts?.deferred_count) {
+    pushHighlight(
+      "deferred_recommendations_open",
+      "Some earlier recommendations were deferred by staff, so the next plan should explain whether they stay deferred, get replaced, or return with a clearer next step.",
+      ["plan-memory-recommendations-deferred"],
+      ["monitoring", "escalation"],
+      "medium",
+    );
+  }
+
+  if (memory?.current_plan?.recommendation_receipts?.escalated_count) {
+    pushHighlight(
+      "escalated_recommendations_present",
+      "Staff already escalated some previous recommendations, so the next version should carry that stronger route forward or explain clearly why it no longer applies.",
+      ["plan-memory-recommendations-escalated"],
+      ["summary", "monitoring", "escalation"],
+      "high",
+    );
+  }
+
+  if (memory?.current_plan?.recommendation_receipts?.open_count) {
+    pushHighlight(
+      "unconfirmed_recommendations_open",
+      "Some earlier recommendations still lack a staff receipt, so the next plan should make the missing confirmation path explicit.",
+      ["plan-memory-recommendations-open"],
+      ["monitoring", "escalation"],
+      memory.current_plan.recommendation_receipts.open_count > 1 ? "high" : "medium",
+    );
+  }
+
+  if (memory?.stalled_tactic_families?.length) {
+    pushHighlight(
+      "stalled_tactics",
+      "Some tactic families already stalled, so the next plan should upgrade the route or fallback instead of quietly retrying it.",
+      ["plan-memory-stalled-tactics"],
+      ["monitoring", "escalation"],
+      "high",
+    );
+  }
+
+  if (memory?.current_plan?.outcome_trajectory === "worsened") {
+    pushHighlight(
+      "outcome_worsened",
+      "Later live evidence suggests the previous plan did not stabilize the case, so this version should clearly change course.",
+      ["plan-memory-outcome-worsened"],
+      ["summary", "monitoring", "escalation"],
+      "high",
+    );
+  } else if (memory?.current_plan?.outcome_trajectory === "stalled") {
+    pushHighlight(
+      "outcome_stalled",
+      "Later live evidence suggests the previous plan did not create enough movement, so the next plan should make the stronger next move explicit.",
+      ["plan-memory-outcome-stalled"],
+      ["summary", "monitoring", "escalation"],
+      "high",
+    );
+  }
+
+  if (responsePath?.repeated_client_channel || responsePath?.alternate_audience_open) {
+    pushHighlight(
+      "contact_route_not_landing",
+      "The current contact path is still weak or repeating, so the next plan should show what route changes now rather than preserving the blocked path.",
+      [
+        "execution-contact-path-weak",
+        "execution-stalled",
+        "execution-same-channel-repeated",
+        "execution-care-circle-route-open",
+      ],
+      ["monitoring", "escalation"],
+      "high",
+    );
+  }
+
+  const mustExplainChanges = highlights.some((item) => item.priority === "high") || highlights.length >= 2;
+  return normalizeHealthPlanChangeContext({
+    must_explain_changes: mustExplainChanges,
+    previous_plan_version: Number.isFinite(Number(memory?.current_plan?.current_version))
+      ? Number(memory.current_plan.current_version)
+      : null,
+    outcome_trajectory: memory?.current_plan?.outcome_trajectory || null,
+    reason_codes: reasonCodes,
+    highlight_signal_ids: highlights.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []),
+    highlights,
+  });
+}
+
+function buildHealthPlanSectionGuidance(profile, predictiveContext, sourceSignals, organization = null, planMemory = null, changeContext = null) {
+  const sourceSignalIds = new Set(
+    (Array.isArray(sourceSignals) ? sourceSignals : [])
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter(Boolean),
+  );
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const evidenceDigest = buildHealthPlanEvidenceDigest(sourceSignals);
+  const normalizedChangeContext = normalizeHealthPlanChangeContext(changeContext)
+    || buildHealthPlanChangeContext(profile, predictiveContext, sourceSignals, planMemory, organization);
+  const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts.filter((alert) => !alert?.resolved_at) : [];
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const hasCheckins = Boolean(profile?.checkins?.enabled);
+  const hasBrainCoach = Boolean(profile?.brainCoach?.enabled);
+  const medicationFollowupOpen = Boolean(
+    medications.length
+    && (
+      medications.some((med) => med?.reminders_enabled === false)
+      || ["missed", "late", "skipped", "unconfirmed"].includes(String(profile?.medicationActivity?.status || "").trim().toLowerCase())
+    ),
+  );
+  const hasOfflineSensors = sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const separateMedicationReliabilityLane = medicationFollowupOpen && hasOfflineSensors;
+  const pickSignals = (...ids) => [...new Set(ids.flat().map((id) => nullIfBlank(id)).filter((id) => id && sourceSignalIds.has(id)))];
+  const topPrioritySignals = Array.isArray(evidenceDigest?.top_priority_signal_ids) ? evidenceDigest.top_priority_signal_ids : [];
+  const changeSignals = Array.isArray(normalizedChangeContext?.highlight_signal_ids) ? normalizedChangeContext.highlight_signal_ids : [];
+
+  const summarySignals = pickSignals(criticalSignalIds, topPrioritySignals.slice(0, 3), changeSignals.slice(0, 2));
+  const goalSignals = pickSignals(
+    ["risk-latest-score", "forecast-near-term"],
+    medicationFollowupOpen ? ["medication-plan"] : [],
+    (hasCheckins || hasBrainCoach) ? ["service-checkins", "service-brain-coach"] : [],
+  );
+  const dailySignals = pickSignals(
+    medicationFollowupOpen ? ["medication-plan"] : [],
+    (hasCheckins || hasBrainCoach) ? ["service-checkins", "service-brain-coach"] : [],
+  );
+  const monitoringSignals = pickSignals(
+    alerts.length ? ["alert-active"] : [],
+    hasOfflineSensors ? ["sensor-status"] : [],
+    ["execution-followthrough-open", "execution-contact-path-weak", "execution-stalled", "outcome-handoff-open", "outcome-incident-open"],
+    evidenceDigest?.freshness_gap ? ["context-live-profile-only"] : [],
+    changeSignals,
+  );
+  const escalationSignals = pickSignals(
+    criticalSignalIds,
+    ["execution-contact-path-weak", "execution-stalled", "execution-care-circle-route-open", "outcome-handoff-open", "outcome-incident-open"],
+    changeSignals,
+  );
+  const caregiverSignals = pickSignals(
+    ["consent-family-sharing", "care-circle-context", "execution-care-circle-route-open"],
+    policy.family_sharing_allowed ? [] : ["context-live-profile-only"],
+  );
+
+  return normalizeHealthPlanSectionGuidance({
+    summary: {
+      focus_text: normalizedChangeContext?.must_explain_changes
+        ? "Keep the summary anchored in today's strongest care signals and be clear about what changed in the response path from the previous plan or baseline."
+        : "Keep the summary anchored in today's strongest care signals and the current need for practical support.",
+      why_now: evidenceDigest?.freshness_gap
+        ? "Some key evidence is stale or incomplete, so the summary should stay honest about what still needs fresh confirmation."
+        : "The summary should reflect the freshest risk and care signals rather than a generic care-plan intro.",
+      caution_text: evidenceDigest?.freshness_gap
+        ? "Do not let the summary sound settled until today's live picture has been refreshed."
+        : "Do not smooth over unresolved risk or contact tension just to make the summary read cleanly.",
+      evidence_gap_text: evidenceDigest?.freshness_gap
+        ? "A fresh touchpoint is still needed before the team treats today's picture as fully current."
+        : null,
+      success_criteria: policy.response_expectation === "same-day review"
+        ? "The summary is useful only if staff can tell what must happen today, who owns it, and what still needs confirmation."
+        : "The summary is useful only if staff can tell the next support window, the main owner, and the remaining uncertainty.",
+      evidence_posture: evidenceDigest?.freshness_gap ? "verify_first" : "act_now",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: summarySignals,
+    },
+    goals: {
+      focus_text: "Use the goals to protect stability over the next support window: safe contact, steady routines, and practical follow-through.",
+      why_now: "Goals should help the team orient around what needs to stay stable before they move into task-level detail.",
+      caution_text: "Keep goals practical and anchored in the current care picture rather than broad wellbeing language.",
+      evidence_gap_text: null,
+      success_criteria: "A useful goal should tell the team what stability looks like over the next support window.",
+      evidence_posture: "act_now",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: goalSignals,
+    },
+    daily_support: {
+      focus_text: "Use daily support for the concrete routines that can reduce missed medication, missed contact, or day-to-day drift today.",
+      why_now: "This section works best when it turns saved service rhythm and medication timing into usable support steps.",
+      caution_text: "Keep daily support close to the saved routines and today's follow-up needs rather than vague encouragement.",
+      evidence_gap_text: medicationFollowupOpen
+        ? "The team still needs to confirm whether today's medication or routine friction is improving in real life."
+        : null,
+      success_criteria: "A daily-support step is useful only if staff or the client can tell when the routine actually happened.",
+      evidence_posture: "act_now",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: dailySignals,
+    },
+    monitoring: {
+      focus_text: separateMedicationReliabilityLane
+        ? "Use monitoring to keep two checks separate: confirm whether medication adherence is drifting in real life, and separately verify whether offline sensors are hiding or exaggerating today's risk picture."
+        : "Use monitoring to check whether alerts, sensors, direct contact, and today's live picture actually agree, and record what changes.",
+      why_now: separateMedicationReliabilityLane
+        ? "This section should help staff distinguish real client deterioration from missing or unreliable device evidence before they escalate the wrong problem."
+        : "This section should tell staff what to watch, what to verify, and what would count as meaningful movement today.",
+      caution_text: "Monitoring should stay verification-heavy whenever freshness is weak, contact is unresolved, or the signals conflict.",
+      evidence_gap_text: separateMedicationReliabilityLane
+        ? "The team still needs fresh confirmation about dose status and separate confirmation that device silence is not distorting today's live care picture."
+        : "The team still needs fresh confirmation about whether today's live care picture matches the strongest saved signals.",
+      success_criteria: "A monitoring step is useful only if it says what will be checked, what change matters, and what record counts as the first real receipt of progress.",
+      evidence_posture: "verify_first",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: monitoringSignals,
+    },
+    escalation: {
+      focus_text: separateMedicationReliabilityLane
+        ? "Use escalation for the explicit same-day triggers if dose status still cannot be confirmed, if device reliability stays unresolved, or if both problems are still obscuring the live risk picture."
+        : "Use escalation for the explicit same-day triggers, alternate routes, named ownership, and closure proof if today's checks do not confirm safety or progress.",
+      why_now: separateMedicationReliabilityLane
+        ? "This section should leave no ambiguity about when the team is escalating a client-risk problem versus escalating a data-reliability problem."
+        : "This section should leave no ambiguity about when the team must escalate or switch routes.",
+      caution_text: policy.response_expectation === "same-day review"
+        ? "Do not leave same-day escalation implied; if today's checks fail, the next route should already be named."
+        : "If the current route fails, escalation should still name the next stronger fallback rather than waiting passively.",
+      evidence_gap_text: responsePath?.first_contact_recorded
+        ? null
+        : "The case still lacks a reliable receipt of contact or closure, so escalation cannot stay vague.",
+      success_criteria: "An escalation step is useful only if staff can tell exactly when it triggers, who moves it, and what proof closes it.",
+      evidence_posture: "act_now",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: escalationSignals,
+    },
+    caregiver_guidance: {
+      focus_text: "Use caregiver guidance only for the approved sharing boundary, named care-circle ownership, and the support role others can safely play.",
+      why_now: "This section should stay disciplined about consent, the approved care circle, and who is meant to receive client-specific updates.",
+      caution_text: policy.family_sharing_allowed
+        ? "Do not drift into staff-only escalation detail when this section is meant for the approved care circle."
+        : "Do not share client-specific detail beyond staff or approved providers until consent is confirmed.",
+      evidence_gap_text: policy.family_sharing_allowed
+        ? null
+        : "The sharing boundary is still unresolved, so caregiver guidance must stay narrow until consent is confirmed.",
+      success_criteria: "Caregiver guidance is useful only if the approved audience is clear and the support role does not exceed the sharing boundary.",
+      evidence_posture: policy.family_sharing_allowed ? "act_now" : "boundary_limited",
+      urgency_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: caregiverSignals,
+    },
+  });
+}
+
+function buildHealthPlanCoverageRequirements(profile, predictiveContext, sourceSignals, organization = null, planMemory = null, changeContext = null) {
+  const sourceSignalIds = new Set(
+    sourceSignals
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter(Boolean),
+  );
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  const requirements = [];
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const remindersDisabled = medications.some((med) => med?.reminders_enabled === false);
+  const hasActiveAlerts = alerts.some((alert) => !alert?.resolved_at);
+  const hasOfflineSensors = sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const hasCheckins = Boolean(profile?.checkins?.enabled);
+  const hasBrainCoach = Boolean(profile?.brainCoach?.enabled);
+  const medicationFollowupOpen = medications.length && (remindersDisabled || ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus));
+  const predictiveAvailable = Boolean(
+    predictiveContext?.latestScore || (Array.isArray(predictiveContext?.forecastRows) && predictiveContext.forecastRows.length),
+  );
+  const executionBrief = normalizeHealthPlanExecutionBrief(
+    buildHealthPlanExecutionFeedback(profile, sourceSignals, organization)?.execution_brief,
+  );
+  const normalizedChangeContext = normalizeHealthPlanChangeContext(changeContext)
+    || buildHealthPlanChangeContext(profile, predictiveContext, sourceSignals, planMemory, organization);
+  const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const decisionBranches = buildHealthPlanDecisionBranches(profile, predictiveContext, sourceSignals, organization);
+  const accountabilityCommitments = buildHealthPlanAccountabilityCommitments(profile, predictiveContext, sourceSignals, organization);
+  const staleOrUnknownCriticalSignals = criticalSignalIds.filter((signalId) => {
+    const signal = sourceSignals.find((entry) => entry?.id === signalId);
+    const category = normalizeHealthPlanSignalCategory(signal?.category);
+    const freshness = normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown");
+    const freshnessSensitive = Boolean(signal?.observed_at) || ["risk", "forecast", "alert", "medication", "sensor"].includes(category);
+    return freshnessSensitive && (freshness === "stale" || freshness === "unknown");
+  });
+  const pushRequirement = (code, description, signalIds, requiredSections, match = "any", options = {}) => {
+    const requiredSignalIds = [...new Set((signalIds || []).map((id) => nullIfBlank(id)).filter((id) => id && sourceSignalIds.has(id)))];
+    const sections = [...new Set((requiredSections || []).map((section) => nullIfBlank(section)).filter(Boolean))];
+    if (!requiredSignalIds.length || !sections.length) return;
+    requirements.push({
+      code,
+      description,
+      required_signal_ids: requiredSignalIds,
+      required_sections: sections,
+      match: match === "all" ? "all" : "any",
+      priority: options.priority === "high" ? "high" : "medium",
+      due_window: options.due_window === "same_day" ? "same_day" : options.due_window === "within_24h" ? "within_24h" : null,
+      minimum_section_coverage: Number.isFinite(Number(options.minimum_section_coverage))
+        ? Math.max(1, Math.min(sections.length, Math.round(Number(options.minimum_section_coverage))))
+        : null,
+    });
+  };
+
+  if (!familyConsent) {
+    pushRequirement(
+      "respect_sharing_boundary",
+      "Address the staff-only or approved-provider sharing boundary before any caregiver-facing guidance is used.",
+      ["consent-family-sharing"],
+      ["caregiver_guidance", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (!careProviders.length) {
+    pushRequirement(
+      "assign_named_owner",
+      "Assign or confirm one named owner for follow-up before the next outreach cycle.",
+      ["care-circle-context"],
+      ["caregiver_guidance", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (medicationFollowupOpen) {
+    pushRequirement(
+      "support_medication_followup",
+      "Turn medication risk into daily support or monitoring steps.",
+      ["medication-plan"],
+      ["daily_support", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (hasActiveAlerts) {
+    pushRequirement(
+      "review_active_alerts",
+      "Carry active alerts into monitoring or escalation actions.",
+      ["alert-active"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (hasOfflineSensors) {
+    pushRequirement(
+      "check_sensor_reliability",
+      "Treat offline or silent sensors as an explicit monitoring or escalation concern.",
+      ["sensor-status"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "medium", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h" },
+    );
+  }
+
+  if (medicationFollowupOpen && hasOfflineSensors) {
+    pushRequirement(
+      "separate_medication_from_signal_reliability",
+      "Keep medication adherence risk separate from sensor or device reliability risk so staff do not confuse client deterioration with missing data.",
+      ["medication-plan", "sensor-status"],
+      ["monitoring", "escalation"],
+      "all",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (hasCheckins || hasBrainCoach) {
+    pushRequirement(
+      "maintain_service_routines",
+      "Anchor the plan in the current check-in or Brain Coach service rhythm.",
+      ["service-checkins", "service-brain-coach"],
+      ["daily_support", "monitoring"],
+      "any",
+      { priority: "medium", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  const contradictedEffectiveFamilies = new Set(
+    Array.isArray(memory.contradicted_effective_tactic_families) ? memory.contradicted_effective_tactic_families : [],
+  );
+  const supportedEffectiveFamilies = Array.isArray(memory.effective_tactic_families)
+    ? memory.effective_tactic_families.filter((family) => !contradictedEffectiveFamilies.has(family))
+    : [];
+
+  if (supportedEffectiveFamilies.length && sourceSignalIds.has("plan-memory-effective-tactics")) {
+    const effectiveTacticSignals = new Set(["plan-memory-effective-tactics"]);
+    for (const family of supportedEffectiveFamilies) {
+      for (const signalId of healthPlanTacticFamilySignalIds(family, sourceSignalIds)) {
+        effectiveTacticSignals.add(signalId);
+      }
+    }
+    pushRequirement(
+      "preserve_effective_tactics",
+      "Carry forward the routines or tactic families that recent evidence suggests are still helping this client, unless the live picture now clearly contradicts them.",
+      [...effectiveTacticSignals],
+      ["goals", "daily_support"],
+      "any",
+      { priority: "medium", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (contradictedEffectiveFamilies.size && sourceSignalIds.has("plan-memory-effective-tactics-contradicted")) {
+    const contradictedTacticSignals = new Set(["plan-memory-effective-tactics-contradicted"]);
+    for (const family of contradictedEffectiveFamilies) {
+      for (const signalId of healthPlanTacticFamilySignalIds(family, sourceSignalIds)) {
+        contradictedTacticSignals.add(signalId);
+      }
+    }
+    pushRequirement(
+      "reframe_contradicted_effective_tactics",
+      "If a tactic helped before but today's evidence now contradicts it, the new plan should say not to rely on that old pattern unchanged and should name the stronger replacement or verification step.",
+      [...contradictedTacticSignals],
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("outcome-handoff-open") || sourceSignalIds.has("outcome-incident-open")) {
+    pushRequirement(
+      "carry_forward_open_operational_loops",
+      "Carry unresolved handoff or incident loops into monitoring and escalation so the next plan does not restart from zero.",
+      ["outcome-handoff-open", "outcome-incident-open"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-review-actions") || sourceSignalIds.has("plan-memory-evidence-drift")) {
+    pushRequirement(
+      "resolve_prior_plan_gaps",
+      "Carry unresolved review gaps or evidence drift from the previous saved plan into monitoring and escalation so the next version fixes them instead of repeating them.",
+      ["plan-memory-review-actions", "plan-memory-evidence-drift"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-recommendations-deferred")) {
+    pushRequirement(
+      "resolve_deferred_recommendations",
+      "Carry forward recommendations that staff previously deferred, including the reason, next timing, or replacement route.",
+      ["plan-memory-recommendations-deferred"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "medium", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-recommendations-escalated")) {
+    pushRequirement(
+      "carry_forward_escalated_recommendations",
+      "If staff already escalated a prior recommendation, the next plan should preserve that stronger route or explain clearly why the route changes now.",
+      ["plan-memory-recommendations-escalated"],
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-recommendations-open")) {
+    pushRequirement(
+      "close_unconfirmed_recommendations",
+      "Some prior recommendations still lack a recorded staff receipt, so the next plan should make the missing confirmation, deferral, or escalation path explicit.",
+      ["plan-memory-recommendations-open"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-actionability-weak")) {
+    pushRequirement(
+      "raise_operational_actionability",
+      "If the last review still judged the plan weak on actionability, the next version should make owner, timing, branching, and completion receipts explicit enough for staff to execute without guessing.",
+      ["plan-memory-actionability-weak"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-grounding-weak")) {
+    pushRequirement(
+      "strengthen_live_grounding",
+      "If the last review still judged grounding as weak, the next version should tie its key moves more explicitly to current signals or to fresh verification where evidence is incomplete.",
+      ["plan-memory-grounding-weak"],
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-outcome-worsened")) {
+    pushRequirement(
+      "change_course_after_worsening",
+      "If later live evidence suggests the previous plan was followed by a heavier care burden, the next version should make the stronger response path explicit rather than preserving the same framing.",
+      ["plan-memory-outcome-worsened"],
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-outcome-stalled")) {
+    pushRequirement(
+      "unstick_stalled_outcome",
+      "If later live evidence suggests the previous plan did not create enough movement, the next version should name the stronger next move instead of preserving the stalled response path.",
+      ["plan-memory-outcome-stalled"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("execution-contact-path-weak") || sourceSignalIds.has("execution-stalled")) {
+    const alternateRouteSignalIds = [
+      "execution-contact-path-weak",
+      "execution-stalled",
+      "execution-same-channel-repeated",
+      "execution-care-circle-route-open",
+    ].filter((signalId) => sourceSignalIds.has(signalId));
+    pushRequirement(
+      "adapt_contact_path",
+      "If the current contact path is not landing or follow-through is stalled, monitoring and escalation should name the alternate channel, audience, or owner route rather than repeating the same tactic.",
+      alternateRouteSignalIds,
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (
+    executionBrief?.missing_receipt
+    && (
+      sourceSignalIds.has("execution-followthrough-open")
+      || sourceSignalIds.has("execution-contact-path-weak")
+      || sourceSignalIds.has("execution-stalled")
+    )
+  ) {
+    const executionReceiptSignalIds = [
+      "execution-followthrough-open",
+      "execution-contact-path-weak",
+      "execution-stalled",
+      "execution-same-channel-repeated",
+      "execution-care-circle-route-open",
+    ].filter((signalId) => sourceSignalIds.has(signalId));
+    const receiptLabel =
+      executionBrief.missing_receipt === "first_contact"
+        ? "first-contact receipt"
+        : executionBrief.missing_receipt === "closure"
+          ? "closure receipt"
+          : "follow-through receipt";
+    pushRequirement(
+      "close_execution_receipt_gap",
+      `If the current route still lacks a recorded ${receiptLabel}, the next plan should name that missing proof and the concrete route that will produce it now.`,
+      executionReceiptSignalIds,
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-repeated-tactics")) {
+    pushRequirement(
+      "differentiate_repeated_tactic",
+      "If recent plans kept revisiting the same tactic family, the next plan should say what is materially different this time and what receipt will prove progress.",
+      ["plan-memory-repeated-tactics"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "medium", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-stalled-tactics")) {
+    pushRequirement(
+      "upgrade_stalled_tactic",
+      "If earlier tactic families still stalled, the next plan should name the stronger fallback, alternate route, or closure proof instead of repeating the same move.",
+      ["plan-memory-stalled-tactics"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("plan-memory-receipt-gap")) {
+    pushRequirement(
+      "close_execution_receipt_gap",
+      "If the previous plan still lacks recorded execution proof, the next plan should name the missing receipt and the concrete route that will produce it.",
+      ["plan-memory-receipt-gap"],
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (normalizedChangeContext?.must_explain_changes && normalizedChangeContext.highlight_signal_ids.length) {
+    const requiredSections = [...new Set(
+      (Array.isArray(normalizedChangeContext.highlights) ? normalizedChangeContext.highlights : [])
+        .flatMap((item) => Array.isArray(item?.required_sections) ? item.required_sections : []),
+    )].filter(Boolean);
+    pushRequirement(
+      "explain_material_change",
+      "If the live picture or prior saved plan shifted materially, the next version should say what changed since the last plan and what is different in the response now.",
+      normalizedChangeContext.highlight_signal_ids,
+      requiredSections.length ? requiredSections : ["summary", "monitoring"],
+      "any",
+      {
+        priority: normalizedChangeContext.reason_codes.some((code) =>
+          ["evidence_shifted", "stalled_tactics", "outcome_worsened", "outcome_stalled", "contact_route_not_landing"].includes(code))
+          ? "high"
+          : "medium",
+        due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+        minimum_section_coverage: 2,
+      },
+    );
+  }
+
+  if (decisionBranches.length) {
+    pushRequirement(
+      "branch_after_first_check",
+      "Make the next monitoring and escalation steps conditional on what the first real-world verification actually finds, so the plan does not stop at one generic next move.",
+      decisionBranches.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []),
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  const urgentCommitments = accountabilityCommitments.filter((commitment) =>
+    commitment?.status === "open"
+    && (commitment?.priority === "high" || commitment?.due_window === "same_day"),
+  );
+  if (urgentCommitments.length) {
+    pushRequirement(
+      "anchor_accountability_receipts",
+      "For urgent follow-up, say what counts as done, what gets recorded, and what receipt or proof closes the loop.",
+      urgentCommitments.flatMap((commitment) => Array.isArray(commitment?.signal_ids) ? commitment.signal_ids : []),
+      ["monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (sourceSignalIds.has("evidence-predictive-live-mismatch") || sourceSignalIds.has("evidence-passive-signal-conflict")) {
+    const conflictSignalIds = [
+      "evidence-predictive-live-mismatch",
+      "evidence-passive-signal-conflict",
+    ].filter((signalId) => sourceSignalIds.has(signalId));
+    pushRequirement(
+      "reconcile_conflicting_evidence",
+      "If predictive, passive, or live operational signals conflict, the plan should say that plainly and require direct reconciliation before anyone assumes stability.",
+      conflictSignalIds,
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (["critical", "high", "urgent"].includes(riskBand)) {
+    pushRequirement(
+      "cover_high_risk_outlook",
+      "Address the current predictive high-risk picture in goals, monitoring, or escalation.",
+      ["risk-latest-score", "forecast-near-term"],
+      ["goals", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (
+    criticalSignalIds.length > 0
+    || policy.response_expectation === "same-day review"
+    || (!predictiveAvailable && (hasActiveAlerts || remindersDisabled || !careProviders.length))
+  ) {
+    const stabilizationSignals = criticalSignalIds.length
+      ? criticalSignalIds
+      : sourceSignals
+        .slice(0, 3)
+        .map((signal) => nullIfBlank(signal?.id))
+        .filter(Boolean);
+    pushRequirement(
+      "stabilize_low_confidence_context",
+      "Be explicit that this is a stabilizing support plan that still depends on verification, refreshed live context, and clear follow-up ownership.",
+      stabilizationSignals,
+      ["summary", "escalation"],
+      "any",
+      { priority: "high", due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h", minimum_section_coverage: 2 },
+    );
+  }
+
+  if (staleOrUnknownCriticalSignals.length > 0) {
+    pushRequirement(
+      "refresh_live_status",
+      "Make it explicit that stale or unverified critical signals require a fresh touchpoint before the team assumes the client is stable.",
+      staleOrUnknownCriticalSignals,
+      ["summary", "monitoring", "escalation"],
+      "any",
+      { priority: "high", due_window: "same_day", minimum_section_coverage: 2 },
+    );
+  }
+
+  return requirements;
+}
+
+function buildHealthPlanPolicy(profile, predictiveContext, organization = null, language = "de") {
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const hasActiveAlerts = Array.isArray(profile?.alerts) && profile.alerts.some((alert) => !alert?.resolved_at);
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const needsRapidReview =
+    ["critical", "high", "urgent"].includes(riskBand) ||
+    hasActiveAlerts ||
+    ["missed", "late", "skipped", "unconfirmed"].includes(medicationStatus);
+
+  return {
+    organization_name: organization?.name || "Red Cross",
+    organization_country: organization?.country || null,
+    organization_timezone: organization?.timezone || null,
+    organization_default_language: organization?.defaultLanguage || language,
+    family_sharing_allowed: familyConsent,
+    has_assigned_care_circle: careProviders.length > 0,
+    care_circle_count: careProviders.length,
+    response_expectation: needsRapidReview ? "same-day review" : "review within 24 hours",
+    assignment_expectation: careProviders.length > 0 ? "confirm one named owner on the care circle" : "assign a named staff owner before the next outreach cycle",
+    sharing_boundary: familyConsent
+      ? "shareable with approved caregivers and family in plain language"
+      : "staff-only or approved-provider-only until family consent is confirmed",
+  };
+}
+
+function buildHealthPlanGenerationAssessment(profile, predictiveContext, sourceSignals, organization = null, planMemory = null) {
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const activeAlerts = alerts.filter((alert) => !alert?.resolved_at);
+  const checkinsEnabled = Boolean(profile?.checkins?.enabled);
+  const brainCoachEnabled = Boolean(profile?.brainCoach?.enabled);
+  const medicationActivityStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const modelConfidenceValues = (Array.isArray(predictiveContext?.forecastRows) ? predictiveContext.forecastRows : [])
+    .map((row) => Number(row?.model_confidence))
+    .filter((value) => Number.isFinite(value));
+  const predictiveConfidence = modelConfidenceValues.length
+    ? modelConfidenceValues.reduce((sum, value) => sum + value, 0) / modelConfidenceValues.length
+    : null;
+  const predictiveAvailable = Boolean(
+    predictiveContext?.latestScore || (Array.isArray(predictiveContext?.forecastRows) && predictiveContext.forecastRows.length),
+  );
+  const criticalSignalCount = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals).length;
+  const freshnessRelevantSignals = sourceSignals.filter((signal) => !String(signal?.id || "").startsWith("plan-memory-"));
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  const outcomeState = buildHealthPlanOutcomeState(profile);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const executionFeedback = buildHealthPlanExecutionFeedback(profile, sourceSignals, organization);
+  const executionBrief = normalizeHealthPlanExecutionBrief(executionFeedback.execution_brief);
+  const liveSignalIds = new Set(
+    freshnessRelevantSignals
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter((id) =>
+        id
+        && id !== "context-live-profile-only"
+        && id !== "care-circle-context"
+        && id !== "consent-family-sharing"
+        && !String(id).startsWith("outcome-")
+        && !String(id).startsWith("plan-memory-")),
+  );
+  const hasAnyRecordedOutcome = Boolean(
+    nullIfBlank(firstValue(profile?.checkins?.last_outcome, profile?.checkins?.lastOutcome))
+    || nullIfBlank(firstValue(profile?.brainCoach?.last_outcome, profile?.brainCoach?.lastOutcome))
+    || nullIfBlank(profile?.medicationActivity?.occurred_at)
+    || nullIfBlank(profile?.medicationActivity?.reported_at)
+    || activeAlerts.length
+    || sensors.some((sensor) => nullIfBlank(sensor?.last_reading_at) || String(sensor?.status || "").trim().toLowerCase() === "online"),
+  );
+  const medicationsMissingSchedule = medications.filter((med) => !Array.isArray(med?.schedule_times) || !med.schedule_times.filter(Boolean).length);
+  const staleSignals = freshnessRelevantSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "stale");
+  const unknownFreshnessSignals = freshnessRelevantSignals.filter((signal) => normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown") === "unknown");
+  const criticalSignalIds = new Set(deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals));
+  const staleCriticalSignals = staleSignals.filter((signal) => criticalSignalIds.has(signal?.id));
+  const freshestSignalAt = latestTimestamp(freshnessRelevantSignals.map((signal) => signal?.observed_at));
+  const observedTimestamps = timestampValues(freshnessRelevantSignals.map((signal) => signal?.observed_at));
+  const stalestSignalAt = observedTimestamps.length
+    ? observedTimestamps
+      .slice()
+      .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0]
+    : null;
+  const reasons = [];
+  const evidenceTension = buildHealthPlanEvidenceTension(profile, predictiveContext, sourceSignals, organization);
+  const tensionSignalIds = new Set(evidenceTension.signals.map((signal) => signal?.id).filter(Boolean));
+
+  if (freshnessRelevantSignals.length < 4) {
+    reasons.push({
+      code: "thin_signal_snapshot",
+      severity: freshnessRelevantSignals.length < 3 ? "high" : "medium",
+      detail: "The plan is being generated from a thin signal snapshot and needs a fuller care picture before sharing widely.",
+    });
+  }
+
+  if (!careProviders.length) {
+    reasons.push({
+      code: "no_named_owner",
+      severity: activeAlerts.length || criticalSignalCount ? "high" : "medium",
+      detail: "No named care-circle owner is linked, so follow-up ownership still needs to be confirmed.",
+    });
+  }
+
+  if (medications.length && medicationsMissingSchedule.length) {
+    reasons.push({
+      code: "medication_schedule_incomplete",
+      severity: "high",
+      detail: "At least one medication is missing saved reminder times, which weakens day-to-day follow-up guidance.",
+    });
+  }
+
+  if (!hasAnyRecordedOutcome) {
+    reasons.push({
+      code: "limited_live_feedback",
+      severity: "medium",
+      detail: "Recent live feedback is limited, so the plan should be treated as a cautious support draft until contact is refreshed.",
+    });
+  }
+
+  if (staleCriticalSignals.length) {
+    reasons.push({
+      code: "critical_signals_stale",
+      severity: "high",
+      detail: "At least one critical signal is stale or lacks a fresh timestamp, so the plan must prioritize same-day reality checks before anyone assumes stability.",
+    });
+  } else if (!freshestSignalAt && criticalSignalCount > 0) {
+    reasons.push({
+      code: "critical_freshness_unknown",
+      severity: "high",
+      detail: "Critical signals are present, but their freshness is unclear, so the plan should explicitly demand a new touchpoint before relying on them.",
+    });
+  }
+
+  if (staleSignals.length >= 2 && !hasAnyRecordedOutcome) {
+    reasons.push({
+      code: "live_picture_stale",
+      severity: "medium",
+      detail: "Multiple care signals are stale, which means the live care picture may have drifted from the saved profile.",
+    });
+  }
+
+  if (!predictiveAvailable && criticalSignalCount > 0) {
+    reasons.push({
+      code: "predictive_context_missing",
+      severity: "medium",
+      detail: "Predictive inputs are unavailable even though the live care picture includes critical signals.",
+    });
+  } else if (predictiveConfidence != null && predictiveConfidence < 0.55) {
+    reasons.push({
+      code: "predictive_confidence_low",
+      severity: "medium",
+      detail: "Predictive confidence is low, so any risk outlook should be treated as directional rather than definitive.",
+    });
+  }
+
+  if (!checkinsEnabled && !brainCoachEnabled && !careProviders.length && (activeAlerts.length || medicationActivityStatus === "missed")) {
+    reasons.push({
+      code: "no_structured_follow_up_path",
+      severity: "high",
+      detail: "There is no structured follow-up path in place for a client who already needs active support.",
+    });
+  }
+
+  if (executionBrief?.route_state === "stalled") {
+    reasons.push({
+      code: "execution_followthrough_stalled",
+      severity: "high",
+      detail: executionBrief.summary_text
+        || "The current follow-through route appears stalled, so the next plan should move to a stronger route with a clearer receipt path.",
+    });
+  }
+
+  if (outcomeState.handoffOpen && !responsePath?.first_contact_recorded) {
+    reasons.push({
+      code: "handoff_open_without_first_contact",
+      severity: "high",
+      detail: "A prior handoff is still open without a recorded first-contact receipt, so the next plan should carry that loop forward instead of starting from zero.",
+    });
+  }
+
+  if (executionBrief?.repeated_client_channel && !responsePath?.first_contact_recorded) {
+    reasons.push({
+      code: "repeated_route_without_receipt",
+      severity: executionBrief.alternate_audience_open ? "high" : "medium",
+      detail: `The client route has already repeated on ${describeHealthPlanOutreachChannel(executionBrief.repeated_client_channel)} without a recorded first-contact receipt.`,
+    });
+  }
+
+  if (executionBrief?.alternate_audience_open && !responsePath?.care_circle_route_used) {
+    reasons.push({
+      code: "alternate_route_available_unused",
+      severity: executionBrief.route_state === "stalled" ? "high" : "medium",
+      detail: "An approved care-circle or alternate audience route is available but still has not been used even though the current route is not landing cleanly.",
+    });
+  }
+
+  if (memory.has_existing_plan && memory.current_plan?.review_status !== "reviewed") {
+    reasons.push({
+      code: "prior_plan_not_reviewed",
+      severity: "medium",
+      detail: "The previous saved plan was still draft-only, so the next plan should be treated as part of an unresolved review cycle rather than a clean restart.",
+    });
+  }
+
+  if (memory.current_plan?.automated_review_verdict === "block") {
+    reasons.push({
+      code: "prior_plan_blocked",
+      severity: "high",
+      detail: "The most recent saved plan hit a blocking review verdict, so the next plan should explicitly fix that gap before broader reliance.",
+    });
+  } else if (Array.isArray(memory.current_plan?.unresolved_required_actions) && memory.current_plan.unresolved_required_actions.length) {
+    reasons.push({
+      code: "prior_review_actions_open",
+      severity: "medium",
+      detail: "The previous plan still had review actions outstanding, so the next version should address them directly.",
+    });
+  }
+
+  if (memory.current_plan?.evidence_drift_without_rewrite) {
+    reasons.push({
+      code: "prior_plan_evidence_shifted",
+      severity: "medium",
+      detail: "The last saved wording lagged behind changed evidence, so the next plan should re-check whether the old framing still fits.",
+    });
+  }
+
+  if (Array.isArray(memory.recurring_issue_codes) && memory.recurring_issue_codes.length) {
+    reasons.push({
+      code: "recurring_plan_gaps",
+      severity: "medium",
+      detail: "Some plan review or coordination gaps have repeated across recent versions.",
+    });
+  }
+
+  if (Array.isArray(memory.repeated_tactic_families) && memory.repeated_tactic_families.length) {
+    reasons.push({
+      code: "repeated_tactic_pattern",
+      severity: "medium",
+      detail: "Recent plan versions kept returning to the same tactic families, so the next version should show what is materially different.",
+    });
+  }
+
+  if (Array.isArray(memory.contradicted_effective_tactic_families) && memory.contradicted_effective_tactic_families.length) {
+    reasons.push({
+      code: "prior_effective_tactic_now_contradicted",
+      severity: "high",
+      detail: "Some tactic families helped before, but today's live evidence now suggests they should not be preserved unchanged.",
+    });
+  }
+
+  if (Array.isArray(memory.stalled_tactic_families) && memory.stalled_tactic_families.length) {
+    reasons.push({
+      code: "prior_tactics_stalled",
+      severity: memory.stalled_tactic_families.length > 1 ? "high" : "medium",
+      detail: "Some tactic families were already tried without later evidence of progress, so the next plan should upgrade the fallback rather than rerun them unchanged.",
+    });
+  }
+
+  if (memory.current_plan?.receipt_gap_status) {
+    reasons.push({
+      code: "prior_plan_receipts_open",
+      severity:
+        memory.current_plan.receipt_gap_status === "stalled" || memory.current_plan.receipt_gap_overdue
+          ? "high"
+          : "medium",
+      detail: memory.current_plan.receipt_gap_detail
+        || "The previous saved plan still lacks recorded proof that the key follow-through steps actually landed.",
+    });
+  }
+
+  const recommendationReceipts = memory.current_plan?.recommendation_receipts;
+  if (recommendationReceipts?.deferred_count) {
+    reasons.push({
+      code: "prior_recommendations_deferred",
+      severity: recommendationReceipts.deferred_count > 1 ? "high" : "medium",
+      detail: "Some prior recommendations were deferred by staff, so the next plan should keep those unresolved decisions visible instead of quietly dropping them.",
+    });
+  }
+
+  if (recommendationReceipts?.escalated_count) {
+    reasons.push({
+      code: "prior_recommendations_escalated",
+      severity: "high",
+      detail: "Staff already escalated some prior recommendations, so the next plan should respect that stronger route unless today's live evidence clearly supports a safer downgrade.",
+    });
+  }
+
+  if (recommendationReceipts?.open_count) {
+    reasons.push({
+      code: "prior_recommendations_unconfirmed",
+      severity: recommendationReceipts.open_count > 1 ? "high" : "medium",
+      detail: "Some prior recommendations still lack a staff receipt, so the next plan should make the missing confirmation path explicit.",
+    });
+  }
+
+  if (memory.current_plan?.outcome_trajectory === "worsened") {
+    reasons.push({
+      code: "prior_plan_outcome_worsened",
+      severity: "high",
+      detail: "Later live evidence suggests the previous saved plan was followed by a heavier care burden, so the next version should not reuse the same response framing casually.",
+    });
+  } else if (memory.current_plan?.outcome_trajectory === "stalled") {
+    reasons.push({
+      code: "prior_plan_outcome_stalled",
+      severity: "medium",
+      detail: "Later live evidence suggests the previous saved plan did not move the response loop far enough, so the next version should be materially stronger.",
+    });
+  } else if (memory.current_plan?.outcome_trajectory === "improved" && memory.current_plan?.outcome_confidence_state === "stale") {
+    reasons.push({
+      code: "prior_plan_improvement_stale",
+      severity: "medium",
+      detail: "The previous plan appears to have helped, but that improvement signal is no longer fresh enough to treat as settled fact without re-checking it.",
+    });
+  } else if (memory.current_plan?.outcome_trajectory === "improved" && memory.current_plan?.outcome_confidence_state === "inferred") {
+    reasons.push({
+      code: "prior_plan_improvement_unverified",
+      severity: "medium",
+      detail: "The previous plan may have helped, but the improvement is still mostly inferred rather than directly confirmed by operational receipts.",
+    });
+  } else if (memory.current_plan?.outcome_trajectory === "improved" && memory.current_plan?.outcome_confidence_state === "mixed") {
+    reasons.push({
+      code: "prior_plan_improvement_mixed",
+      severity: "medium",
+      detail: "The previous plan shows some real improvement evidence, but open follow-through gaps mean the next version should preserve it carefully and keep proof visible.",
+    });
+  }
+
+  if (tensionSignalIds.has("evidence-predictive-live-mismatch")) {
+    reasons.push({
+      code: "conflicting_risk_story",
+      severity: "high",
+      detail: "The predictive trend looks calmer than the live operational picture, so the plan should privilege direct verification and same-day caution.",
+    });
+  }
+
+  if (tensionSignalIds.has("evidence-passive-signal-conflict")) {
+    reasons.push({
+      code: "passive_signals_conflict",
+      severity: "high",
+      detail: "Passive reporting and the live operational concern are not reconciled yet, so the plan must not treat passive data as proof of safety.",
+    });
+  }
+
+  const highReasonCount = reasons.filter((reason) => reason.severity === "high").length;
+  const mediumReasonCount = reasons.filter((reason) => reason.severity === "medium").length;
+  const confidence = highReasonCount > 0 || mediumReasonCount >= 3
+    ? "low"
+    : mediumReasonCount > 0
+      ? "medium"
+      : "high";
+  const readiness = confidence === "low"
+    ? "review_and_enrich"
+    : confidence === "medium"
+      ? "review_before_share"
+      : "ready_for_review";
+
+  return {
+    confidence,
+    readiness,
+    source_signal_count: freshnessRelevantSignals.length,
+    critical_signal_count: criticalSignalCount,
+    care_provider_count: careProviders.length,
+    live_signal_count: liveSignalIds.size,
+    stale_signal_count: staleSignals.length,
+    unknown_freshness_signal_count: unknownFreshnessSignals.length,
+    predictive_available: predictiveAvailable,
+    predictive_confidence: predictiveConfidence == null ? null : Math.max(0, Math.min(1, predictiveConfidence)),
+    response_expectation: buildHealthPlanPolicy(profile, predictiveContext, organization).response_expectation,
+    freshest_signal_at: freshestSignalAt,
+    stalest_signal_at: stalestSignalAt,
+    reasons,
+  };
+}
+
+function healthPlanSignalPriorityScore(signal) {
+  const normalized = normalizeHealthPlanSourceSignals([signal])[0];
+  if (!normalized) return 0;
+  if (Number.isFinite(Number(normalized?.priority_score))) {
+    return Math.max(0, Math.round(Number(normalized.priority_score)));
+  }
+  const id = nullIfBlank(normalized.id) || "";
+  const labelDetail = [normalized.label, normalized.detail].filter(Boolean).join(" ").toLowerCase();
+  const strength = normalizeHealthPlanSignalStrength(normalized.strength, "medium");
+  const freshness = normalizeHealthPlanSignalFreshness(normalized.freshness, "unknown");
+  const category = normalizeHealthPlanSignalCategory(normalized.category);
+  const reasonCodes = [];
+  const strengthScore = strength === "high" ? 30 : strength === "medium" ? 20 : 10;
+  const freshnessScore = freshness === "live" ? 9 : freshness === "recent" ? 6 : freshness === "stale" ? 4 : 2;
+  const categoryScore = ["alert", "risk", "medication", "sensor"].includes(category) ? 5 : category === "service" || category === "care-circle" ? 3 : 0;
+  let score = strengthScore + freshnessScore + categoryScore;
+
+  if (freshness === "live") reasonCodes.push("fresh_live_signal");
+  if (id === "alert-active" || category === "alert") {
+    score += 18;
+    reasonCodes.push("active_alerts");
+  }
+  if (id === "outcome-handoff-open") {
+    score += 17;
+    reasonCodes.push("open_operational_loop");
+  }
+  if (id === "outcome-incident-open") {
+    score += 16;
+    reasonCodes.push("open_incident_playbook");
+  }
+  if (id === "evidence-predictive-live-mismatch") {
+    score += 17;
+    reasonCodes.push("live_risk_outweighs_predictive");
+  }
+  if (id === "evidence-passive-signal-conflict") {
+    score += 14;
+    reasonCodes.push("passive_conflict_unresolved");
+  }
+  if (id === "medication-plan" && /\bmissed|late|skipped|unconfirmed\b/i.test(labelDetail)) {
+    score += 15;
+    reasonCodes.push("medication_followup_due");
+  } else if (id === "medication-plan" && /\breminder\b.{0,20}\boff\b/i.test(labelDetail)) {
+    score += 8;
+    reasonCodes.push("medication_routine_drift");
+  }
+  if ((id === "service-checkins" || id === "service-brain-coach") && /\bmissed|failed|unconfirmed|pending|disabled|off\b/i.test(labelDetail)) {
+    score += 13;
+    reasonCodes.push("service_followup_due");
+  }
+  if (id === "sensor-status" && /\boffline|not reporting\b/i.test(labelDetail)) {
+    score += 12;
+    reasonCodes.push("sensor_reliability_gap");
+  }
+  if (id === "care-circle-context" && category === "care-circle" && strength === "high") {
+    score += 12;
+    reasonCodes.push("coverage_or_owner_gap");
+  }
+  if (id === "consent-family-sharing" && /\bnot confirmed\b/i.test(labelDetail)) {
+    score += 6;
+    reasonCodes.push("sharing_boundary_unconfirmed");
+  }
+  if (id === "plan-memory-actionability-weak" || id === "plan-memory-grounding-weak") {
+    score += 12;
+    reasonCodes.push("prior_plan_quality_gap");
+  }
+  if (
+    id === "plan-memory-review-actions"
+    || id === "plan-memory-receipt-gap"
+    || id === "plan-memory-outcome-worsened"
+    || id === "plan-memory-stalled-tactics"
+    || id === "plan-memory-recommendations-open"
+  ) {
+    score += 10;
+    reasonCodes.push("prior_plan_followthrough_gap");
+  }
+  if (freshness === "stale" && reasonCodes.some((code) => ["active_alerts", "medication_followup_due", "service_followup_due", "sensor_reliability_gap"].includes(code))) {
+    score += 4;
+    reasonCodes.push("stale_but_action_relevant");
+  }
+
+  return score;
+}
+
+function healthPlanSignalPriorityReasonCodes(signal) {
+  const normalized = normalizeHealthPlanSourceSignals([signal])[0];
+  if (!normalized) return [];
+  if (Array.isArray(normalized?.priority_reason_codes) && normalized.priority_reason_codes.length) {
+    return normalized.priority_reason_codes;
+  }
+  const id = nullIfBlank(normalized.id) || "";
+  const labelDetail = [normalized.label, normalized.detail].filter(Boolean).join(" ").toLowerCase();
+  const freshness = normalizeHealthPlanSignalFreshness(normalized.freshness, "unknown");
+  const category = normalizeHealthPlanSignalCategory(normalized.category);
+  const strength = normalizeHealthPlanSignalStrength(normalized.strength, "medium");
+  const reasonCodes = [];
+  if (freshness === "live") reasonCodes.push("fresh_live_signal");
+  if (id === "alert-active" || category === "alert") reasonCodes.push("active_alerts");
+  if (id === "outcome-handoff-open") reasonCodes.push("open_operational_loop");
+  if (id === "outcome-incident-open") reasonCodes.push("open_incident_playbook");
+  if (id === "evidence-predictive-live-mismatch") reasonCodes.push("live_risk_outweighs_predictive");
+  if (id === "evidence-passive-signal-conflict") reasonCodes.push("passive_conflict_unresolved");
+  if (id === "medication-plan" && /\bmissed|late|skipped|unconfirmed\b/i.test(labelDetail)) reasonCodes.push("medication_followup_due");
+  else if (id === "medication-plan" && /\breminder\b.{0,20}\boff\b/i.test(labelDetail)) reasonCodes.push("medication_routine_drift");
+  if ((id === "service-checkins" || id === "service-brain-coach") && /\bmissed|failed|unconfirmed|pending|disabled|off\b/i.test(labelDetail)) reasonCodes.push("service_followup_due");
+  if (id === "sensor-status" && /\boffline|not reporting\b/i.test(labelDetail)) reasonCodes.push("sensor_reliability_gap");
+  if (id === "care-circle-context" && category === "care-circle" && strength === "high") reasonCodes.push("coverage_or_owner_gap");
+  if (id === "consent-family-sharing" && /\bnot confirmed\b/i.test(labelDetail)) reasonCodes.push("sharing_boundary_unconfirmed");
+  if (id === "plan-memory-actionability-weak" || id === "plan-memory-grounding-weak") reasonCodes.push("prior_plan_quality_gap");
+  if (
+    id === "plan-memory-review-actions"
+    || id === "plan-memory-receipt-gap"
+    || id === "plan-memory-outcome-worsened"
+    || id === "plan-memory-stalled-tactics"
+    || id === "plan-memory-recommendations-open"
+  ) reasonCodes.push("prior_plan_followthrough_gap");
+  if (freshness === "stale" && reasonCodes.some((code) => ["active_alerts", "medication_followup_due", "service_followup_due", "sensor_reliability_gap"].includes(code))) {
+    reasonCodes.push("stale_but_action_relevant");
+  }
+  return [...new Set(reasonCodes)];
+}
+
+function buildHealthPlanSignalUsefulnessOverlay(sourceSignals, planMemory) {
+  const signals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const memory = normalizeHealthPlanPlanMemory(planMemory);
+  if (!signals.length || !memory.has_existing_plan) return new Map();
+
+  const sourceSignalIds = new Set(signals.map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const contradictedFamilies = new Set(
+    Array.isArray(memory.contradicted_effective_tactic_families) ? memory.contradicted_effective_tactic_families : [],
+  );
+  const supportedFamilies = Array.isArray(memory.effective_tactic_families)
+    ? memory.effective_tactic_families.filter((family) => family && !contradictedFamilies.has(family))
+    : [];
+  const stalledFamilies = Array.isArray(memory.stalled_tactic_families) ? memory.stalled_tactic_families : [];
+  const repeatedFamilies = Array.isArray(memory.repeated_tactic_families) ? memory.repeated_tactic_families : [];
+  const familyOutcomeLearning = Array.isArray(memory.family_outcome_learning) ? memory.family_outcome_learning : [];
+  const familyExecutionLearning = Array.isArray(memory.family_execution_learning) ? memory.family_execution_learning : [];
+  const currentPlan = memory.current_plan || null;
+  const outcomeTrajectory = nullIfBlank(currentPlan?.outcome_trajectory);
+  const outcomeConfidenceState = nullIfBlank(currentPlan?.outcome_confidence_state);
+  const overlay = new Map();
+
+  const ensureEntry = (signalId) => {
+    const normalizedSignalId = nullIfBlank(signalId);
+    if (!normalizedSignalId || !sourceSignalIds.has(normalizedSignalId)) return null;
+    if (!overlay.has(normalizedSignalId)) {
+      overlay.set(normalizedSignalId, {
+        usefulness_score_delta: 0,
+        usefulness_reason_codes: [],
+        supported_tactic_families: [],
+        contradicted_tactic_families: [],
+        stalled_tactic_families: [],
+      });
+    }
+    return overlay.get(normalizedSignalId);
+  };
+
+  const applyFamilies = (families, targetKey, scorePerFamily, reasonCode) => {
+    for (const family of families) {
+      if (!family) continue;
+      for (const signalId of healthPlanTacticFamilySignalIds(family, sourceSignalIds)) {
+        const entry = ensureEntry(signalId);
+        if (!entry) continue;
+        entry.usefulness_score_delta += scorePerFamily;
+        if (!entry.usefulness_reason_codes.includes(reasonCode)) entry.usefulness_reason_codes.push(reasonCode);
+        if (!entry[targetKey].includes(family)) entry[targetKey].push(family);
+      }
+    }
+  };
+
+  const applyDirectSignalBoost = (signalId, scoreDelta, reasonCode) => {
+    const entry = ensureEntry(signalId);
+    if (!entry) return;
+    entry.usefulness_score_delta += scoreDelta;
+    if (!entry.usefulness_reason_codes.includes(reasonCode)) entry.usefulness_reason_codes.push(reasonCode);
+  };
+
+  applyFamilies(supportedFamilies, "supported_tactic_families", 6, "historically_effective_pattern");
+  applyFamilies([...contradictedFamilies], "contradicted_tactic_families", 9, "historically_effective_now_contradicted");
+  applyFamilies(stalledFamilies, "stalled_tactic_families", 5, "historically_stalled_pattern");
+  for (const familyLearning of familyOutcomeLearning) {
+    const family = nullIfBlank(familyLearning?.family);
+    if (!family) continue;
+    const consistencyState = nullIfBlank(familyLearning?.consistency_state);
+    const recencyState = nullIfBlank(familyLearning?.recency_state);
+    if (consistencyState === "reliably_helpful") {
+      applyFamilies([family], "supported_tactic_families", 5, "family_outcomes_reliably_helpful");
+    } else if (consistencyState === "repeatedly_stalled") {
+      applyFamilies([family], "stalled_tactic_families", 7, "family_outcomes_repeatedly_stalled");
+    } else if (consistencyState === "mixed") {
+      applyFamilies([family], "stalled_tactic_families", 4, "family_outcomes_mixed");
+    }
+    if (recencyState === "recently_helping") {
+      applyFamilies([family], "supported_tactic_families", 4, "family_outcomes_recently_helping");
+    } else if (recencyState === "recently_stalled") {
+      applyFamilies([family], "stalled_tactic_families", 5, "family_outcomes_recently_stalled");
+    } else if (recencyState === "recently_slipping") {
+      applyFamilies([family], "stalled_tactic_families", 6, "family_outcomes_recently_slipping");
+    } else if (recencyState === "recently_recovered") {
+      applyFamilies([family], "supported_tactic_families", 5, "family_outcomes_recently_recovered");
+    }
+  }
+  for (const familyLearning of familyExecutionLearning) {
+    const family = nullIfBlank(familyLearning?.family);
+    if (!family) continue;
+    const learningState = nullIfBlank(familyLearning?.learning_state);
+    let scorePerFamily = 0;
+    let reasonCode = null;
+    let targetKey = "stalled_tactic_families";
+    if (learningState === "validated") {
+      const proofFreshness = assessHealthPlanProofFreshness(familyLearning?.latest_updated_at, "review within 24 hours");
+      if (proofFreshness.state === "fresh") {
+        scorePerFamily = 4;
+        reasonCode = "family_receipts_confirmed";
+        targetKey = "supported_tactic_families";
+      } else if (proofFreshness.state === "aging") {
+        scorePerFamily = 2;
+        reasonCode = "family_receipts_need_refresh";
+        targetKey = "supported_tactic_families";
+      } else {
+        scorePerFamily = 5;
+        reasonCode = "family_receipts_stale";
+        targetKey = "stalled_tactic_families";
+      }
+    } else if (learningState === "needs_followthrough") {
+      scorePerFamily = 5;
+      reasonCode = "family_receipts_open";
+    } else if (learningState === "needs_stronger_route") {
+      scorePerFamily = 7;
+      reasonCode = "family_receipts_escalated";
+    } else if (learningState === "mixed") {
+      scorePerFamily = 4;
+      reasonCode = "family_receipts_mixed";
+    }
+    if (!reasonCode || scorePerFamily <= 0) continue;
+    applyFamilies([family], targetKey, scorePerFamily, reasonCode);
+  }
+
+  if (supportedFamilies.length) {
+    const entry = ensureEntry("plan-memory-effective-tactics");
+    if (entry) entry.supported_tactic_families = [...new Set([...entry.supported_tactic_families, ...supportedFamilies])];
+    applyDirectSignalBoost("plan-memory-effective-tactics", 6, "historically_effective_pattern");
+  }
+  if (contradictedFamilies.size) {
+    const entry = ensureEntry("plan-memory-effective-tactics-contradicted");
+    if (entry) entry.contradicted_tactic_families = [...new Set([...entry.contradicted_tactic_families, ...contradictedFamilies])];
+    applyDirectSignalBoost("plan-memory-effective-tactics-contradicted", 10, "historically_effective_now_contradicted");
+  }
+  if (stalledFamilies.length) {
+    const entry = ensureEntry("plan-memory-stalled-tactics");
+    if (entry) entry.stalled_tactic_families = [...new Set([...entry.stalled_tactic_families, ...stalledFamilies])];
+    applyDirectSignalBoost("plan-memory-stalled-tactics", 8, "historically_stalled_pattern");
+  }
+  if (repeatedFamilies.length) {
+    applyDirectSignalBoost("plan-memory-repeated-tactics", 4, "repeated_tactic_needs_new_proof");
+  }
+  if (outcomeTrajectory === "improved") {
+    if (outcomeConfidenceState === "verified") {
+      applyFamilies(supportedFamilies, "supported_tactic_families", 3, "outcome_improvement_verified");
+      applyDirectSignalBoost("plan-memory-effective-tactics", 3, "outcome_improvement_verified");
+      applyDirectSignalBoost("plan-memory-outcome-improved", 4, "outcome_improvement_verified");
+    } else if (outcomeConfidenceState === "mixed") {
+      applyFamilies(supportedFamilies, "supported_tactic_families", 1, "outcome_improvement_mixed");
+      applyDirectSignalBoost("plan-memory-effective-tactics", 1, "outcome_improvement_mixed");
+      applyDirectSignalBoost("plan-memory-outcome-improved", 2, "outcome_improvement_mixed");
+    } else if (outcomeConfidenceState === "inferred") {
+      applyDirectSignalBoost("plan-memory-outcome-improved", -2, "outcome_improvement_inferred");
+      applyDirectSignalBoost("plan-memory-effective-tactics", -1, "outcome_improvement_inferred");
+    } else if (outcomeConfidenceState === "stale") {
+      applyDirectSignalBoost("plan-memory-outcome-improved", -4, "outcome_improvement_stale");
+      applyDirectSignalBoost("plan-memory-effective-tactics", -3, "outcome_improvement_stale");
+    }
+  } else if (outcomeTrajectory === "worsened" && outcomeConfidenceState === "verified") {
+    applyDirectSignalBoost("plan-memory-outcome-worsened", 4, "outcome_worsening_verified");
+  } else if (outcomeTrajectory === "stalled" && outcomeConfidenceState === "verified") {
+    applyDirectSignalBoost("plan-memory-outcome-stalled", 3, "outcome_stall_verified");
+  }
+  for (const familyLearning of familyExecutionLearning) {
+    const family = nullIfBlank(familyLearning?.family);
+    if (!family) continue;
+    const learningState = nullIfBlank(familyLearning?.learning_state);
+    if (learningState === "validated") {
+      const proofFreshness = assessHealthPlanProofFreshness(familyLearning?.latest_updated_at, "review within 24 hours");
+      if (proofFreshness.state === "fresh") {
+        applyDirectSignalBoost("plan-memory-recommendations-confirmed", 5, "family_receipts_confirmed");
+      } else if (proofFreshness.state === "aging") {
+        applyDirectSignalBoost("plan-memory-recommendations-confirmed", 2, "family_receipts_need_refresh");
+      } else {
+        applyDirectSignalBoost("plan-memory-recommendations-open", 4, "family_receipts_stale");
+      }
+    } else if (learningState === "needs_followthrough") {
+      applyDirectSignalBoost("plan-memory-recommendations-open", 6, "family_receipts_open");
+      applyDirectSignalBoost("plan-memory-recommendations-deferred", 4, "family_receipts_open");
+    } else if (learningState === "needs_stronger_route") {
+      applyDirectSignalBoost("plan-memory-recommendations-escalated", 7, "family_receipts_escalated");
+    } else if (learningState === "mixed") {
+      applyDirectSignalBoost("plan-memory-recommendations-open", 5, "family_receipts_mixed");
+      applyDirectSignalBoost("plan-memory-recommendations-confirmed", 3, "family_receipts_mixed");
+    }
+  }
+
+  for (const entry of overlay.values()) {
+    entry.usefulness_score_delta = Math.max(-12, Math.min(18, Math.round(entry.usefulness_score_delta)));
+    entry.usefulness_reason_codes = [...new Set(entry.usefulness_reason_codes)];
+    entry.supported_tactic_families = [...new Set(entry.supported_tactic_families)];
+    entry.contradicted_tactic_families = [...new Set(entry.contradicted_tactic_families)];
+    entry.stalled_tactic_families = [...new Set(entry.stalled_tactic_families)];
+  }
+
+  return overlay;
+}
+
+function buildHealthPlanEvidenceDigest(sourceSignals) {
+  const signals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const freshnessSignals = signals.filter((signal) => !String(signal?.id || "").startsWith("plan-memory-"));
+  const liveSignalIds = freshnessSignals
+    .filter((signal) => signal?.freshness === "live")
+    .map((signal) => signal.id)
+    .filter(Boolean);
+  const staleSignalIds = freshnessSignals
+    .filter((signal) => signal?.freshness === "stale")
+    .map((signal) => signal.id)
+    .filter(Boolean);
+  const unknownFreshnessSignalIds = freshnessSignals
+    .filter((signal) => signal?.freshness === "unknown")
+    .map((signal) => signal.id)
+    .filter(Boolean);
+  const sortedSignals = signals
+    .slice()
+    .sort((left, right) => healthPlanSignalPriorityScore(right) - healthPlanSignalPriorityScore(left));
+  const topPrioritySignalIds = sortedSignals.slice(0, 5).map((signal) => signal.id).filter(Boolean);
+  const freshestSignalAt = latestTimestamp(freshnessSignals.map((signal) => signal?.observed_at));
+  const observedTimestamps = timestampValues(freshnessSignals.map((signal) => signal?.observed_at));
+  const stalestSignalAt = observedTimestamps.length
+    ? observedTimestamps
+      .slice()
+      .sort((left, right) => new Date(left).getTime() - new Date(right).getTime())[0]
+    : null;
+  const freshnessGap = staleSignalIds.length > 0 || liveSignalIds.length === 0;
+  const historicallySupportedSignalIds = signals
+    .filter((signal) => Array.isArray(signal?.usefulness_reason_codes) && signal.usefulness_reason_codes.includes("historically_effective_pattern"))
+    .map((signal) => signal.id)
+    .filter(Boolean);
+  const historicallyCautionSignalIds = signals
+    .filter((signal) => Array.isArray(signal?.usefulness_reason_codes)
+      && (
+        signal.usefulness_reason_codes.includes("historically_effective_now_contradicted")
+        || signal.usefulness_reason_codes.includes("historically_stalled_pattern")
+      ))
+    .map((signal) => signal.id)
+    .filter(Boolean);
+  const summaryText = freshnessGap
+    ? "Some of the strongest care signals are stale or lack fresh timestamps, so the plan should prioritize new contact, verification, and same-day reality checks."
+    : "The strongest care signals include fresh timestamps, so the plan can stay specific while still grounded in the current live picture.";
+  const usefulnessSummaryText = historicallyCautionSignalIds.length
+    ? "Recent plan history shows some tactics either stalled or are now contradicted, so the next plan should name a stronger route and the proof that it is actually working."
+    : historicallySupportedSignalIds.length
+      ? "Recent plan history shows a few tactic patterns that have helped before, so the next plan can preserve them where today's evidence still supports them."
+      : null;
+  return {
+    summary_text: summaryText,
+    usefulness_summary_text: usefulnessSummaryText,
+    top_priority_signal_ids: topPrioritySignalIds,
+    top_priority_signals: sortedSignals.slice(0, 5).map((signal) => ({
+      id: signal.id,
+      label: signal.label,
+      category: signal.category,
+      strength: signal.strength,
+      freshness: signal.freshness,
+      priority_score: healthPlanSignalPriorityScore(signal),
+      priority_reason_codes: healthPlanSignalPriorityReasonCodes(signal),
+      ...(Number.isFinite(Number(signal?.usefulness_score_delta)) ? { usefulness_score_delta: Math.round(Number(signal.usefulness_score_delta)) } : {}),
+      ...(Array.isArray(signal?.usefulness_reason_codes) && signal.usefulness_reason_codes.length
+        ? { usefulness_reason_codes: [...new Set(signal.usefulness_reason_codes)] }
+        : {}),
+      ...(Array.isArray(signal?.supported_tactic_families) && signal.supported_tactic_families.length
+        ? { supported_tactic_families: [...new Set(signal.supported_tactic_families)] }
+        : {}),
+      ...(Array.isArray(signal?.contradicted_tactic_families) && signal.contradicted_tactic_families.length
+        ? { contradicted_tactic_families: [...new Set(signal.contradicted_tactic_families)] }
+        : {}),
+      ...(Array.isArray(signal?.stalled_tactic_families) && signal.stalled_tactic_families.length
+        ? { stalled_tactic_families: [...new Set(signal.stalled_tactic_families)] }
+        : {}),
+    })),
+    historically_supported_signal_ids: historicallySupportedSignalIds,
+    historically_caution_signal_ids: historicallyCautionSignalIds,
+    live_signal_ids: liveSignalIds,
+    stale_signal_ids: staleSignalIds,
+    unknown_freshness_signal_ids: unknownFreshnessSignalIds,
+    freshness_gap: freshnessGap,
+    freshest_signal_at: freshestSignalAt,
+    stalest_signal_at: stalestSignalAt,
+  };
+}
+
+function buildHealthPlanEvidencePack(
+  sourceSignals,
+  {
+    criticalSignalIds = [],
+    verificationContext = null,
+    evidenceDigest = null,
+    generationAssessment = null,
+    sectionEvidenceBundles = null,
+    generationContract = null,
+  } = {},
+) {
+  const signals = normalizeHealthPlanSourceSignals(sourceSignals);
+  if (!signals.length) return null;
+  const digest = normalizeHealthPlanEvidenceDigest(evidenceDigest) || buildHealthPlanEvidenceDigest(signals);
+  const assessment = normalizeHealthPlanGenerationAssessment(generationAssessment) || null;
+  const bundles = normalizeHealthPlanSectionEvidenceBundles(sectionEvidenceBundles) || null;
+  const contract = normalizeHealthPlanGenerationContract(generationContract) || null;
+  const sourceSignalIds = new Set(signals.map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const signalMap = new Map(signals.map((signal) => [signal.id, signal]));
+  const signalReasonCodes = (signal) => healthPlanSignalPriorityReasonCodes(signal);
+  const signalUsefulnessCodes = (signal) => (
+    Array.isArray(signal?.usefulness_reason_codes)
+      ? signal.usefulness_reason_codes.map((code) => nullIfBlank(code)).filter(Boolean)
+      : []
+  );
+  const normalizeIds = (ids) => [...new Set((Array.isArray(ids) ? ids : []).map((id) => nullIfBlank(id)).filter((id) => id && sourceSignalIds.has(id)))];
+  const itemSignalIds = (items) => (
+    Array.isArray(items)
+      ? items.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : [])
+      : []
+  );
+  const criticalIds = normalizeIds(criticalSignalIds);
+  const topPriorityIds = normalizeIds(digest?.top_priority_signal_ids);
+  const verificationIds = normalizeIds([
+    ...itemSignalIds(verificationContext?.next_confirmations),
+    ...itemSignalIds(
+      Array.isArray(verificationContext?.open_questions)
+        ? verificationContext.open_questions.filter((item) => item?.priority === "high" || item?.due_window === "same_day")
+        : [],
+    ),
+    ...itemSignalIds(
+      Array.isArray(verificationContext?.accountability_commitments)
+        ? verificationContext.accountability_commitments.filter((item) => item?.priority === "high" || item?.due_window === "same_day")
+        : [],
+    ),
+    ...(Array.isArray(bundles?.monitoring?.unresolved_signal_ids) ? bundles.monitoring.unresolved_signal_ids : []),
+    ...(Array.isArray(bundles?.monitoring?.stale_signal_ids) ? bundles.monitoring.stale_signal_ids : []),
+    ...(Array.isArray(digest?.stale_signal_ids) ? digest.stale_signal_ids : []),
+    ...(Array.isArray(digest?.unknown_freshness_signal_ids) ? digest.unknown_freshness_signal_ids : []),
+    ...(Array.isArray(contract?.monitoring_required_signal_ids) ? contract.monitoring_required_signal_ids : []),
+  ]);
+  const summaryBundlePrimaryIds = normalizeIds(bundles?.summary?.primary_signal_ids);
+  const escalationBundlePrimaryIds = normalizeIds(bundles?.escalation?.primary_signal_ids);
+  const primarySignalIds = normalizeIds([
+    ...criticalIds,
+    ...topPriorityIds.slice(0, 5),
+    ...summaryBundlePrimaryIds,
+    ...escalationBundlePrimaryIds,
+  ]).slice(0, 8);
+  const actionSignalIds = normalizeIds(
+    signals
+      .filter((signal) => {
+        const signalId = nullIfBlank(signal?.id);
+        if (!signalId) return false;
+        if (criticalIds.includes(signalId)) return true;
+        const reasonCodes = signalReasonCodes(signal);
+        return reasonCodes.some((code) => [
+          "active_alerts",
+          "open_operational_loop",
+          "open_incident_playbook",
+          "live_risk_outweighs_predictive",
+          "passive_conflict_unresolved",
+          "medication_followup_due",
+          "service_followup_due",
+          "sensor_reliability_gap",
+          "coverage_or_owner_gap",
+          "sharing_boundary_unconfirmed",
+          "prior_plan_quality_gap",
+          "prior_plan_followthrough_gap",
+        ].includes(code));
+      })
+      .sort((left, right) => healthPlanSignalPriorityScore(right) - healthPlanSignalPriorityScore(left))
+      .map((signal) => signal.id),
+  ).slice(0, 6);
+  const reservedIds = new Set([...primarySignalIds, ...verificationIds]);
+  const stabilizingSignalIds = normalizeIds(
+    signals
+      .filter((signal) => {
+        const usefulnessCodes = signalUsefulnessCodes(signal);
+        if (!usefulnessCodes.length) return false;
+        const contradictedFamilies = Array.isArray(signal?.contradicted_tactic_families) ? signal.contradicted_tactic_families.filter(Boolean) : [];
+        const stalledFamilies = Array.isArray(signal?.stalled_tactic_families) ? signal.stalled_tactic_families.filter(Boolean) : [];
+        if (contradictedFamilies.length || stalledFamilies.length) return false;
+        return usefulnessCodes.some((code) => [
+          "historically_effective_pattern",
+          "family_outcomes_reliably_helpful",
+          "family_outcomes_recently_helping",
+          "family_outcomes_recently_recovered",
+          "outcome_improvement_verified",
+          "outcome_improvement_mixed",
+        ].includes(code));
+      })
+      .sort((left, right) => healthPlanSignalPriorityScore(right) - healthPlanSignalPriorityScore(left))
+      .map((signal) => signal.id),
+  ).slice(0, 6);
+  const cautionSignalIds = normalizeIds(
+    signals
+      .filter((signal) => {
+        const usefulnessCodes = signalUsefulnessCodes(signal);
+        const contradictedFamilies = Array.isArray(signal?.contradicted_tactic_families) ? signal.contradicted_tactic_families.filter(Boolean) : [];
+        const stalledFamilies = Array.isArray(signal?.stalled_tactic_families) ? signal.stalled_tactic_families.filter(Boolean) : [];
+        const reasonCodes = signalReasonCodes(signal);
+        return Boolean(
+          contradictedFamilies.length
+          || stalledFamilies.length
+          || usefulnessCodes.some((code) => [
+            "historically_effective_now_contradicted",
+            "historically_stalled_pattern",
+          ].includes(code))
+          || reasonCodes.some((code) => [
+            "passive_conflict_unresolved",
+            "live_risk_outweighs_predictive",
+            "prior_plan_quality_gap",
+            "prior_plan_followthrough_gap",
+          ].includes(code))
+        );
+      })
+      .sort((left, right) => healthPlanSignalPriorityScore(right) - healthPlanSignalPriorityScore(left))
+      .map((signal) => signal.id),
+  ).slice(0, 6);
+  const bundleSignalIds = normalizeIds([
+    ...(Array.isArray(bundles?.goals?.signal_ids) ? bundles.goals.signal_ids : []),
+    ...(Array.isArray(bundles?.daily_support?.signal_ids) ? bundles.daily_support.signal_ids : []),
+    ...(Array.isArray(bundles?.caregiver_guidance?.signal_ids) ? bundles.caregiver_guidance.signal_ids : []),
+    ...(Array.isArray(bundles?.summary?.signal_ids) ? bundles.summary.signal_ids : []),
+  ]);
+  const backgroundSignalIds = normalizeIds(
+    bundleSignalIds.filter((signalId) =>
+      !reservedIds.has(signalId)
+      && !actionSignalIds.includes(signalId)
+      && !stabilizingSignalIds.includes(signalId)
+      && !cautionSignalIds.includes(signalId)),
+  ).slice(0, 8);
+  const deemphasizedSignalIds = signals
+    .filter((signal) => {
+      const signalId = nullIfBlank(signal?.id);
+      if (
+        !signalId
+        || reservedIds.has(signalId)
+        || backgroundSignalIds.includes(signalId)
+        || actionSignalIds.includes(signalId)
+        || stabilizingSignalIds.includes(signalId)
+        || cautionSignalIds.includes(signalId)
+      ) return false;
+      const category = normalizeHealthPlanSignalCategory(signal?.category, null);
+      const strength = normalizeHealthPlanSignalStrength(signal?.strength, "medium");
+      const freshness = normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown");
+      const priority = healthPlanSignalPriorityScore(signal);
+      const historicallyUseful = Array.isArray(signal?.usefulness_reason_codes)
+        && signal.usefulness_reason_codes.includes("historically_effective_pattern");
+      if (historicallyUseful && freshness !== "unknown") return false;
+      return (
+        priority <= 18
+        && (
+          strength === "low"
+          || (freshness === "unknown" && ["context", "care-circle", "forecast"].includes(category || ""))
+        )
+      );
+    })
+    .map((signal) => signal.id)
+    .filter(Boolean)
+    .slice(0, 6);
+  const buildCards = (ids) => normalizeIds(ids)
+    .map((signalId) => signalMap.get(signalId))
+    .filter(Boolean)
+    .map((signal) => ({
+      id: signal.id,
+      label: signal.label,
+      category: signal.category,
+      strength: signal.strength,
+      freshness: signal.freshness,
+      observed_at: signal.observed_at || null,
+      priority_score: healthPlanSignalPriorityScore(signal),
+      priority_reason_codes: healthPlanSignalPriorityReasonCodes(signal),
+      ...(Number.isFinite(Number(signal?.usefulness_score_delta)) ? { usefulness_score_delta: Math.round(Number(signal.usefulness_score_delta)) } : {}),
+      ...(Array.isArray(signal?.usefulness_reason_codes) && signal.usefulness_reason_codes.length
+        ? { usefulness_reason_codes: [...new Set(signal.usefulness_reason_codes)] }
+        : {}),
+      ...(Array.isArray(signal?.supported_tactic_families) && signal.supported_tactic_families.length
+        ? { supported_tactic_families: [...new Set(signal.supported_tactic_families)] }
+        : {}),
+      ...(Array.isArray(signal?.contradicted_tactic_families) && signal.contradicted_tactic_families.length
+        ? { contradicted_tactic_families: [...new Set(signal.contradicted_tactic_families)] }
+        : {}),
+      ...(Array.isArray(signal?.stalled_tactic_families) && signal.stalled_tactic_families.length
+        ? { stalled_tactic_families: [...new Set(signal.stalled_tactic_families)] }
+        : {}),
+      ...(signal.detail ? { detail: signal.detail } : {}),
+    }));
+
+  const focusSummaryText = assessment?.confidence === "low"
+    ? "Start from the action-driving signals, keep verification signals visible, and do not let calmer background context soften unresolved risk."
+    : digest?.freshness_gap
+      ? "Start from the strongest action-driving signals, but keep stale or unresolved evidence visible so the plan names the fresh check it still needs."
+      : "Start from the action-driving and primary signals, then use stabilizing routines and background context only after the main live picture and strongest operational risks are already covered.";
+  const cautionSummaryText = verificationIds.length || deemphasizedSignalIds.length || cautionSignalIds.length
+    ? "Use verification signals to justify confirm, refresh, or reconcile language, use stabilizing signals only where today's evidence still supports them, and treat caution or deemphasized signals as limits on certainty rather than proof that the client is stable."
+    : null;
+
+  return normalizeHealthPlanEvidencePack({
+    focus_summary_text: focusSummaryText,
+    caution_summary_text: cautionSummaryText,
+    primary_signal_ids: primarySignalIds,
+    action_signal_ids: actionSignalIds,
+    verification_signal_ids: verificationIds,
+    stabilizing_signal_ids: stabilizingSignalIds,
+    caution_signal_ids: cautionSignalIds,
+    background_signal_ids: backgroundSignalIds,
+    deemphasized_signal_ids: deemphasizedSignalIds,
+    primary_signals: buildCards(primarySignalIds),
+    action_signals: buildCards(actionSignalIds),
+    verification_signals: buildCards(verificationIds),
+    stabilizing_signals: buildCards(stabilizingSignalIds),
+    caution_signals: buildCards(cautionSignalIds),
+    background_signals: buildCards(backgroundSignalIds),
+    deemphasized_signals: buildCards(deemphasizedSignalIds),
+  });
+}
+
+function buildHealthPlanVerificationContext(profile, predictiveContext, sourceSignals, organization = null, planMemory = null) {
+  const user = profile?.user || {};
+  const medications = Array.isArray(profile?.medications) ? profile.medications : [];
+  const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
+  const alerts = Array.isArray(profile?.alerts) ? profile.alerts.filter((alert) => !alert?.resolved_at) : [];
+  const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const medicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const riskBand = String(predictiveContext?.latestScore?.risk_band || "").trim().toLowerCase();
+  const predictiveAvailable = Boolean(
+    predictiveContext?.latestScore || (Array.isArray(predictiveContext?.forecastRows) && predictiveContext.forecastRows.length),
+  );
+  const hasOfflineSensors = sensors.some((sensor) => String(sensor?.status || "").trim().toLowerCase() !== "online");
+  const missingMedicationSchedule = medications.some((med) => !Array.isArray(med?.schedule_times) || !med.schedule_times.filter(Boolean).length);
+  const latestOutcomes = [
+    nullIfBlank(firstValue(profile?.checkins?.last_outcome, profile?.checkins?.lastOutcome)),
+    nullIfBlank(firstValue(profile?.brainCoach?.last_outcome, profile?.brainCoach?.lastOutcome)),
+    nullIfBlank(profile?.medicationActivity?.occurred_at),
+    nullIfBlank(profile?.medicationActivity?.reported_at),
+  ].filter(Boolean);
+  const policy = buildHealthPlanPolicy(profile, predictiveContext, organization);
+  const findSignal = (id) => findHealthPlanSignalId(sourceSignals, (signal) => signal?.id === id);
+  const knownFacts = [];
+  const openQuestions = [];
+  const nextConfirmations = [];
+
+  if (["critical", "high", "urgent"].includes(riskBand) && findSignal("risk-latest-score")) {
+    knownFacts.push({
+      code: "predictive-risk-high",
+      text: "The current predictive risk picture is elevated and needs same-day operational attention.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("risk-latest-score"), findSignal("forecast-near-term")].filter(Boolean),
+    });
+  } else if (!predictiveAvailable) {
+    knownFacts.push({
+      code: "predictive-unavailable",
+      text: "Predictive insights are unavailable, so the plan must rely on the live care picture only.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("context-live-profile-only")].filter(Boolean),
+    });
+  }
+
+  if (alerts.length && findSignal("alert-active")) {
+    knownFacts.push({
+      code: "active-alerts-present",
+      text: "There are active unresolved alerts in the current care picture.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("alert-active")].filter(Boolean),
+    });
+  }
+
+  if (medications.length && findSignal("medication-plan")) {
+    knownFacts.push({
+      code: "medication-routine-present",
+      text: "A medication routine is already on file and should be treated as a real follow-up responsibility.",
+      priority: medicationStatus === "missed" || medicationStatus === "late" ? "high" : "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("medication-plan")].filter(Boolean),
+    });
+  }
+
+  if ((profile?.checkins?.enabled || profile?.brainCoach?.enabled) && (findSignal("service-checkins") || findSignal("service-brain-coach"))) {
+    knownFacts.push({
+      code: "service-routine-present",
+      text: "The client already has at least one scheduled support routine that can be used for follow-up.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("service-checkins"), findSignal("service-brain-coach")].filter(Boolean),
+    });
+  }
+
+  if (!careProviders.length && findSignal("care-circle-context")) {
+    openQuestions.push({
+      code: "owner-unconfirmed",
+      text: "No named owner is currently confirmed for follow-up.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("care-circle-context")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-owner",
+      text: "Confirm one named staff or care-circle owner before the next outreach cycle.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("care-circle-context")].filter(Boolean),
+    });
+  }
+
+  if (!familyConsent && findSignal("consent-family-sharing")) {
+    openQuestions.push({
+      code: "sharing-boundary-open",
+      text: "Family-sharing consent is not confirmed, so the sharing boundary still needs verification.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("consent-family-sharing")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-sharing-boundary",
+      text: "Confirm who can receive updates before any client-specific details are shared outside staff or approved providers.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("consent-family-sharing")].filter(Boolean),
+    });
+  }
+
+  if ((medicationStatus === "missed" || medicationStatus === "late" || missingMedicationSchedule) && findSignal("medication-plan")) {
+    openQuestions.push({
+      code: "medication-followup-open",
+      text: missingMedicationSchedule
+        ? "At least one medication still needs its saved reminder schedule confirmed."
+        : "Medication adherence has drifted and still needs real-world confirmation.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("medication-plan")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-medication-status",
+      text: "Verify today's medication status and confirm the saved reminder times with the client or responsible staff.",
+      priority: "high",
+      due_window: "same_day",
+      signal_ids: [findSignal("medication-plan")].filter(Boolean),
+    });
+  }
+
+  if (hasOfflineSensors && findSignal("sensor-status")) {
+    openQuestions.push({
+      code: "sensor-reliability-open",
+      text: "One or more sensors are offline or not reporting, so the live monitoring picture is incomplete.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("sensor-status")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-sensor-state",
+      text: "Confirm whether the sensor issue is a device problem, a connectivity problem, or a real client concern.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("sensor-status")].filter(Boolean),
+    });
+  }
+
+  if (!latestOutcomes.length && (findSignal("service-checkins") || findSignal("service-brain-coach"))) {
+    openQuestions.push({
+      code: "live-feedback-thin",
+      text: "Recent live feedback is thin, so the care picture still needs a fresh confirmation cycle.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("service-checkins"), findSignal("service-brain-coach")].filter(Boolean),
+    });
+    nextConfirmations.push({
+      code: "confirm-today-touchpoint",
+      text: "Confirm a fresh touchpoint today so the plan is based on the client's current reality rather than stale assumptions.",
+      priority: policy.response_expectation === "same-day review" ? "high" : "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("service-checkins"), findSignal("service-brain-coach")].filter(Boolean),
+    });
+  }
+
+  if (!predictiveAvailable && findSignal("context-live-profile-only")) {
+    openQuestions.push({
+      code: "predictive-missing",
+      text: "Predictive context is missing, so near-term risk must be re-checked through live service, medication, and alert signals.",
+      priority: "medium",
+      due_window: policy.response_expectation === "same-day review" ? "same_day" : "within_24h",
+      signal_ids: [findSignal("context-live-profile-only")].filter(Boolean),
+    });
+  }
+
+  const outcomeFeedback = buildHealthPlanOutcomeFeedback(profile, sourceSignals, organization);
+  const executionFeedback = buildHealthPlanExecutionFeedback(profile, sourceSignals, organization);
+  const tensionFeedback = buildHealthPlanEvidenceTension(profile, predictiveContext, sourceSignals, organization);
+  const memoryFeedback = buildHealthPlanPlanMemoryFeedback(
+    planMemory,
+    sourceSignals,
+    organization,
+    policy.response_expectation,
+  );
+  const accountabilityCommitments = buildHealthPlanAccountabilityCommitments(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    organization,
+  );
+  const decisionBranches = buildHealthPlanDecisionBranches(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    organization,
+    planMemory,
+  );
+
+  return {
+    known_facts: [...knownFacts, ...outcomeFeedback.known_facts, ...executionFeedback.known_facts, ...tensionFeedback.known_facts, ...memoryFeedback.known_facts],
+    open_questions: [...openQuestions, ...outcomeFeedback.open_questions, ...executionFeedback.open_questions, ...tensionFeedback.open_questions, ...memoryFeedback.open_questions],
+    next_confirmations: [...nextConfirmations, ...outcomeFeedback.next_confirmations, ...executionFeedback.next_confirmations, ...tensionFeedback.next_confirmations, ...memoryFeedback.next_confirmations],
+    accountability_commitments: accountabilityCommitments,
+    decision_branches: decisionBranches,
+    recent_outcomes: {
+      recent_events: [...outcomeFeedback.recent_events],
+      execution_brief: executionFeedback.execution_brief || null,
+      planning_cautions: [...new Set([...(outcomeFeedback.planning_cautions || []), ...(tensionFeedback.planning_cautions || []), ...(Array.isArray(executionFeedback.next_confirmations) && executionFeedback.next_confirmations.length ? [
+        "If the current contact path is not landing, the next plan should name the alternate route instead of repeating the same tactic.",
+      ] : [])])],
+    },
+  };
+}
+
+function buildHealthPlanGenerationContract(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  {
+    criticalSignalIds = [],
+    verificationContext = null,
+    evidenceDigest = null,
+    responsePath = null,
+    changeContext = null,
+    generationAssessment = null,
+  } = {},
+) {
+  const sourceSignalIds = new Set(
+    (Array.isArray(sourceSignals) ? sourceSignals : [])
+      .map((signal) => nullIfBlank(signal?.id))
+      .filter(Boolean),
+  );
+  const signalIdsFromItems = (items) => (
+    Array.isArray(items)
+      ? items
+        .flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : [])
+        .map((signalId) => nullIfBlank(signalId))
+        .filter((signalId) => signalId && sourceSignalIds.has(signalId))
+      : []
+  );
+  const highReasonCodes = new Set(
+    (Array.isArray(generationAssessment?.reasons) ? generationAssessment.reasons : [])
+      .filter((reason) => reason?.severity === "high")
+      .map((reason) => nullIfBlank(reason?.code))
+      .filter(Boolean),
+  );
+  const staleOrUnknownSignalIds = [
+    ...(Array.isArray(evidenceDigest?.stale_signal_ids) ? evidenceDigest.stale_signal_ids : []),
+    ...(Array.isArray(evidenceDigest?.unknown_freshness_signal_ids) ? evidenceDigest.unknown_freshness_signal_ids : []),
+  ]
+    .map((signalId) => nullIfBlank(signalId))
+    .filter((signalId) => signalId && sourceSignalIds.has(signalId));
+  const conflictSignalIds = [
+    "evidence-predictive-live-mismatch",
+    "evidence-passive-signal-conflict",
+  ].filter((signalId) => sourceSignalIds.has(signalId));
+  const changeSignalIds = Array.isArray(changeContext?.highlight_signal_ids)
+    ? changeContext.highlight_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const confirmationSignalIds = signalIdsFromItems(verificationContext?.next_confirmations);
+  const accountabilitySignalIds = signalIdsFromItems(
+    Array.isArray(verificationContext?.accountability_commitments)
+      ? verificationContext.accountability_commitments.filter((item) => item?.priority === "high" || item?.due_window === "same_day")
+      : [],
+  );
+  const alternateRouteSignalIds = [
+    "execution-contact-path-weak",
+    "execution-stalled",
+    "execution-same-channel-repeated",
+    "execution-care-circle-route-open",
+  ].filter((signalId) => sourceSignalIds.has(signalId));
+  const topPrioritySignalIds = Array.isArray(evidenceDigest?.top_priority_signal_ids)
+    ? evidenceDigest.top_priority_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const mustAcknowledgeMaterialChange = Boolean(changeContext?.must_explain_changes && changeSignalIds.length);
+  const mustAcknowledgeFreshnessGap = Boolean(evidenceDigest?.freshness_gap || staleOrUnknownSignalIds.length || confirmationSignalIds.length);
+  const mustAcknowledgeConflict = conflictSignalIds.length > 0;
+  const mustNameAlternateRoute = Boolean(
+    alternateRouteSignalIds.length
+    || responsePath?.repeated_client_channel
+    || responsePath?.alternate_audience_open
+    || responsePath?.care_circle_route_available,
+  );
+  const mustNameStrongerNextMove = Boolean(
+    highReasonCodes.has("prior_plan_outcome_worsened")
+    || highReasonCodes.has("prior_plan_outcome_stalled")
+    || highReasonCodes.has("prior_tactics_stalled")
+    || highReasonCodes.has("repeated_tactic_pattern")
+    || highReasonCodes.has("prior_plan_receipts_open")
+  );
+  const mustNameCompletionReceipt = accountabilitySignalIds.length > 0 || highReasonCodes.has("prior_plan_receipts_open");
+  let planMode = "sustain";
+  if (mustNameStrongerNextMove || highReasonCodes.has("critical_signals_stale")) planMode = "change_course";
+  else if (mustAcknowledgeFreshnessGap || generationAssessment?.confidence === "low") planMode = "verify_and_refresh";
+  else if (
+    Array.isArray(criticalSignalIds) && criticalSignalIds.length
+    || sourceSignalIds.has("alert-active")
+    || sourceSignalIds.has("forecast-near-term")
+  ) {
+    planMode = "stabilize";
+  }
+
+  const summaryRequiredSignalIds = normalizePatchSignalIds(
+    sourceSignalIds,
+    [...changeSignalIds, ...conflictSignalIds, ...criticalSignalIds],
+    [...confirmationSignalIds, ...staleOrUnknownSignalIds, ...topPrioritySignalIds],
+  );
+  const monitoringRequiredSignalIds = normalizePatchSignalIds(
+    sourceSignalIds,
+    [...criticalSignalIds, ...confirmationSignalIds, ...staleOrUnknownSignalIds, ...changeSignalIds, ...conflictSignalIds],
+    [...alternateRouteSignalIds, ...topPrioritySignalIds],
+  );
+  const escalationRequiredSignalIds = normalizePatchSignalIds(
+    sourceSignalIds,
+    [...criticalSignalIds, ...alternateRouteSignalIds, ...changeSignalIds, ...conflictSignalIds],
+    [...accountabilitySignalIds, ...topPrioritySignalIds],
+  );
+
+  const summaryObligations = [];
+  const monitoringObligations = [];
+  const escalationObligations = [];
+
+  if (mustAcknowledgeMaterialChange) {
+    summaryObligations.push("Say what changed since the last saved version or baseline and what is materially different now.");
+    monitoringObligations.push("Track whether today's response is actually different from the previous version and what first receipt proves movement.");
+  }
+  if (mustAcknowledgeFreshnessGap) {
+    summaryObligations.push("Make the evidence gap visible and avoid sounding settled before a fresh touchpoint confirms the live picture.");
+    monitoringObligations.push("Name the fresh verification or touchpoint that resolves the stale or missing live evidence.");
+  }
+  if (mustAcknowledgeConflict) {
+    summaryObligations.push("Say plainly that the current evidence is mixed or conflicting instead of forcing a tidy story.");
+    monitoringObligations.push("Use direct reconciliation to test which risk picture is actually true today.");
+  }
+  if (mustNameAlternateRoute) {
+    monitoringObligations.push("If the first route is not landing, name the alternate channel, audience, or owner path.");
+    escalationObligations.push("If the current route still does not land, move to the alternate route the same day instead of repeating the same tactic.");
+  }
+  if (mustNameStrongerNextMove) {
+    escalationObligations.push("Name the stronger next move, fallback, or closure proof instead of preserving a stalled response path.");
+  }
+  if (mustNameCompletionReceipt) {
+    escalationObligations.push("State what counts as done and what receipt or proof closes the urgent follow-up loop.");
+    monitoringObligations.push("Record the first concrete receipt that shows the follow-up actually happened.");
+  }
+
+  return normalizeHealthPlanGenerationContract({
+    plan_mode: planMode,
+    summary_required_signal_ids: summaryRequiredSignalIds,
+    monitoring_required_signal_ids: monitoringRequiredSignalIds,
+    escalation_required_signal_ids: escalationRequiredSignalIds,
+    summary_obligations: summaryObligations,
+    monitoring_obligations: monitoringObligations,
+    escalation_obligations: escalationObligations,
+    must_acknowledge_material_change: mustAcknowledgeMaterialChange,
+    must_acknowledge_freshness_gap: mustAcknowledgeFreshnessGap,
+    must_acknowledge_conflict: mustAcknowledgeConflict,
+    must_name_alternate_route: mustNameAlternateRoute,
+    must_name_stronger_next_move: mustNameStrongerNextMove,
+    must_name_completion_receipt: mustNameCompletionReceipt,
+  });
+}
+
+function buildHealthPlanSectionEvidenceBundles(
+  sourceSignals,
+  {
+    sectionGuidance = null,
+    generationContract = null,
+    verificationContext = null,
+    evidenceDigest = null,
+    criticalSignalIds = [],
+    mustCover = [],
+  } = {},
+) {
+  const normalizedSignals = normalizeHealthPlanSourceSignals(sourceSignals);
+  const sourceSignalIds = new Set(normalizedSignals.map((signal) => signal.id));
+  const signalMap = new Map(normalizedSignals.map((signal) => [signal.id, signal]));
+  const normalizedGuidance = normalizeHealthPlanSectionGuidance(sectionGuidance);
+  const normalizedContract = normalizeHealthPlanGenerationContract(generationContract);
+  const normalizedDigest = normalizeHealthPlanEvidenceDigest(evidenceDigest);
+  const normalizedMustCover = Array.isArray(mustCover) ? mustCover.map((item) => normalizeHealthPlanCoverageRequirement(item)).filter(Boolean) : [];
+  const staleSignalIds = new Set([
+    ...(Array.isArray(normalizedDigest?.stale_signal_ids) ? normalizedDigest.stale_signal_ids : []),
+    ...(Array.isArray(normalizedDigest?.unknown_freshness_signal_ids) ? normalizedDigest.unknown_freshness_signal_ids : []),
+  ].filter((signalId) => sourceSignalIds.has(signalId)));
+  const unresolvedSignalIds = new Set([
+    ...(Array.isArray(verificationContext?.open_questions) ? verificationContext.open_questions : []),
+    ...(Array.isArray(verificationContext?.next_confirmations) ? verificationContext.next_confirmations : []),
+  ].flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []).filter((signalId) => sourceSignalIds.has(signalId)));
+  const topPrioritySignalIds = Array.isArray(normalizedDigest?.top_priority_signal_ids)
+    ? normalizedDigest.top_priority_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const confirmationSignalIds = Array.isArray(verificationContext?.next_confirmations)
+    ? verificationContext.next_confirmations
+      .flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : [])
+      .filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const accountabilitySignalIds = Array.isArray(verificationContext?.accountability_commitments)
+    ? verificationContext.accountability_commitments
+      .filter((item) => item?.priority === "high" || item?.due_window === "same_day")
+      .flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : [])
+      .filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const alternateRouteSignalIds = [
+    "execution-contact-path-weak",
+    "execution-stalled",
+    "execution-same-channel-repeated",
+    "execution-care-circle-route-open",
+  ].filter((signalId) => sourceSignalIds.has(signalId));
+  const routineSignalIds = [
+    "medication-plan",
+    "service-checkins",
+    "service-brain-coach",
+  ].filter((signalId) => sourceSignalIds.has(signalId));
+  const sharingBoundarySignalIds = [
+    "consent-family-sharing",
+    "care-circle-context",
+  ].filter((signalId) => sourceSignalIds.has(signalId));
+  const sectionPrimarySignalIds = {
+    summary: Array.isArray(normalizedContract?.summary_required_signal_ids) ? normalizedContract.summary_required_signal_ids : [],
+    monitoring: Array.isArray(normalizedContract?.monitoring_required_signal_ids) ? normalizedContract.monitoring_required_signal_ids : [],
+    escalation: Array.isArray(normalizedContract?.escalation_required_signal_ids) ? normalizedContract.escalation_required_signal_ids : [],
+    goals: [],
+    daily_support: [],
+    caregiver_guidance: [],
+  };
+  const signalCardWhyItMatters = (sectionName, signal) => {
+    if (!signal) return null;
+    const label = signal.label;
+    switch (sectionName) {
+      case "summary":
+        return `This is one of today's strongest signals shaping the overall support picture: ${label}.`;
+      case "goals":
+        return `This helps define what stability should look like over the next support window: ${label}.`;
+      case "daily_support":
+        return `This should turn into a concrete routine or follow-up step today: ${label}.`;
+      case "monitoring":
+        return `This needs live checking so staff can see whether today's picture is improving, drifting, or conflicting: ${label}.`;
+      case "escalation":
+        return `This helps define when the team needs a stronger route, same-day action, or closure proof: ${label}.`;
+      case "caregiver_guidance":
+        return `This constrains what can be shared and who can safely help: ${label}.`;
+      default:
+        return null;
+    }
+  };
+  const buildBundle = (sectionName) => {
+    const guidance = normalizedGuidance?.[sectionName];
+    const guidanceSignalIds = Array.isArray(guidance?.signal_ids)
+      ? guidance.signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+      : [];
+    const mustCoverForSection = normalizedMustCover.filter((item) =>
+      Array.isArray(item?.required_sections) && item.required_sections.includes(sectionName),
+    );
+    const mustCoverSignalIds = mustCoverForSection.flatMap((item) =>
+      Array.isArray(item?.required_signal_ids) ? item.required_signal_ids : [],
+    ).filter((signalId) => sourceSignalIds.has(signalId));
+    const primarySignalIds = normalizePatchSignalIds(
+      sourceSignalIds,
+      [
+        ...(sectionPrimarySignalIds[sectionName] || []),
+        ...guidanceSignalIds,
+        ...mustCoverSignalIds,
+      ],
+      [...topPrioritySignalIds, ...criticalSignalIds],
+    ).slice(0, 6);
+    const signalIds = normalizePatchSignalIds(
+      sourceSignalIds,
+      [...primarySignalIds, ...guidanceSignalIds, ...mustCoverSignalIds],
+      [...topPrioritySignalIds, ...criticalSignalIds],
+    ).slice(0, 8);
+    const bundleStaleIds = signalIds.filter((signalId) => staleSignalIds.has(signalId));
+    const bundleUnresolvedIds = signalIds.filter((signalId) => unresolvedSignalIds.has(signalId));
+    const signalCards = signalIds
+      .map((signalId) => signalMap.get(signalId))
+      .filter(Boolean)
+      .map((signal) => ({
+        id: signal.id,
+        label: signal.label,
+        category: signal.category,
+        strength: signal.strength,
+        freshness: signal.freshness,
+        observed_at: signal.observed_at || null,
+        priority_score: healthPlanSignalPriorityScore(signal),
+        priority_reason_codes: healthPlanSignalPriorityReasonCodes(signal),
+        ...(Number.isFinite(Number(signal?.usefulness_score_delta)) ? { usefulness_score_delta: Math.round(Number(signal.usefulness_score_delta)) } : {}),
+        ...(Array.isArray(signal?.usefulness_reason_codes) && signal.usefulness_reason_codes.length
+          ? { usefulness_reason_codes: [...new Set(signal.usefulness_reason_codes)] }
+          : {}),
+        ...(Array.isArray(signal?.supported_tactic_families) && signal.supported_tactic_families.length
+          ? { supported_tactic_families: [...new Set(signal.supported_tactic_families)] }
+          : {}),
+        ...(Array.isArray(signal?.contradicted_tactic_families) && signal.contradicted_tactic_families.length
+          ? { contradicted_tactic_families: [...new Set(signal.contradicted_tactic_families)] }
+          : {}),
+        ...(Array.isArray(signal?.stalled_tactic_families) && signal.stalled_tactic_families.length
+          ? { stalled_tactic_families: [...new Set(signal.stalled_tactic_families)] }
+          : {}),
+        ...(signal.detail ? { detail: signal.detail } : {}),
+        why_it_matters: signalCardWhyItMatters(sectionName, signal),
+      }));
+    const headlineLabels = signalCards.slice(0, 3).map((card) => card.label);
+    const summaryText = headlineLabels.length
+      ? `Anchor this section in ${headlineLabels.join(", ")}.`
+      : null;
+    const verificationFocus = bundleUnresolvedIds.length || bundleStaleIds.length || guidance?.evidence_posture === "verify_first"
+      ? "Keep verification explicit where the live picture is unresolved, stale, or still waiting for fresh confirmation."
+      : null;
+    const availableCategoryCount = new Set(
+      signalCards
+        .map((card) => normalizeHealthPlanSignalCategory(card?.category, null))
+        .filter(Boolean),
+    ).size;
+    const coverageTargets = [];
+    const pushCoverageTarget = (code, label, ids, match = "any") => {
+      const signalIds = normalizePatchSignalIds(sourceSignalIds, ids);
+      if (!signalIds.length) return;
+      coverageTargets.push({
+        code,
+        label,
+        match: match === "all" ? "all" : "any",
+        signal_ids: signalIds,
+      });
+    };
+    pushCoverageTarget(
+      `${sectionName}-primary`,
+      "Cover the strongest section-defining evidence, not just background context.",
+      primarySignalIds,
+    );
+    if (["summary", "monitoring", "escalation"].includes(sectionName)) {
+      pushCoverageTarget(
+        `${sectionName}-verification-gap`,
+        "Keep unresolved or stale evidence visible instead of writing as if the live picture is fully settled.",
+        [...bundleUnresolvedIds, ...bundleStaleIds, ...confirmationSignalIds],
+      );
+    }
+    if (sectionName === "daily_support") {
+      pushCoverageTarget(
+        "daily-support-routine",
+        "Turn the current service or medication routines into practical daily support steps.",
+        [...routineSignalIds, ...primarySignalIds],
+      );
+    }
+    if (sectionName === "monitoring") {
+      pushCoverageTarget(
+        "monitoring-response-path",
+        "Include the operational follow-through path, not only the risk trigger.",
+        [...alternateRouteSignalIds, ...accountabilitySignalIds],
+      );
+    }
+    if (sectionName === "escalation") {
+      pushCoverageTarget(
+        "escalation-response-path",
+        "Include the stronger route or closure proof for the urgent follow-up path.",
+        [...alternateRouteSignalIds, ...accountabilitySignalIds],
+      );
+    }
+    if (sectionName === "caregiver_guidance") {
+      pushCoverageTarget(
+        "caregiver-sharing-boundary",
+        "Keep guidance inside the approved sharing boundary and care-circle context.",
+        sharingBoundarySignalIds,
+      );
+    }
+    const minimumDistinctSignalCount = (
+      ["summary", "monitoring", "escalation"].includes(sectionName)
+      || (sectionName === "daily_support" && signalIds.length >= 3)
+    )
+      ? signalIds.length >= 3 ? 2 : signalIds.length >= 1 ? 1 : 0
+      : signalIds.length >= 1 ? 1 : 0;
+    const minimumDistinctCategoryCount = (
+      ["summary", "monitoring", "escalation", "daily_support"].includes(sectionName)
+      && availableCategoryCount >= 2
+      && minimumDistinctSignalCount >= 2
+    )
+      ? 2
+      : availableCategoryCount >= 1 ? 1 : 0;
+    return normalizeHealthPlanSectionEvidenceBundleEntry({
+      summary_text: summaryText,
+      why_now: guidance?.why_now || null,
+      verification_focus: verificationFocus,
+      signal_ids: signalIds,
+      primary_signal_ids: primarySignalIds,
+      stale_signal_ids: bundleStaleIds,
+      unresolved_signal_ids: bundleUnresolvedIds,
+      must_cover_codes: mustCoverForSection.map((item) => item.code).filter(Boolean),
+      coverage_targets: coverageTargets,
+      minimum_distinct_signal_count: minimumDistinctSignalCount || undefined,
+      minimum_distinct_category_count: minimumDistinctCategoryCount || undefined,
+      signal_cards: signalCards,
+    });
+  };
+
+  return normalizeHealthPlanSectionEvidenceBundles({
+    summary: buildBundle("summary"),
+    goals: buildBundle("goals"),
+    daily_support: buildBundle("daily_support"),
+    monitoring: buildBundle("monitoring"),
+    escalation: buildBundle("escalation"),
+    caregiver_guidance: buildBundle("caregiver_guidance"),
+  });
+}
+
+function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization = null, planMemory = null) {
   const user = profile?.user || {};
   const health = profile?.health || {};
   const medications = Array.isArray(profile?.medications) ? profile.medications : [];
@@ -810,9 +13078,57 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
   const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
   const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const verificationContext = buildHealthPlanVerificationContext(profile, predictiveContext, sourceSignals, organization, planMemory);
+  const evidenceDigest = buildHealthPlanEvidenceDigest(sourceSignals);
+  const responsePath = buildHealthPlanResponsePath(profile);
+  const routeLearning = buildHealthPlanRouteLearning(profile, sourceSignals, organization, planMemory);
+  const changeContext = buildHealthPlanChangeContext(profile, predictiveContext, sourceSignals, planMemory, organization);
+  const sectionGuidance = buildHealthPlanSectionGuidance(profile, predictiveContext, sourceSignals, organization, planMemory, changeContext);
+  const generationAssessment = buildHealthPlanGenerationAssessment(profile, predictiveContext, sourceSignals, organization, planMemory);
+  const generationExecutionBrief = buildHealthPlanGenerationExecutionBrief(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    organization,
+    planMemory,
+  );
+  const mustCover = buildHealthPlanCoverageRequirements(profile, predictiveContext, sourceSignals, organization, planMemory, changeContext);
+  const generationContract = buildHealthPlanGenerationContract(profile, predictiveContext, sourceSignals, {
+    criticalSignalIds,
+    verificationContext,
+    evidenceDigest,
+    responsePath,
+    changeContext,
+    generationAssessment,
+  });
+  const sectionEvidenceBundles = buildHealthPlanSectionEvidenceBundles(sourceSignals, {
+    sectionGuidance,
+    generationContract,
+    verificationContext,
+    evidenceDigest,
+    criticalSignalIds,
+      mustCover,
+  });
+  const evidencePack = buildHealthPlanEvidencePack(sourceSignals, {
+    criticalSignalIds,
+    verificationContext,
+    evidenceDigest,
+    generationAssessment,
+    sectionEvidenceBundles,
+    generationContract,
+  });
 
   return {
     language,
+    organization: organization
+      ? {
+          name: organization.name || null,
+          country: organization.country || null,
+          timezone: organization.timezone || null,
+          default_language: organization.defaultLanguage || language,
+        }
+      : null,
+    policy: buildHealthPlanPolicy(profile, predictiveContext, organization, language),
     client: {
       first_name: nullIfBlank(firstValue(user.first_name, user.firstName)),
       last_name: nullIfBlank(firstValue(user.last_name, user.lastName)),
@@ -881,8 +13197,34 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
       ? predictiveContext
       : { unavailable: true },
     critical_signal_ids: criticalSignalIds,
+    must_cover: mustCover,
+    known_facts: verificationContext.known_facts,
+    open_questions: verificationContext.open_questions,
+    next_confirmations: verificationContext.next_confirmations,
+    accountability_commitments: verificationContext.accountability_commitments,
+    decision_branches: verificationContext.decision_branches,
+    recent_outcomes: verificationContext.recent_outcomes,
+    response_path: responsePath,
+    route_learning: routeLearning,
+    plan_memory: normalizeHealthPlanPlanMemory(planMemory),
+    change_context: changeContext,
+    section_guidance: sectionGuidance,
+    section_evidence_bundles: sectionEvidenceBundles,
+    generation_contract: generationContract,
+    generation_execution_brief: generationExecutionBrief,
+    generation_assessment: generationAssessment,
+    evidence_digest: evidenceDigest,
+    evidence_pack: evidencePack,
     source_signals: sourceSignals,
   };
+}
+
+function buildHealthPlanContextSnapshot(profile, predictiveContext, sourceSignals, language, organization = null, capturedAt = new Date(), planMemory = null) {
+  return normalizeHealthPlanContextSnapshot({
+    snapshot_version: "health-plan-context-v1",
+    captured_at: capturedAt instanceof Date ? capturedAt.toISOString() : normalizeTimestampValue(capturedAt) || new Date().toISOString(),
+    ...assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization, planMemory),
+  });
 }
 
 function getAgeFromDateOfBirth(value) {
@@ -892,6 +13234,25 @@ function getAgeFromDateOfBirth(value) {
   if (Number.isNaN(birth.getTime())) return null;
   return Math.floor((Date.now() - birth.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
 }
+
+const structuredHealthPlanItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["text", "source_signal_ids"],
+  properties: {
+    text: { type: "string" },
+    priority: { type: "string", enum: ["high", "medium", "low"] },
+    due_window: { type: "string", enum: ["same_day", "within_24h"] },
+    owner_label: { type: "string" },
+    completion_proof: { type: "string" },
+    escalation_if_not_done: { type: "string" },
+    source_signal_ids: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+    },
+  },
+};
 
 const structuredHealthPlanSchema = {
   type: "object",
@@ -907,87 +13268,27 @@ const structuredHealthPlanSchema = {
     goals: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanItemSchema,
     },
     daily_support: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanItemSchema,
     },
     monitoring: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanItemSchema,
     },
     escalation: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanItemSchema,
     },
     caregiver_guidance: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanItemSchema,
     },
   },
 };
@@ -1021,12 +13322,1625 @@ function healthPlanTextContainsForbiddenMedicalClaims(text) {
     "decrease the dose",
     "replace the medication",
     "start a new medication",
+    "clinically stable",
+    "medically stable",
+    "treatment plan",
+    "adjust treatment",
   ].some((phrase) => normalized.includes(phrase));
+}
+
+function healthPlanTextNeedsVerification(text) {
+  return textMatchesAny(text, [
+    /\bverify\b/i,
+    /\bconfirm\b/i,
+    /\brefresh\b/i,
+    /\bre-?check\b/i,
+    /\btouchpoint\b/i,
+    /\breach\b/i,
+    /\bcontact\b/i,
+    /\bcall\b/i,
+    /\bcurrent\b/i,
+    /\btoday\b/i,
+    /\bsame[- ]day\b/i,
+  ]);
+}
+
+function healthPlanTextOverstatesConfidence(text) {
+  return textMatchesAny(text, [
+    /\bresolved\b/i,
+    /\bunder control\b/i,
+    /\bno further action\b/i,
+    /\bno immediate follow-?up\b/i,
+    /\ball clear\b/i,
+    /\bsafe to assume\b/i,
+    /\bhas stabilized\b/i,
+    /\bis now stable\b/i,
+    /\bback to normal\b/i,
+  ]);
+}
+
+function normalizedHealthPlanTextFingerprint(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function repeatedHealthPlanLanguage(plan) {
+  const entries = [
+    ...(Array.isArray(plan?.goals_json) ? plan.goals_json : []),
+    ...(Array.isArray(plan?.daily_support_json) ? plan.daily_support_json : []),
+    ...(Array.isArray(plan?.monitoring_json) ? plan.monitoring_json : []),
+    ...(Array.isArray(plan?.escalation_json) ? plan.escalation_json : []),
+    ...(Array.isArray(plan?.caregiver_guidance_json) ? plan.caregiver_guidance_json : []),
+  ];
+  const counts = new Map();
+  for (const item of entries) {
+    const fingerprint = normalizedHealthPlanTextFingerprint(item?.text);
+    if (!fingerprint || fingerprint.length < 24) continue;
+    counts.set(fingerprint, (counts.get(fingerprint) || 0) + 1);
+  }
+  return [...counts.entries()].filter(([, count]) => count >= 3).map(([text, count]) => ({ text, count }));
+}
+
+function healthPlanRequirementMatchers(requirementCode, promptInput = null) {
+  const sameDayExpected = String(promptInput?.policy?.response_expectation || "").toLowerCase() === "same-day review";
+  switch (requirementCode) {
+    case "respect_sharing_boundary":
+      return [/\bstaff\b/i, /\bapproved provider\b/i, /\bconsent\b/i, /\bdo not share\b/i, /\bfamily\b/i];
+    case "assign_named_owner":
+      return [/\bnamed owner\b/i, /\bresponsible\b/i, /\bpoint person\b/i, /\bwho is following up\b/i, /\bassign\b.{0,40}\b(owner|staff|follow-up|respons)/i];
+    case "support_medication_followup":
+      return [/\bmedication\b/i, /\breminder\b/i, /\bdose\b/i, /\badherence\b/i, /\bpill\b/i];
+    case "review_active_alerts":
+      return [/\balert\b/i, /\breach\b/i, /\bcontact\b/i, /\boutreach\b/i, /\bcall\b/i, /\bfollow-up\b/i];
+    case "check_sensor_reliability":
+      return [/\bsensor\b/i, /\bdevice\b/i, /\bbattery\b/i, /\boffline\b/i, /\bconnectiv/i];
+    case "separate_medication_from_signal_reliability":
+      return [/\bseparat/i, /\bdistinct\b/i, /\bdata reliability\b/i, /\bsignal reliability\b/i, /\bmissing data\b/i, /\bfalse reassurance\b/i, /\bdevice issue\b/i];
+    case "maintain_service_routines":
+      return [/\bcheck-?in\b/i, /\bbrain coach\b/i, /\broutine\b/i, /\bschedule\b/i, /\bsupport rhythm\b/i];
+    case "preserve_effective_tactics": {
+      const effectiveFamilies = Array.isArray(promptInput?.plan_memory?.effective_tactic_families)
+        ? promptInput.plan_memory.effective_tactic_families
+        : [];
+      const matchers = [];
+      for (const family of effectiveFamilies) {
+        if (family === "service_routine") {
+          matchers.push(/\b(keep|maintain|continue|protect|anchor)\b.{0,50}\b(check-?in|brain coach|routine|schedule|support rhythm)\b/i);
+        } else if (family === "medication_followup") {
+          matchers.push(/\b(keep|maintain|continue|protect|anchor)\b.{0,50}\b(medication|reminder|dose|adherence)\b/i);
+        } else if (family === "sharing_boundary") {
+          matchers.push(/\b(keep|maintain|continue|protect)\b.{0,50}\b(staff|approved provider|consent|family)\b/i);
+        } else if (family === "sensor_reliability") {
+          matchers.push(/\b(keep|maintain|continue|protect)\b.{0,50}\b(sensor|device|offline|connectiv)\b/i);
+        } else if (family === "risk_escalation") {
+          matchers.push(/\b(keep|maintain|continue|protect)\b.{0,50}\b(risk|escalat|urgent|same[- ]day|today)\b/i);
+        } else if (family === "verification") {
+          matchers.push(/\b(keep|maintain|continue|protect)\b.{0,50}\b(verification|verify|confirm|re-?check|refresh)\b/i);
+        } else if (family === "contact_path") {
+          matchers.push(/\b(keep|maintain|continue|protect)\b.{0,50}\b(contact|outreach|channel|route|owner)\b/i);
+        }
+      }
+      if (!matchers.length) {
+        matchers.push(/\b(keep|maintain|continue|protect|anchor)\b.{0,50}\b(routine|follow-?up|support|owner)\b/i);
+      }
+      return matchers;
+    }
+    case "reframe_contradicted_effective_tactics": {
+      const contradictedFamilies = Array.isArray(promptInput?.plan_memory?.contradicted_effective_tactic_families)
+        ? promptInput.plan_memory.contradicted_effective_tactic_families
+        : [];
+      const matchers = [
+        /\b(do not|dont|rather than|instead of|no longer|not enough)\b.{0,80}\b(continue|keep|maintain|preserve|repeat|reuse|rely|carry forward)\b/i,
+        /\b(re-?verify|re-?verified|verify before continuing|upgrade|stronger fallback|stronger replacement|stronger replace|replace|alternate route)\b/i,
+      ];
+      for (const family of contradictedFamilies) {
+        if (family === "service_routine") {
+          matchers.push(/\b(do not|rather than|instead of|only continue|re-?verify)\b.{0,80}\b(check-?in|brain coach|routine|schedule|support rhythm)\b/i);
+        } else if (family === "medication_followup") {
+          matchers.push(/\b(do not|rather than|instead of|only continue|re-?verify)\b.{0,80}\b(medication|reminder|dose|adherence)\b/i);
+        } else if (family === "contact_path") {
+          matchers.push(/\b(do not|rather than|instead of|switch|alternate)\b.{0,80}\b(contact|outreach|channel|route|owner)\b/i);
+        } else if (family === "sensor_reliability") {
+          matchers.push(/\b(do not|rather than|instead of|re-?verify)\b.{0,80}\b(sensor|device|connectiv|offline)\b/i);
+        }
+      }
+      return matchers;
+    }
+    case "carry_forward_open_operational_loops":
+      return [/\bhandoff\b/i, /\bincident\b/i, /\bopen loop\b/i, /\bclosure\b/i, /\bcarry forward\b/i, /\bfirst contact\b/i, /\bresponse cycle\b/i];
+    case "resolve_prior_plan_gaps":
+      return [/\bprevious plan\b/i, /\bprior plan\b/i, /\breview action\b/i, /\bevidence drift\b/i, /\bchanged evidence\b/i, /\bcarry forward\b/i, /\bfix\b/i];
+    case "raise_operational_actionability":
+      return [/\bnamed owner\b/i, /\bresponsible\b/i, /\btoday\b/i, /\bsame[- ]day\b/i, /\bif\b/i, /\brecord\b/i, /\bdocument\b/i, /\bproof\b/i, /\breceipt\b/i];
+    case "strengthen_live_grounding":
+      return [/\blive\b/i, /\bcurrent\b/i, /\bverify\b/i, /\bconfirm\b/i, /\bfresh\b/i, /\bdirect\b/i, /\bsignal\b/i, /\bevidence\b/i];
+    case "change_course_after_worsening":
+      return [/\bstronger\b/i, /\bchange course\b/i, /\bescalat/i, /\bsame[- ]day\b/i, /\btoday\b/i, /\bdo not assume stability\b/i, /\balternate\b/i, /\bdifferent route\b/i];
+    case "unstick_stalled_outcome":
+      return [/\bstalled\b/i, /\bstronger\b/i, /\bnext move\b/i, /\bclosure\b/i, /\bproof\b/i, /\breceipt\b/i, /\bdifferent route\b/i, /\bdo not repeat\b/i];
+    case "adapt_contact_path":
+      return [/\balternate\b/i, /\banother route\b/i, /\bdifferent route\b/i, /\bdifferent channel\b/i, /\bswitch\b/i, /\bphone\b/i, /\bwhatsapp\b/i, /\bin-person\b/i, /\bcurrent contact path\b/i, /\bif contact still fails\b/i, /\bif the current route\b/i, /\bcare circle\b/i, /\bnamed owner\b/i];
+    case "differentiate_repeated_tactic":
+      return [/\bmaterially different\b/i, /\bdifferent this time\b/i, /\bwhat changes\b/i, /\bproof\b/i, /\breceipt\b/i, /\bshow progress\b/i, /\bdo not repeat\b/i];
+    case "upgrade_stalled_tactic":
+      return [/\bstronger fallback\b/i, /\bupgrade\b/i, /\balternate\b/i, /\bdifferent route\b/i, /\bdifferent channel\b/i, /\bclosure\b/i, /\bproof\b/i, /\breceipt\b/i, /\bif .* still fails\b/i];
+    case "close_execution_receipt_gap":
+      return [/\bfirst contact\b/i, /\bclosure\b/i, /\bfollow-?through\b/i, /\bproof\b/i, /\breceipt\b/i, /\brecord\b/i, /\bdocument\b/i, /\bresult\b/i, /\balternate route\b/i, /\bnamed owner\b/i];
+    case "explain_material_change":
+      return [/\bwhat changed\b/i, /\bchanged since\b/i, /\bprevious plan\b/i, /\bprior plan\b/i, /\bfrom baseline\b/i, /\bmaterially different\b/i, /\bdifferent this time\b/i];
+    case "branch_after_first_check":
+      return [/\bif\b/i, /\bwhen\b/i, /\bif contact\b/i, /\bif the next touchpoint\b/i, /\bif direct verification\b/i, /\bif .* confirms\b/i, /\bif .* cannot confirm\b/i, /\botherwise\b/i];
+    case "anchor_accountability_receipts":
+      return [/\bcounts as done\b/i, /\brecord\b/i, /\bdocument\b/i, /\blog\b/i, /\bproof\b/i, /\breceipt\b/i, /\bconfirm(ed|ation)?\b/i, /\bclose(s|d|ure)?\b/i];
+    case "reconcile_conflicting_evidence":
+      return [/\bmixed\b/i, /\bconflict/i, /\bdo not assume\b/i, /\bverify\b/i, /\breconcile\b/i, /\bpassive\b/i, /\bsensor\b/i, /\bpredictive\b/i, /\bdirect contact\b/i];
+    case "cover_high_risk_outlook":
+      return sameDayExpected
+        ? [/\bsame[- ]day\b/i, /\btoday\b/i, /\bimmediately\b/i, /\burgent\b/i, /\bescalat/i, /\brisk\b/i]
+        : [/\bwithin 24 hours\b/i, /\bnext 24 hours\b/i, /\btomorrow\b/i, /\brisk\b/i, /\bforecast\b/i];
+    case "stabilize_low_confidence_context":
+      return [/\bverify\b/i, /\bconfirm\b/i, /\brefresh\b/i, /\bre-?check\b/i, /\bstabiliz/i, /\blive care picture\b/i, /\bbefore broader sharing\b/i];
+    case "refresh_live_status":
+      return [/\bfresh\b/i, /\brefresh\b/i, /\bverify\b/i, /\bconfirm\b/i, /\btouchpoint\b/i, /\bcurrent\b/i, /\btoday\b/i, /\breach\b/i, /\bcontact\b/i];
+    default:
+      return [];
+  }
+}
+
+function healthPlanRecommendationHasTimingCue(text, dueWindow = null) {
+  if (normalizeHealthPlanDueWindow(dueWindow, null)) return true;
+  return textMatchesAny(String(text || ""), [
+    /\btoday\b/i,
+    /\bsame[- ]day\b/i,
+    /\bwithin 24 hours?\b/i,
+    /\bnext 24 hours?\b/i,
+    /\bimmediately\b/i,
+    /\bthis shift\b/i,
+    /\bby end of day\b/i,
+    /\bbefore (?:the )?(?:next outreach cycle|next contact cycle|end of day|end of shift|close of shift|noon)\b/i,
+  ]);
+}
+
+function healthPlanRecommendationHasVerificationCue(text) {
+  return textMatchesAny(String(text || ""), [
+    /\bverify\b/i,
+    /\bverification\b/i,
+    /\bconfirm\b/i,
+    /\bcheck\b/i,
+    /\breview\b/i,
+    /\breconcile\b/i,
+    /\bmonitor\b/i,
+    /\bwatch\b/i,
+    /\btrack\b/i,
+  ]);
+}
+
+function healthPlanRecommendationHasBranchCue(item, promptInput = null) {
+  if (nullIfBlank(item?.escalation_if_not_done)) return true;
+  return textMatchesAny(
+    String(item?.text || ""),
+    [
+      ...healthPlanRequirementMatchers("branch_after_first_check", promptInput),
+      ...healthPlanRequirementMatchers("adapt_contact_path", promptInput),
+    ],
+  );
+}
+
+function healthPlanRecommendationHasReceiptCue(item, promptInput = null) {
+  if (nullIfBlank(item?.completion_proof)) return true;
+  return textMatchesAny(
+    String(item?.text || ""),
+    healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput),
+  );
+}
+
+function describeHealthPlanRecommendationUrgentSpecificity(item, sectionName, promptInput = null) {
+  const priority = normalizeHealthPlanItemPriority(item?.priority, null);
+  const dueWindow = normalizeHealthPlanDueWindow(item?.due_window, null);
+  const reviewState = normalizeHealthPlanRecommendationReviewState(item?.evidence_review_state, null);
+  const urgent = (
+    (sectionName === "monitoring" || sectionName === "escalation")
+    && (priority === "high" || dueWindow === "same_day" || reviewState === "urgent_review")
+  );
+
+  if (!urgent) {
+    return { urgent: false, missing: [] };
+  }
+
+  const text = String(item?.text || "");
+  const hasTiming = healthPlanRecommendationHasTimingCue(text, dueWindow);
+  const hasBranch = healthPlanRecommendationHasBranchCue(item, promptInput);
+  const hasReceipt = healthPlanRecommendationHasReceiptCue(item, promptInput);
+  const hasVerification = healthPlanRecommendationHasVerificationCue(text);
+  const ownerAssignmentFocused = textMatchesAny(text, healthPlanRequirementMatchers("assign_named_owner", promptInput));
+  const sharingBoundaryFocused = textMatchesAny(text, healthPlanRequirementMatchers("respect_sharing_boundary", promptInput));
+  const missing = [];
+
+  if (!hasTiming) missing.push("timing");
+  if (sectionName === "monitoring") {
+    if (!hasVerification) missing.push("verification");
+    if (!hasReceipt) missing.push("receipt");
+    if ((dueWindow === "same_day" || reviewState === "urgent_review") && !hasBranch) missing.push("branch");
+  } else if (sectionName === "escalation") {
+    if (!ownerAssignmentFocused && !sharingBoundaryFocused && !hasBranch) missing.push("branch");
+    if (!hasReceipt) missing.push("receipt");
+  }
+
+  return {
+    urgent: true,
+    missing,
+    hasTiming,
+    hasVerification,
+    hasBranch,
+    hasReceipt,
+  };
+}
+
+function appendTextToGeneratedPlanItem(item, text, matchers = []) {
+  const normalizedText = nullIfBlank(text);
+  if (!normalizedText) return item;
+  const currentText = String(item?.text || "");
+  const effectiveMatchers = matchers.length ? matchers : [normalizedText];
+  if (textMatchesAny(currentText, effectiveMatchers)) return item;
+  return {
+    ...item,
+    text: `${currentText.trim()} ${normalizedText}`.trim(),
+  };
+}
+
+function healthPlanReviewerRequirementConfig(requirementCode) {
+  switch (requirementCode) {
+    case "resolve_prior_plan_gaps":
+      return {
+        missingTextCode: "prior_plan_gaps_not_resolved",
+        missingTextDetail: "The plan does not clearly close the unresolved review gaps or evidence drift carried forward from the previous version.",
+        nextMove: "Make the previous review gaps explicit in the new plan and show how this version closes them.",
+      };
+    case "change_course_after_worsening":
+      return {
+        missingTextCode: "outcome_worsening_not_actioned",
+        missingTextDetail: "Later live evidence worsened, but the plan still does not make the stronger response path explicit.",
+        nextMove: "Name the stronger same-day response path and show how it differs from the previous framing.",
+      };
+    case "reframe_contradicted_effective_tactics":
+      return {
+        missingTextCode: "contradicted_effective_tactic_not_reframed",
+        missingTextDetail: "The plan still treats a previously helpful tactic as if it can continue unchanged even though today's live evidence contradicts it.",
+        nextMove: "Say the old tactic should not be relied on unchanged and name the verification step, stronger fallback, or alternate route that replaces it.",
+      };
+    case "unstick_stalled_outcome":
+      return {
+        missingTextCode: "stalled_outcome_not_upgraded",
+        missingTextDetail: "The plan does not show a materially stronger next move for the previously stalled outcome.",
+        nextMove: "Upgrade the next move so the team can see the stronger fallback, closure proof, or alternate route.",
+      };
+    case "adapt_contact_path":
+      return {
+        missingTextCode: "contact_path_not_adapted",
+        missingTextDetail: "The plan does not name a different channel, audience, or owner route even though the current contact path is not landing.",
+        nextMove: "Name the alternate contact route, audience, or owner path the team should use if the current route keeps failing.",
+      };
+    case "differentiate_repeated_tactic":
+      return {
+        missingTextCode: "repeated_tactic_not_differentiated",
+        missingTextDetail: "The plan still does not say what is materially different from the repeated tactic family or what receipt will prove progress.",
+        nextMove: "Say what is materially different this time and what proof or receipt will show the new approach is working.",
+      };
+    case "upgrade_stalled_tactic":
+      return {
+        missingTextCode: "stalled_tactic_not_upgraded",
+        missingTextDetail: "The plan still does not upgrade the stalled tactic into a stronger fallback, alternate route, or closure proof.",
+        nextMove: "Replace the stalled tactic with a stronger fallback, alternate route, or closure proof instead of repeating it unchanged.",
+      };
+    case "close_execution_receipt_gap":
+      return {
+        missingTextCode: "execution_receipt_gap_not_closed",
+        missingTextDetail: "The plan still does not name the missing execution receipt or the concrete route that will produce it.",
+        nextMove: "Name the missing first-contact, closure, or follow-through receipt and the route that will produce and record it.",
+      };
+    case "explain_material_change":
+      return {
+        missingTextCode: "material_change_not_explained",
+        missingTextDetail: "The plan does not clearly explain what changed since the previous plan or baseline.",
+        nextMove: "State what changed since the previous plan or baseline and what is materially different in the response now.",
+      };
+    case "anchor_accountability_receipts":
+      return {
+        missingTextCode: "accountability_receipt_missing",
+        missingTextDetail: "The plan still does not say what counts as done or what receipt will prove the urgent follow-up actually happened.",
+        nextMove: "Add one concrete completion receipt so staff can tell what counts as done and what closes the loop.",
+      };
+    default:
+      return null;
+  }
+}
+
+function cloneGeneratedHealthPlan(plan) {
+  return {
+    summary_text: nullIfBlank(plan?.summary_text),
+    summary_signal_ids: Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids.map((item) => nullIfBlank(item)).filter(Boolean) : [],
+    goals_json: normalizeHealthPlanSectionItems(plan?.goals_json),
+    daily_support_json: normalizeHealthPlanSectionItems(plan?.daily_support_json),
+    monitoring_json: normalizeHealthPlanSectionItems(plan?.monitoring_json),
+    escalation_json: normalizeHealthPlanSectionItems(plan?.escalation_json),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(plan?.caregiver_guidance_json),
+  };
+}
+
+function generatedHealthPlanSectionKey(sectionName) {
+  return sectionName === "summary" ? "summary_signal_ids" : `${sectionName}_json`;
+}
+
+function generatedHealthPlanSectionRefs(plan, sectionName) {
+  if (sectionName === "summary") {
+    return new Set((Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids : []).filter(Boolean));
+  }
+  const key = generatedHealthPlanSectionKey(sectionName);
+  return new Set(
+    (Array.isArray(plan?.[key]) ? plan[key] : [])
+      .flatMap((item) => Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : [])
+      .filter(Boolean),
+  );
+}
+
+function generatedHealthPlanSectionItems(plan, sectionName) {
+  if (sectionName === "summary") {
+    return [{
+      text: String(plan?.summary_text || ""),
+      source_signal_ids: Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids.filter(Boolean) : [],
+    }];
+  }
+  const key = generatedHealthPlanSectionKey(sectionName);
+  return Array.isArray(plan?.[key]) ? plan[key] : [];
+}
+
+function generatedHealthPlanHasFocusedItem(plan, sectionNames, requiredSignalIds = [], matchers = []) {
+  const signalIds = Array.isArray(requiredSignalIds) ? requiredSignalIds.filter(Boolean) : [];
+  const effectiveSections = Array.isArray(sectionNames) ? sectionNames.filter(Boolean) : [];
+  for (const sectionName of effectiveSections) {
+    for (const item of generatedHealthPlanSectionItems(plan, sectionName)) {
+      const refs = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.filter(Boolean) : [];
+      const signalMatch = signalIds.length === 0 || signalIds.some((signalId) => refs.includes(signalId));
+      const textMatch = matchers.length === 0 || textMatchesAny(String(item?.text || ""), matchers);
+      if (signalMatch && textMatch) return true;
+    }
+  }
+  return false;
+}
+
+function generatedHealthPlanSeparatesMedicationFromSignalReliability(plan, promptInput = null) {
+  const operationalSections = ["monitoring", "escalation"];
+  const medicationMatchers = healthPlanRequirementMatchers("support_medication_followup", promptInput);
+  const sensorMatchers = healthPlanRequirementMatchers("check_sensor_reliability", promptInput);
+  const separationMatchers = healthPlanRequirementMatchers("separate_medication_from_signal_reliability", promptInput);
+
+  const medicationLanePresent = generatedHealthPlanHasFocusedItem(
+    plan,
+    operationalSections,
+    ["medication-plan"],
+    medicationMatchers,
+  );
+  const sensorLanePresent = generatedHealthPlanHasFocusedItem(
+    plan,
+    operationalSections,
+    ["sensor-status"],
+    sensorMatchers,
+  );
+  const separationLanguagePresent = generatedHealthPlanHasFocusedItem(
+    plan,
+    operationalSections,
+    ["medication-plan", "sensor-status"],
+    separationMatchers,
+  );
+
+  return medicationLanePresent && sensorLanePresent && separationLanguagePresent;
+}
+
+function generatedHealthPlanSectionCoversRequirement(plan, sectionName, requiredSignalIds, match = "any") {
+  const refs = generatedHealthPlanSectionRefs(plan, sectionName);
+  if (!requiredSignalIds.length) return false;
+  return match === "all"
+    ? requiredSignalIds.every((signalId) => refs.has(signalId))
+    : requiredSignalIds.some((signalId) => refs.has(signalId));
+}
+
+function normalizePatchSignalIds(sourceSignalIds, preferred = [], fallback = []) {
+  const ids = [...new Set([...(preferred || []), ...(fallback || [])].map((item) => nullIfBlank(item)).filter(Boolean))];
+  return ids.filter((signalId) => sourceSignalIds.has(signalId));
+}
+
+function nextGeneratedPlanItemId(plan, sectionName, code) {
+  const key = generatedHealthPlanSectionKey(sectionName);
+  const items = Array.isArray(plan?.[key]) ? plan[key] : [];
+  return `${sectionName}-${code}-${items.length + 1}`;
+}
+
+function appendGeneratedPlanSectionItem(plan, sectionName, text, signalIds, code, matchers = []) {
+  const normalizedText = nullIfBlank(text);
+  if (!normalizedText || sectionName === "summary") return false;
+  const currentText = planSectionText(plan, [sectionName]);
+  if (textMatchesAny(currentText, matchers.length ? matchers : [normalizedText])) return false;
+  const key = generatedHealthPlanSectionKey(sectionName);
+  const nextItems = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+  nextItems.push({
+    id: nextGeneratedPlanItemId(plan, sectionName, code),
+    text: normalizedText,
+    source_signal_ids: signalIds,
+  });
+  plan[key] = nextItems;
+  return true;
+}
+
+function appendGeneratedPlanSummary(plan, text, signalIds, matchers = []) {
+  const normalizedText = nullIfBlank(text);
+  if (!normalizedText) return false;
+  const currentText = String(plan?.summary_text || "");
+  const currentLower = currentText.toLowerCase();
+  if (textMatchesAny(currentLower, matchers.length ? matchers : [normalizedText.toLowerCase()])) return false;
+  plan.summary_text = `${currentText.trim()} ${normalizedText}`.trim();
+  plan.summary_signal_ids = [...new Set([...(Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids : []), ...signalIds])];
+  return true;
+}
+
+function enrichGeneratedPlanCoverage(plan, sectionName, signalIds, matchers = [], fallbackText = "") {
+  const normalizedSignalIds = Array.isArray(signalIds) ? signalIds.filter(Boolean) : [];
+  if (!normalizedSignalIds.length) return false;
+  const effectiveMatchers = matchers.length ? matchers : [fallbackText];
+  if (sectionName === "summary") {
+    const currentText = String(plan?.summary_text || "");
+    if (!textMatchesAny(currentText, effectiveMatchers)) return false;
+    plan.summary_signal_ids = [...new Set([...(Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids : []), ...normalizedSignalIds])];
+    return true;
+  }
+  const key = generatedHealthPlanSectionKey(sectionName);
+  const items = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+  let changed = false;
+  plan[key] = items.map((item) => {
+    if (changed) return item;
+    if (!textMatchesAny(String(item?.text || ""), effectiveMatchers)) return item;
+    changed = true;
+    return {
+      ...item,
+      source_signal_ids: [...new Set([...(Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []), ...normalizedSignalIds])],
+    };
+  });
+  return changed;
+}
+
+function healthPlanSafetyOverlayText(language, key) {
+  const copy = {
+    en: {
+      summaryVerification: "Treat this as a stabilizing draft and verify today's live care picture before assuming the situation is settled.",
+      monitoringVerification: "Confirm today's live status through a fresh touchpoint and record what changed from baseline.",
+      escalationVerification: "Escalate the same day if fresh contact or verification still cannot confirm the client's current status.",
+      caregiverBoundary: "Keep client-specific updates within staff or approved providers until family consent is confirmed.",
+      escalationBoundary: "Do not widen sharing beyond staff or approved providers until family consent is confirmed.",
+      escalationOwner: "Assign one named staff owner before the next outreach cycle and document who is following up.",
+      caregiverOwner: "Keep one named follow-up owner visible in the plan so the next step does not stall.",
+      dailyMedication: "Use the saved medication schedule and reminder times to verify whether each dose is understood, taken, or still needs follow-up.",
+      monitoringMedication: "Monitor medication adherence and note any missed, late, or unconfirmed doses the same day.",
+      monitoringAlerts: "Review active alerts against the current live picture and document who is acting on each one.",
+      escalationAlerts: "Escalate the same day if active alerts remain open or the client still cannot be reached.",
+      monitoringSensors: "Check whether offline or silent sensors reflect a device issue or a real care concern.",
+      escalationSensors: "Escalate if sensor reliability is still unclear after follow-up and no safe fallback is confirmed.",
+      monitoringMedicationVsSignals: "Keep medication adherence and sensor reliability as separate checks: confirm whether missed or unconfirmed doses reflect a real routine problem, and separately verify whether device silence is distorting today's risk picture.",
+      escalationMedicationVsSignals: "Escalate the same day if dose status still cannot be confirmed or if device reliability is still unresolved, and document whether the unresolved risk is client deterioration, missing data, or both.",
+      dailyServices: "Use the current check-in and Brain Coach routines as the anchor for the next support cycle.",
+      monitoringServices: "Watch whether the current service rhythm is still landing and whether response quality is changing.",
+      goalEffectiveTactics: "Protect the check-in, Brain Coach, medication follow-up, or other routines that have recently helped this client so the next plan does not accidentally disrupt them.",
+      dailyEffectiveTactics: "Continue the check-in, Brain Coach, medication follow-up, or other helpful support routines unless today's live picture clearly contradicts them.",
+      summaryContradictedEffectiveTactics: "Do not rely on a previously helpful routine unchanged when today's live picture now says it is slipping; say what must be re-verified or replaced.",
+      monitoringContradictedEffectiveTactics: "Monitor where a once-helpful routine is no longer landing, and record the verification step or stronger replacement the team is using instead.",
+      escalationContradictedEffectiveTactics: "If a previously helpful routine is now contradicted by missed contact, medication drift, or a blocked route, move to the stronger fallback the same day instead of simply continuing it.",
+      monitoringOpenLoop: "Keep any open handoff or incident loop visible until the team records first contact, ownership, and explicit closure.",
+      escalationOpenLoop: "Do not restart the response cycle. Carry the open handoff or incident forward, confirm who owns it, and document what closes it.",
+      monitoringPriorPlan: "Use monitoring to check whether the previous plan's unresolved review gaps or evidence drift are now being actively corrected.",
+      escalationPriorPlan: "Escalate if the same unresolved review gap from the previous plan is still repeating or if changed evidence still has not been integrated.",
+      monitoringActionability: "Make the next monitoring step concrete enough that any staff member can execute it without guessing who acts, when it happens, or what gets recorded.",
+      escalationActionability: "Name the next owner, timing, contingency branch, and completion receipt so escalation can happen without improvisation.",
+      summaryGrounding: "Ground this plan in the current care picture and say clearly where a fresh verification step is still needed before anyone assumes stability.",
+      monitoringGrounding: "Tie monitoring back to the live signals that triggered this plan and document what would confirm or contradict them today.",
+      summaryOutcomeWorsened: "Later live evidence suggests the previous plan did not stabilize the case, so this version should not reuse the same framing casually.",
+      monitoringOutcomeWorsened: "Use monitoring to watch whether the stronger response path is changing the worsened care picture instead of preserving the previous loop.",
+      escalationOutcomeWorsened: "Make the stronger same-day response path explicit now rather than waiting to see whether the previous approach somehow starts working.",
+      monitoringOutcomeStalled: "Use monitoring to test whether the next move is materially stronger than the stalled prior response path and what first receipt would prove movement.",
+      escalationOutcomeStalled: "If the prior response path already stalled, name the stronger next route now instead of repeating it once more.",
+      monitoringAlternateRoute: "Watch whether the current channel and audience are landing; if not, switch to a different approved channel or care-circle route and document the result.",
+      escalationAlternateRoute: "If the same route keeps failing, move immediately to a different approved channel or the named owner or care-circle route and keep the loop urgent until contact is confirmed.",
+      monitoringRepeatedTactic: "Make visible what is materially different from the repeated tactic family this time and what receipt will show progress.",
+      escalationRepeatedTactic: "Escalate early if the same tactic family is being retried again without a different route, owner, or proof-of-progress threshold.",
+      monitoringStalledTactic: "Track whether the upgraded tactic actually changes the stalled pattern and record the first concrete receipt of progress.",
+      escalationStalledTactic: "If the stalled tactic still does not produce contact, closure, or follow-through proof, move to the stronger fallback the same day.",
+      monitoringReceiptGap: "Keep the missing first-contact, closure, or follow-through receipt visible and record exactly what evidence will prove the loop actually landed.",
+      escalationReceiptGap: "If the missing receipt is still not recorded, move the same day to the named stronger route and document who closes the loop.",
+      summaryChange: "State what changed since the previous plan or baseline and what is materially different in today's response path.",
+      monitoringChange: "Use monitoring to record what changed from the previous plan or baseline today and whether the new response path is actually producing a different result.",
+      escalationChange: "If the old path no longer fits today's picture, name the stronger different route now and what proof will show it worked.",
+      monitoringBranching: "If the first verification lands, record what it confirms; if it does not, switch to the stronger next route the same day instead of repeating one generic step.",
+      escalationBranching: "If the first real-world check cannot confirm safety, contact, or closure, move immediately to the next escalation path already named in the plan.",
+      monitoringAccountability: "For urgent follow-up, record what was checked, what changed, and what counts as the first real receipt of progress.",
+      escalationAccountability: "For urgent follow-up, name what closes the step, who records it, and what proof or receipt will show the escalation actually happened.",
+      summaryConflict: "The current care picture is mixed, so this plan should not treat one calmer signal as proof that the situation is already settled.",
+      monitoringConflict: "Reconcile conflicting predictive, passive, and live signals through direct verification and document which picture is proving true today.",
+      escalationConflict: "Escalate the same day if the mixed evidence cannot be reconciled quickly or if direct verification contradicts the calmer signal.",
+      goalRisk: "Keep the plan focused on the current risk picture so early deterioration is noticed quickly.",
+      monitoringRisk: "Monitor the current risk picture and compare any new alert, medication, or contact drift against it.",
+      escalationRisk: "Escalate the same day if the risk picture worsens or fresh evidence still cannot confirm stability.",
+    },
+    de: {
+      summaryVerification: "Diesen Plan als stabilisierenden Entwurf behandeln und das heutige Live-Pflegebild pruefen, bevor die Lage als geklaert gilt.",
+      monitoringVerification: "Den aktuellen Status heute durch einen frischen Kontakt bestaetigen und Veraenderungen gegenueber der Basis dokumentieren.",
+      escalationVerification: "Noch am selben Tag eskalieren, wenn frischer Kontakt oder Pruefung den aktuellen Status der Person nicht bestaetigen kann.",
+      caregiverBoundary: "Klientenspezifische Updates bei Mitarbeitenden oder freigegebenen Bezugspersonen halten, bis die Familienfreigabe bestaetigt ist.",
+      escalationBoundary: "Die Weitergabe nicht ueber Mitarbeitende oder freigegebene Bezugspersonen hinaus oeffnen, bis die Familienfreigabe bestaetigt ist.",
+      escalationOwner: "Vor dem naechsten Kontaktzyklus eine namentlich benannte verantwortliche Person festlegen und dokumentieren.",
+      caregiverOwner: "Eine namentlich benannte Person fuer die Nachverfolgung sichtbar im Plan halten, damit der naechste Schritt nicht stehen bleibt.",
+      dailyMedication: "Den gespeicherten Medikationsplan und die Erinnerungszeiten nutzen, um zu pruefen, ob jede Dosis verstanden, eingenommen oder noch nachverfolgt werden muss.",
+      monitoringMedication: "Die Medikationsadharenz beobachten und verpasste, spaete oder unbestaetigte Dosen noch am selben Tag festhalten.",
+      monitoringAlerts: "Offene Warnhinweise gegen das aktuelle Live-Bild pruefen und dokumentieren, wer jeweils handelt.",
+      escalationAlerts: "Noch am selben Tag eskalieren, wenn Warnhinweise offen bleiben oder die Person weiterhin nicht erreichbar ist.",
+      monitoringSensors: "Pruefen, ob offline oder stille Sensoren auf ein Geraeteproblem oder ein reales Betreuungsrisiko hinweisen.",
+      escalationSensors: "Eskalieren, wenn die Sensorzuverlaessigkeit nach der Nachverfolgung weiter unklar ist und kein sicherer Ersatzweg bestaetigt wurde.",
+      monitoringMedicationVsSignals: "Medikationsadharenz und Sensorzuverlaessigkeit als getrennte Pruefungen behandeln: bestaetigen, ob verpasste oder unbestaetigte Dosen ein reales Routineproblem zeigen, und getrennt pruefen, ob Geraetestille das heutige Risikobild verzerrt.",
+      escalationMedicationVsSignals: "Noch am selben Tag eskalieren, wenn der Dosisstatus weiter nicht bestaetigt werden kann oder die Geraetezuverlaessigkeit ungeklärt bleibt, und dokumentieren, ob das offene Risiko in realer Verschlechterung, fehlenden Daten oder beidem liegt.",
+      dailyServices: "Die aktuellen Check-in- und Brain-Coach-Routinen als Anker fuer den naechsten Unterstuetzungszyklus nutzen.",
+      monitoringServices: "Beobachten, ob der aktuelle Servicerhythmus noch greift und ob sich die Reaktionsqualitaet veraendert.",
+      goalEffectiveTactics: "Die Check-in-, Brain-Coach-, Medikationsnachverfolgungs- oder anderen hilfreichen Routinen schuetzen, die dieser Person zuletzt geholfen haben, damit der naechste Plan sie nicht versehentlich unterbricht.",
+      dailyEffectiveTactics: "Check-in-, Brain-Coach-, Medikationsnachverfolgungs- oder andere hilfreiche Routinen fortsetzen, solange das heutige Live-Bild ihnen nicht klar widerspricht.",
+      summaryContradictedEffectiveTactics: "Sich nicht unveraendert auf eine frueher hilfreiche Routine verlassen, wenn das heutige Live-Bild zeigt, dass sie ins Rutschen kommt; klar benennen, was neu verifiziert oder ersetzt werden muss.",
+      monitoringContradictedEffectiveTactics: "Im Monitoring sichtbar machen, wo eine zuvor hilfreiche Routine nicht mehr greift, und den Verifikationsschritt oder die staerkere Ersatzroute dokumentieren.",
+      escalationContradictedEffectiveTactics: "Wenn eine zuvor hilfreiche Routine nun durch verpassten Kontakt, Medikationsabweichung oder einen blockierten Weg widersprochen wird, noch am selben Tag auf den staerkeren Rueckfallweg wechseln statt sie einfach fortzufuehren.",
+      monitoringOpenLoop: "Offene Handoff- oder Incident-Schleifen sichtbar halten, bis Erstkontakt, Verantwortung und ein expliziter Abschluss dokumentiert sind.",
+      escalationOpenLoop: "Den Reaktionszyklus nicht neu starten. Die offene Handoff- oder Incident-Schleife weiterfuehren, Verantwortung bestaetigen und den Abschluss dokumentieren.",
+      monitoringPriorPlan: "Im Monitoring sichtbar machen, ob die offenen Review-Luecken oder Evidenzverschiebungen des vorherigen Plans jetzt wirklich behoben werden.",
+      escalationPriorPlan: "Eskalieren, wenn sich dieselbe offene Review-Luecke des vorherigen Plans wiederholt oder veraenderte Evidenz weiterhin nicht eingearbeitet ist.",
+      monitoringActionability: "Den naechsten Monitoring-Schritt so konkret machen, dass jede Fachkraft ihn ohne Raten ausfuehren kann: wer handelt, wann es passiert und was dokumentiert wird.",
+      escalationActionability: "Naechste Verantwortung, Zeitpunkt, Verzweigung und Abschlussnachweis so benennen, dass die Eskalation ohne Improvisation passieren kann.",
+      summaryGrounding: "Diesen Plan klar im aktuellen Pflegebild verankern und deutlich machen, wo noch eine frische Verifikation noetig ist, bevor jemand Stabilitaet annimmt.",
+      monitoringGrounding: "Das Monitoring an die Live-Signale knuepfen, die diesen Plan ausgeloest haben, und dokumentieren, was sie heute bestaetigt oder widerlegt.",
+      summaryOutcomeWorsened: "Spaetere Live-Evidenz deutet darauf hin, dass der vorherige Plan den Fall nicht stabilisiert hat, deshalb sollte diese Version die gleiche Rahmung nicht leichtfertig wiederholen.",
+      monitoringOutcomeWorsened: "Im Monitoring beobachten, ob der staerkere Antwortpfad das verschlechterte Pflegebild veraendert, statt die vorherige Schleife nur fortzuschreiben.",
+      escalationOutcomeWorsened: "Den staerkeren Antwortpfad fuer denselben Tag jetzt explizit machen, statt abzuwarten, ob der vorherige Ansatz doch noch wirkt.",
+      monitoringOutcomeStalled: "Im Monitoring pruefen, ob der naechste Schritt materiell staerker ist als der zuvor stockende Antwortpfad und welcher erste Nachweis Bewegung zeigt.",
+      escalationOutcomeStalled: "Wenn der vorherige Antwortpfad bereits stockte, jetzt den staerkeren naechsten Weg benennen statt ihn noch einmal zu wiederholen.",
+      monitoringAlternateRoute: "Beobachten, ob aktueller Kanal und Zielgruppe greifen; falls nicht, auf einen anderen freigegebenen Kanal oder Betreuungskreisweg wechseln und das Ergebnis dokumentieren.",
+      escalationAlternateRoute: "Wenn derselbe Weg weiter scheitert, sofort auf einen anderen freigegebenen Kanal oder ueber benannte verantwortliche Person oder Betreuungskreis wechseln und die Schleife dringend halten, bis Kontakt bestaetigt ist.",
+      monitoringRepeatedTactic: "Im Monitoring sichtbar machen, was diesmal gegenueber der wiederholten Taktikfamilie materiell anders ist und welcher Nachweis Fortschritt zeigen wird.",
+      escalationRepeatedTactic: "Frueh eskalieren, wenn dieselbe Taktikfamilie erneut versucht wird, ohne anderen Weg, andere Verantwortung oder klaren Fortschrittsnachweis.",
+      monitoringStalledTactic: "Beobachten, ob die aufgewertete Taktik das stockende Muster wirklich veraendert, und den ersten konkreten Fortschrittsnachweis dokumentieren.",
+      escalationStalledTactic: "Wenn die stockende Taktik weiter keinen Kontakt-, Abschluss- oder Nachverfolgungsnachweis bringt, noch am selben Tag auf den staerkeren Rueckfallweg wechseln.",
+      monitoringReceiptGap: "Den fehlenden Erstkontakt-, Abschluss- oder Nachverfolgungsnachweis sichtbar halten und genau festhalten, welcher Beleg zeigt, dass die Schleife wirklich gegriffen hat.",
+      escalationReceiptGap: "Wenn der fehlende Nachweis weiter nicht dokumentiert ist, noch am selben Tag auf den benannten staerkeren Weg wechseln und festhalten, wer die Schleife schliesst.",
+      summaryChange: "Klar benennen, was sich seit dem vorherigen Plan oder der bisherigen Basis veraendert hat und was am heutigen Antwortpfad materiell anders ist.",
+      monitoringChange: "Im Monitoring festhalten, was sich heute seit dem vorherigen Plan oder der Basis veraendert hat und ob der neue Antwortpfad wirklich ein anderes Ergebnis erzeugt.",
+      escalationChange: "Wenn der alte Pfad nicht mehr zum heutigen Bild passt, jetzt den staerkeren anderen Weg benennen und welchen Nachweis sein Wirken zeigt.",
+      monitoringBranching: "Wenn die erste Verifikation greift, festhalten, was sie bestaetigt; wenn nicht, noch am selben Tag auf den staerkeren naechsten Weg wechseln statt einen generischen Schritt zu wiederholen.",
+      escalationBranching: "Wenn die erste reale Pruefung Sicherheit, Kontakt oder Abschluss nicht bestaetigen kann, sofort auf den naechsten bereits benannten Eskalationsweg wechseln.",
+      monitoringAccountability: "Bei dringender Nachverfolgung festhalten, was geprueft wurde, was sich veraendert hat und welcher erste echte Nachweis Fortschritt zeigt.",
+      escalationAccountability: "Bei dringender Nachverfolgung benennen, was den Schritt abschliesst, wer es dokumentiert und welcher Nachweis zeigt, dass die Eskalation wirklich erfolgt ist.",
+      summaryConflict: "Das aktuelle Pflegebild ist widerspruechlich, deshalb darf ein ruhigeres Signal nicht als Beweis fuer Entwarnung behandelt werden.",
+      monitoringConflict: "Widerspruechliche praediktive, passive und Live-Signale durch direkten Abgleich verifizieren und dokumentieren, welches Bild heute zutrifft.",
+      escalationConflict: "Noch am selben Tag eskalieren, wenn sich die widerspruechliche Evidenz nicht schnell aufklaeren laesst oder der direkte Abgleich dem ruhigeren Signal widerspricht.",
+      goalRisk: "Den Plan auf das aktuelle Risikobild ausrichten, damit eine fruehe Verschlechterung schnell erkannt wird.",
+      monitoringRisk: "Das aktuelle Risikobild beobachten und neue Warn-, Medikations- oder Kontaktabweichungen damit abgleichen.",
+      escalationRisk: "Noch am selben Tag eskalieren, wenn sich das Risikobild verschaerft oder frische Evidenz weiterhin keine Stabilitaet bestaetigt.",
+    },
+    es: {
+      summaryVerification: "Trata este plan como un borrador de estabilizacion y verifica el cuadro real de hoy antes de asumir que la situacion esta resuelta.",
+      monitoringVerification: "Confirma el estado real de hoy mediante un contacto fresco y registra lo que cambio respecto a la base.",
+      escalationVerification: "Escala el mismo dia si el contacto fresco o la verificacion todavia no pueden confirmar el estado actual de la persona.",
+      caregiverBoundary: "Mantiene las actualizaciones especificas del cliente dentro del equipo o de proveedores aprobados hasta confirmar el consentimiento familiar.",
+      escalationBoundary: "No amplues la comparticion mas alla del equipo o de proveedores aprobados hasta confirmar el consentimiento familiar.",
+      escalationOwner: "Asigna una persona responsable con nombre antes del siguiente ciclo de contacto y deja constancia.",
+      caregiverOwner: "Mantiene visible en el plan una persona responsable con nombre para que el siguiente paso no se quede parado.",
+      dailyMedication: "Usa el plan de medicacion guardado y los horarios de recordatorio para verificar si cada dosis se entendio, se tomo o sigue necesitando seguimiento.",
+      monitoringMedication: "Supervisa la adherencia a la medicacion y registra el mismo dia cualquier dosis perdida, tardia o no confirmada.",
+      monitoringAlerts: "Revisa las alertas activas contra la situacion real actual y documenta quien actua sobre cada una.",
+      escalationAlerts: "Escala el mismo dia si las alertas activas siguen abiertas o la persona sigue sin poder ser localizada.",
+      monitoringSensors: "Comprueba si los sensores apagados o silenciosos reflejan un problema del dispositivo o una preocupacion real de cuidado.",
+      escalationSensors: "Escala si la fiabilidad de los sensores sigue sin estar clara tras el seguimiento y no hay una alternativa segura confirmada.",
+      monitoringMedicationVsSignals: "Mantiene la adherencia a la medicacion y la fiabilidad de los sensores como comprobaciones separadas: confirma si las dosis perdidas o no confirmadas reflejan un problema real de rutina y, por separado, verifica si el silencio del dispositivo esta distorsionando el riesgo de hoy.",
+      escalationMedicationVsSignals: "Escala el mismo dia si el estado de las dosis sigue sin poder confirmarse o si la fiabilidad del dispositivo sigue sin resolverse, y deja constancia de si el riesgo abierto es deterioro real, falta de datos o ambos.",
+      dailyServices: "Usa las rutinas actuales de check-in y Brain Coach como ancla del siguiente ciclo de apoyo.",
+      monitoringServices: "Observa si el ritmo actual del servicio sigue funcionando y si la calidad de respuesta esta cambiando.",
+      goalEffectiveTactics: "Protege las rutinas de check-in, Brain Coach, seguimiento de medicacion u otras rutinas utiles que han ayudado recientemente a esta persona para que el siguiente plan no las rompa por accidente.",
+      dailyEffectiveTactics: "Continua las rutinas de check-in, Brain Coach, seguimiento de medicacion u otras rutinas utiles salvo que la situacion real de hoy las contradiga claramente.",
+      summaryContradictedEffectiveTactics: "No des por valida sin cambios una rutina que ayudo antes cuando la situacion real de hoy ya dice que se esta rompiendo; deja claro que hay que volver a verificar o sustituir.",
+      monitoringContradictedEffectiveTactics: "Supervisa donde una rutina antes util ya no esta funcionando y registra el paso de verificacion o la alternativa mas fuerte que el equipo usara en su lugar.",
+      escalationContradictedEffectiveTactics: "Si una rutina que antes ayudaba ahora queda contradicha por contacto fallido, deriva de medicacion o una ruta bloqueada, pasa ese mismo dia a la alternativa mas fuerte en lugar de seguir repitiendola.",
+      monitoringOpenLoop: "Mantiene visible cualquier circuito abierto de traspaso o incidente hasta que el equipo registre el primer contacto, la persona responsable y el cierre explicito.",
+      escalationOpenLoop: "No reinicies el ciclo de respuesta. Mantén abierto el circuito de traspaso o incidente, confirma quien lo asume y documenta que lo cierra.",
+      monitoringPriorPlan: "Usa la monitorizacion para comprobar si las brechas de revision o la deriva de evidencia del plan anterior se estan corrigiendo de verdad.",
+      escalationPriorPlan: "Escala si la misma brecha abierta del plan anterior sigue repitiendose o si la evidencia cambiada todavia no se ha integrado.",
+      monitoringActionability: "Haz el siguiente paso de monitorizacion lo bastante concreto como para que cualquier miembro del equipo pueda ejecutarlo sin adivinar quien actua, cuando ocurre y que se registra.",
+      escalationActionability: "Deja claro el siguiente responsable, el momento, la rama de contingencia y la prueba de cierre para que la escalada pueda ejecutarse sin improvisar.",
+      summaryGrounding: "Ancla este plan en la situacion real actual y deja claro donde sigue haciendo falta una verificacion fresca antes de asumir estabilidad.",
+      monitoringGrounding: "Vincula la monitorizacion a las senales en vivo que activaron este plan y documenta que las confirmaria o contradiciria hoy.",
+      summaryOutcomeWorsened: "La evidencia en vivo posterior sugiere que el plan anterior no estabilizo el caso, asi que esta version no deberia reutilizar ese mismo enfoque a la ligera.",
+      monitoringOutcomeWorsened: "Usa la monitorizacion para vigilar si la ruta de respuesta reforzada esta cambiando el cuadro empeorado en lugar de conservar el bucle anterior.",
+      escalationOutcomeWorsened: "Haz explicita ahora la ruta de respuesta mas fuerte para el mismo dia en lugar de esperar a ver si el enfoque anterior empieza a funcionar.",
+      monitoringOutcomeStalled: "Usa la monitorizacion para comprobar si el siguiente movimiento es materialmente mas fuerte que la ruta anterior estancada y que primera prueba demostraria avance.",
+      escalationOutcomeStalled: "Si la ruta de respuesta anterior ya se estanco, nombra ahora la siguiente via mas fuerte en lugar de repetirla una vez mas.",
+      monitoringAlternateRoute: "Observa si el canal y la audiencia actuales estan funcionando; si no, cambia a otro canal aprobado o a la ruta del circulo de cuidado y documenta el resultado.",
+      escalationAlternateRoute: "Si la misma ruta sigue fallando, pasa de inmediato a otro canal aprobado o a la ruta de la persona responsable o del circulo aprobado y manten el circuito urgente hasta confirmar contacto.",
+      monitoringRepeatedTactic: "Deja visible que es lo materialmente distinto de esta vez frente a la familia de tacticas repetida y que comprobacion mostrara progreso.",
+      escalationRepeatedTactic: "Escala pronto si la misma familia de tacticas se vuelve a intentar sin una ruta distinta, una persona responsable distinta o una prueba clara de avance.",
+      monitoringStalledTactic: "Sigue si la tactica reforzada cambia de verdad el patron atascado y registra la primera prueba concreta de progreso.",
+      escalationStalledTactic: "Si la tactica atascada sigue sin producir contacto, cierre o prueba de seguimiento, pasa el mismo dia a la alternativa mas fuerte.",
+      monitoringReceiptGap: "Mantiene visible la prueba que falta de primer contacto, cierre o seguimiento y registra exactamente que evidencia demostrara que el circuito realmente funciono.",
+      escalationReceiptGap: "Si la prueba que falta sigue sin registrarse, pasa ese mismo dia a la ruta reforzada ya nombrada y documenta quien cierra el circuito.",
+      summaryChange: "Deja claro que cambio desde el plan anterior o la base y que es materialmente distinto en la ruta de respuesta de hoy.",
+      monitoringChange: "Usa la monitorizacion para registrar que cambio hoy respecto al plan anterior o la base y si la nueva ruta de respuesta esta produciendo un resultado diferente de verdad.",
+      escalationChange: "Si la ruta anterior ya no encaja con la situacion de hoy, nombra ahora la via mas fuerte y distinta y que prueba mostrara que funciono.",
+      monitoringBranching: "Si la primera verificacion funciona, registra lo que confirma; si no, cambia ese mismo dia a la ruta siguiente mas fuerte en lugar de repetir un paso generico.",
+      escalationBranching: "Si la primera comprobacion real no puede confirmar seguridad, contacto o cierre, pasa de inmediato a la siguiente via de escalado ya nombrada en el plan.",
+      monitoringAccountability: "En el seguimiento urgente, registra que se comprobo, que cambio y cual es la primera prueba real de progreso.",
+      escalationAccountability: "En el seguimiento urgente, deja claro que cierra este paso, quien lo registra y que prueba mostrara que la escalada ocurrio de verdad.",
+      summaryConflict: "La situacion actual es mixta, asi que este plan no debe tratar una senal mas tranquila como prueba de que todo esta resuelto.",
+      monitoringConflict: "Reconcilia las senales predictivas, pasivas y operativas mediante verificacion directa y documenta que cuadro es el que realmente se confirma hoy.",
+      escalationConflict: "Escala el mismo dia si la evidencia mixta no puede reconciliarse rapido o si la verificacion directa contradice la senal mas tranquila.",
+      goalRisk: "Mantiene el plan centrado en el cuadro de riesgo actual para detectar rapido un deterioro temprano.",
+      monitoringRisk: "Supervisa el cuadro de riesgo actual y compara contra el cualquier nueva deriva en alertas, medicacion o contacto.",
+      escalationRisk: "Escala el mismo dia si el cuadro de riesgo empeora o la evidencia fresca todavia no puede confirmar estabilidad.",
+    },
+  };
+  return (copy[language] || copy.en)[key] || copy.en[key];
+}
+
+function healthPlanTextShowsExecutionOrdering(text) {
+  return textMatchesAny(text, [
+    /\bstart with\b/i,
+    /\bopening move\b/i,
+    /\bkeep only the first\b/i,
+    /\bkeep the next few\b/i,
+    /\btightly ordered\b/i,
+    /\bdefer the rest\b/i,
+    /\bals erstes\b/i,
+    /\bstarten sie mit\b/i,
+    /\bbeginnen sie mit\b/i,
+    /\bnur die ersten\b/i,
+    /\beng geordnet\b/i,
+    /\bempieza con\b/i,
+    /\bempiece con\b/i,
+    /\bsolo las primeras\b/i,
+    /\bmanten ordenadas las siguientes\b/i,
+    /\bdeja el resto\b/i,
+  ]);
+}
+
+function healthPlanGenerationExecutionBriefSignalIds(brief, fallback = []) {
+  const triageSignalIds = Array.isArray(brief?.triage_tasks)
+    ? brief.triage_tasks.flatMap((task) => Array.isArray(task?.signal_ids) ? task.signal_ids : [])
+    : [];
+  return normalizePatchSignalIds(
+    new Set([...triageSignalIds, ...fallback].map((signalId) => nullIfBlank(signalId)).filter(Boolean)),
+    triageSignalIds,
+    fallback,
+  );
+}
+
+function healthPlanGenerationExecutionTriageText(language, key, brief) {
+  const resolvedLanguage = normalizeLanguage(language, "en");
+  const nextTaskTitle = nullIfBlank(brief?.next_task_title);
+  const triageCount = Math.max(1, Array.isArray(brief?.triage_tasks) ? brief.triage_tasks.length : 0);
+  const sameDayCount = Number.isFinite(Number(brief?.same_day_task_count))
+    ? Math.max(0, Number(brief.same_day_task_count))
+    : triageCount;
+  const openingTitle = nextTaskTitle ? nextTaskTitle.toLowerCase() : null;
+  const texts = {
+    en: {
+      summary: openingTitle
+        ? `There are ${sameDayCount} same-day tasks in play. Start with ${openingTitle} and keep only the first ${triageCount} tasks in active focus until one of them lands.`
+        : `There are too many same-day tasks in play. Keep only the first ${triageCount} tasks in active focus until one of them lands.`,
+      monitoring: openingTitle
+        ? `Keep the opening lane visible: start with ${openingTitle}, hold the next ${triageCount} same-day tasks in order, and defer the rest until one task lands or the live picture changes.`
+        : `Keep the opening lane visible, hold the first ${triageCount} same-day tasks in order, and defer the rest until one task lands or the live picture changes.`,
+      escalation: openingTitle
+        ? `If ${openingTitle} still does not land, keep the first ${triageCount} same-day tasks tightly ordered and escalate the blocked route instead of opening more parallel work.`
+        : `If the opening move still does not land, keep the first ${triageCount} same-day tasks tightly ordered and escalate the blocked route instead of opening more parallel work.`,
+    },
+    de: {
+      summary: openingTitle
+        ? `Es laufen ${sameDayCount} Aufgaben fuer denselben Tag. Mit ${openingTitle} beginnen und nur die ersten ${triageCount} Aufgaben aktiv im Fokus halten, bis eine davon greift.`
+        : `Es laufen zu viele Aufgaben fuer denselben Tag. Nur die ersten ${triageCount} Aufgaben aktiv im Fokus halten, bis eine davon greift.`,
+      monitoring: openingTitle
+        ? `Die Eroeffnungsspur sichtbar halten: mit ${openingTitle} beginnen, die naechsten ${triageCount} Aufgaben fuer denselben Tag geordnet halten und den Rest verschieben, bis ein Schritt greift oder sich das Live-Bild aendert.`
+        : `Die Eroeffnungsspur sichtbar halten, die ersten ${triageCount} Aufgaben fuer denselben Tag geordnet halten und den Rest verschieben, bis ein Schritt greift oder sich das Live-Bild aendert.`,
+      escalation: openingTitle
+        ? `Wenn ${openingTitle} weiter nicht greift, die ersten ${triageCount} Aufgaben fuer denselben Tag eng geordnet halten und den blockierten Weg eskalieren, statt weitere parallele Arbeit zu oeffnen.`
+        : `Wenn der erste Schritt weiter nicht greift, die ersten ${triageCount} Aufgaben fuer denselben Tag eng geordnet halten und den blockierten Weg eskalieren, statt weitere parallele Arbeit zu oeffnen.`,
+    },
+    es: {
+      summary: openingTitle
+        ? `Hay ${sameDayCount} tareas del mismo dia en juego. Empieza con ${openingTitle} y manten solo las primeras ${triageCount} tareas en foco activo hasta que una de ellas aterrice.`
+        : `Hay demasiadas tareas del mismo dia en juego. Manten solo las primeras ${triageCount} tareas en foco activo hasta que una de ellas aterrice.`,
+      monitoring: openingTitle
+        ? `Manten visible el carril de apertura: empieza con ${openingTitle}, manten ordenadas las siguientes ${triageCount} tareas del mismo dia y deja el resto para despues hasta que una tarea aterrice o cambie la situacion real.`
+        : `Manten visible el carril de apertura, manten ordenadas las primeras ${triageCount} tareas del mismo dia y deja el resto para despues hasta que una tarea aterrice o cambie la situacion real.`,
+      escalation: openingTitle
+        ? `Si ${openingTitle} sigue sin aterrizar, manten bien ordenadas las primeras ${triageCount} tareas del mismo dia y escala la ruta bloqueada en lugar de abrir mas trabajo en paralelo.`
+        : `Si el primer movimiento sigue sin aterrizar, manten bien ordenadas las primeras ${triageCount} tareas del mismo dia y escala la ruta bloqueada en lugar de abrir mas trabajo en paralelo.`,
+    },
+  };
+  return texts[resolvedLanguage]?.[key] || texts.en[key];
+}
+
+function healthPlanRouteSpecificMonitoringText(routeLearning, language = "en") {
+  const route = nullIfBlank(routeLearning?.preferred_route);
+  const proof = nullIfBlank(routeLearning?.proof_requirement_text);
+  if (route === "approved_care_circle") {
+    return language === "de"
+      ? `Wenn der direkte Klientenweg weiter nicht greift, heute auf den freigegebenen Betreuungskreisweg wechseln, pruefen wer reagiert und dokumentieren, was sich geaendert hat.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Si la ruta directa con el cliente sigue sin funcionar, cambia hoy a la ruta aprobada del circulo de cuidado, verifica quien responde y documenta que cambio.${proof ? ` ${proof}` : ""}`
+        : `If the direct client route is still not landing, switch today to the approved care-circle route, verify who responds, and document what changed.${proof ? ` ${proof}` : ""}`;
+  }
+  if (route === "switch_client_channel") {
+    return language === "de"
+      ? `Den naechsten Klientenkontakt heute ueber einen anderen freigegebenen Kanal versuchen, pruefen ob dadurch Erstkontakt gelingt und das Ergebnis festhalten.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Haz hoy el siguiente contacto con el cliente por un canal aprobado diferente, verifica si asi se logra el primer contacto y registra el resultado.${proof ? ` ${proof}` : ""}`
+        : `Use a different approved client channel for the next touchpoint today, verify whether that produces first contact, and record the result.${proof ? ` ${proof}` : ""}`;
+  }
+  if (route === "named_owner_escalation") {
+    return language === "de"
+      ? `Den Fall jetzt an die benannte verantwortliche Person uebergeben, pruefen ob Erstkontakt oder Abschluss heute dokumentiert wird und das Ergebnis festhalten.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Pasa el caso ahora a la persona responsable con nombre, verifica si hoy queda documentado el primer contacto o el cierre y registra el resultado.${proof ? ` ${proof}` : ""}`
+        : `Move the case now to the named owner route, verify whether first contact or closure is documented today, and record the result.${proof ? ` ${proof}` : ""}`;
+  }
+  return language === "de"
+    ? `Den aktuellen Weg nur fuer eine frische Verifikation heute weiterfuehren und festhalten, ob Erstkontakt oder Abschluss wirklich dokumentiert wurde.${proof ? ` ${proof}` : ""}`
+    : language === "es"
+      ? `Manten la ruta actual solo para una verificacion fresca hoy y registra si realmente se documento el primer contacto o el cierre.${proof ? ` ${proof}` : ""}`
+      : `Keep the current route only for a fresh verification step today and record whether first contact or closure is actually documented.${proof ? ` ${proof}` : ""}`;
+}
+
+function healthPlanRouteSpecificEscalationText(routeLearning, language = "en") {
+  const route = nullIfBlank(routeLearning?.preferred_route);
+  const proof = nullIfBlank(routeLearning?.proof_requirement_text);
+  if (route === "approved_care_circle") {
+    return language === "de"
+      ? `Wenn auch der freigegebene Betreuungskreisweg heute keinen realen Kontakt oder Abschluss bringt, noch am selben Tag an die benannte verantwortliche Person eskalieren und den fehlgeschlagenen Weg dokumentieren.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Si la ruta aprobada del circulo de cuidado tampoco logra hoy un contacto real o un cierre, escala el mismo dia a la persona responsable con nombre y documenta la ruta fallida.${proof ? ` ${proof}` : ""}`
+        : `If the approved care-circle route still does not produce real contact or closure today, escalate the same day to the named owner path and document the failed route.${proof ? ` ${proof}` : ""}`;
+  }
+  if (route === "switch_client_channel") {
+    return language === "de"
+      ? `Wenn auch der andere Klientenkanal keinen Erstkontakt bringt, noch am selben Tag auf den benannten Verantwortungsweg oder Betreuungskreis eskalieren und das Scheitern dokumentieren.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Si el canal alternativo con el cliente tampoco logra el primer contacto, escala el mismo dia a la ruta de la persona responsable o del circulo de cuidado y documenta el fallo.${proof ? ` ${proof}` : ""}`
+        : `If the alternate client channel still does not produce first contact, escalate the same day to the named owner or care-circle route and document the failure.${proof ? ` ${proof}` : ""}`;
+  }
+  if (route === "named_owner_escalation") {
+    return language === "de"
+      ? `Wenn der benannte Verantwortungsweg heute weiter keinen Kontakt oder Abschluss bringt, den Fall dringend halten, die Verantwortung weiter hochstufen und den blockierten Weg dokumentieren.${proof ? ` ${proof}` : ""}`
+      : language === "es"
+        ? `Si la ruta de la persona responsable sigue sin producir hoy contacto o cierre, mantén el caso como urgente, escala más la responsabilidad y documenta la ruta bloqueada.${proof ? ` ${proof}` : ""}`
+        : `If the named owner route still does not produce contact or closure today, keep the case urgent, escalate ownership further, and document the blocked route.${proof ? ` ${proof}` : ""}`;
+  }
+  return language === "de"
+    ? `Wenn der aktuelle Weg heute keinen frischen Nachweis liefert, noch am selben Tag auf den staerkeren Alternativweg wechseln und den blockierten Pfad dokumentieren.${proof ? ` ${proof}` : ""}`
+    : language === "es"
+      ? `Si la ruta actual no aporta hoy una prueba fresca, pasa el mismo dia a la alternativa mas fuerte y documenta la via bloqueada.${proof ? ` ${proof}` : ""}`
+      : `If the current route does not produce a fresh proof step today, move the same day to the stronger alternate route and document the blocked path.${proof ? ` ${proof}` : ""}`;
+}
+
+function healthPlanOperationalMetadataText(language, key) {
+  const copy = {
+    en: {
+      fallbackOwner: "Assigned staff owner",
+      monitoringProof: "Counts as done when today's fresh touchpoint, verification result, or alert status update is recorded in the client record.",
+      monitoringFallback: "If today's verification still does not land, move the case the same day to the stronger route and document the outcome.",
+      escalationProof: "Counts as done when the named owner, stronger route, and closure result are all recorded in the client record.",
+      escalationFallback: "If the stronger route still does not land today, keep the case urgent, escalate ownership, and document the failed path.",
+    },
+    de: {
+      fallbackOwner: "Zugewiesene verantwortliche Person",
+      monitoringProof: "Es gilt als erledigt, wenn der heutige frische Kontakt, das Verifikationsergebnis oder der aktualisierte Alarmstatus in der Klientenakte dokumentiert ist.",
+      monitoringFallback: "Wenn die heutige Verifikation weiterhin nicht landet, den Fall noch am selben Tag auf den staerkeren Weg umstellen und das Ergebnis dokumentieren.",
+      escalationProof: "Es gilt als erledigt, wenn die benannte verantwortliche Person, der staerkere Weg und das Abschlussergebnis in der Klientenakte dokumentiert sind.",
+      escalationFallback: "Wenn auch der staerkere Weg heute nicht landet, den Fall dringend halten, die Verantwortung weiter eskalieren und den gescheiterten Pfad dokumentieren.",
+    },
+    es: {
+      fallbackOwner: "Responsable asignado del equipo",
+      monitoringProof: "Cuenta como hecho cuando el contacto fresco de hoy, el resultado de la verificacion o la actualizacion del estado de la alerta quedan registrados en la ficha del cliente.",
+      monitoringFallback: "Si la verificacion de hoy sigue sin aterrizar, mueve el caso ese mismo dia a la ruta mas fuerte y documenta el resultado.",
+      escalationProof: "Cuenta como hecho cuando la persona responsable, la ruta reforzada y el resultado de cierre quedan registrados en la ficha del cliente.",
+      escalationFallback: "Si la ruta reforzada tampoco aterriza hoy, mantén el caso como urgente, escala la responsabilidad y documenta la via fallida.",
+    },
+  };
+  return (copy[language] || copy.en)[key] || copy.en[key];
+}
+
+function healthPlanPreferredOwnerLabel(promptInput, language = "en") {
+  const providers = Array.isArray(promptInput?.care_providers) ? promptInput.care_providers : [];
+  const preferred =
+    providers.find((provider) => provider?.is_primary && String(provider?.provider_type || "").toLowerCase() === "field_staff")
+    || providers.find((provider) => provider?.is_primary)
+    || providers.find((provider) => String(provider?.provider_type || "").toLowerCase() === "field_staff")
+    || providers[0]
+    || null;
+  return nullIfBlank(preferred?.display_name) || healthPlanOperationalMetadataText(language, "fallbackOwner");
+}
+
+function repairGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) {
+  const plan = cloneGeneratedHealthPlan(generatedPlan);
+  const language = normalizeLanguage(promptInput?.language, "en");
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(
+    promptInput?.context_snapshot && typeof promptInput.context_snapshot === "object" && !Array.isArray(promptInput.context_snapshot)
+      ? { ...promptInput.context_snapshot, ...promptInput }
+      : promptInput,
+  );
+  const generationExecutionBrief = normalizeHealthPlanGenerationExecutionBrief(
+    promptInput?.generation_execution_brief || contextSnapshot?.generation_execution_brief,
+  );
+  const sourceSignalIds = new Set((Array.isArray(sourceSignals) ? sourceSignals : []).map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const mustCover = Array.isArray(promptInput?.must_cover) ? promptInput.must_cover : [];
+  const sectionGuidance = normalizeHealthPlanSectionGuidance(promptInput?.section_guidance);
+  const sectionEvidenceBundles = normalizeHealthPlanSectionEvidenceBundles(promptInput?.section_evidence_bundles);
+  const generationContract = normalizeHealthPlanGenerationContract(promptInput?.generation_contract);
+  const evidencePack = normalizeHealthPlanEvidencePack(promptInput?.evidence_pack);
+  const routeLearning = normalizeHealthPlanRouteLearning(promptInput?.route_learning);
+  const requirementMap = new Map(mustCover.map((requirement) => [requirement.code, requirement]));
+  const topPrioritySignalIds = Array.isArray(promptInput?.evidence_digest?.top_priority_signal_ids)
+    ? promptInput.evidence_digest.top_priority_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const evidencePackPrimarySignalIds = Array.isArray(evidencePack?.primary_signal_ids)
+    ? evidencePack.primary_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const evidencePackVerificationSignalIds = Array.isArray(evidencePack?.verification_signal_ids)
+    ? evidencePack.verification_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const criticalSignalIds = Array.isArray(promptInput?.critical_signal_ids)
+    ? promptInput.critical_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const confirmationSignalIds = Array.isArray(promptInput?.next_confirmations)
+    ? promptInput.next_confirmations.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []).filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const lowConfidence = promptInput?.generation_assessment?.confidence === "low";
+  const freshnessGap = Boolean(promptInput?.evidence_digest?.freshness_gap);
+  const minimumSummarySignals =
+    criticalSignalIds.length > 0 || sourceSignals.length >= 4
+      ? 2
+      : 1;
+  const baseSummaryRefs = normalizePatchSignalIds(
+    sourceSignalIds,
+    [...criticalSignalIds, ...evidencePackPrimarySignalIds, ...confirmationSignalIds, ...topPrioritySignalIds],
+    sourceSignals.slice(0, 3).map((signal) => signal?.id),
+  );
+  const contractSummaryRefs = normalizePatchSignalIds(
+    sourceSignalIds,
+    generationContract?.summary_required_signal_ids,
+    baseSummaryRefs,
+  );
+  const contractMonitoringRefs = normalizePatchSignalIds(
+    sourceSignalIds,
+    generationContract?.monitoring_required_signal_ids,
+    [...evidencePackVerificationSignalIds, ...contractSummaryRefs],
+  );
+  const contractEscalationRefs = normalizePatchSignalIds(
+    sourceSignalIds,
+    generationContract?.escalation_required_signal_ids,
+    contractMonitoringRefs,
+  );
+  const executionBriefSignalIds = healthPlanGenerationExecutionBriefSignalIds(generationExecutionBrief, [
+    ...contractMonitoringRefs,
+    ...contractEscalationRefs,
+    ...baseSummaryRefs,
+  ]);
+  const nextExecutionTaskSignalIds = Array.isArray(generationExecutionBrief?.triage_tasks?.[0]?.signal_ids)
+    ? generationExecutionBrief.triage_tasks[0].signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const initialExecutionCoverageRefs = new Set([
+    ...generatedHealthPlanSectionRefs(plan, "summary"),
+    ...generatedHealthPlanSectionRefs(plan, "monitoring"),
+    ...generatedHealthPlanSectionRefs(plan, "escalation"),
+  ]);
+  const openingTaskInitiallyCovered = nextExecutionTaskSignalIds.length === 0
+    ? false
+    : nextExecutionTaskSignalIds.some((signalId) => initialExecutionCoverageRefs.has(signalId));
+
+  if ((lowConfidence || freshnessGap || confirmationSignalIds.length > 0) && healthPlanTextOverstatesConfidence(plan.summary_text)) {
+    plan.summary_text = healthPlanSafetyOverlayText(language, "summaryVerification");
+    plan.summary_signal_ids = baseSummaryRefs.slice(0, Math.max(minimumSummarySignals, 2));
+  }
+
+  if ((lowConfidence || freshnessGap || confirmationSignalIds.length > 0) && !healthPlanTextNeedsVerification(planSectionText(plan, ["summary", "monitoring", "escalation"]))) {
+    appendGeneratedPlanSummary(
+      plan,
+      healthPlanSafetyOverlayText(language, "summaryVerification"),
+      baseSummaryRefs.slice(0, Math.max(minimumSummarySignals, 2)),
+      healthPlanRequirementMatchers("stabilize_low_confidence_context", promptInput),
+    );
+    appendGeneratedPlanSectionItem(
+      plan,
+      "monitoring",
+      healthPlanSafetyOverlayText(language, "monitoringVerification"),
+      normalizePatchSignalIds(sourceSignalIds, confirmationSignalIds, baseSummaryRefs),
+      "verify",
+      healthPlanRequirementMatchers("refresh_live_status", promptInput),
+    );
+    appendGeneratedPlanSectionItem(
+      plan,
+      "escalation",
+      healthPlanSafetyOverlayText(language, "escalationVerification"),
+      normalizePatchSignalIds(sourceSignalIds, confirmationSignalIds, baseSummaryRefs),
+      "verify",
+      healthPlanRequirementMatchers("refresh_live_status", promptInput),
+    );
+  }
+
+  if (plan.summary_signal_ids.length < minimumSummarySignals) {
+    plan.summary_signal_ids = [...new Set([...plan.summary_signal_ids, ...baseSummaryRefs])].slice(0, Math.max(minimumSummarySignals, 2));
+  }
+
+  if (
+    generationContract?.must_acknowledge_material_change
+    && !textMatchesAny(plan.summary_text, healthPlanRequirementMatchers("explain_material_change", promptInput))
+  ) {
+    appendGeneratedPlanSummary(
+      plan,
+      healthPlanSafetyOverlayText(language, "summaryChange"),
+      contractSummaryRefs.slice(0, Math.max(minimumSummarySignals, 2)),
+      healthPlanRequirementMatchers("explain_material_change", promptInput),
+    );
+  }
+
+  if (
+    generationContract?.must_acknowledge_freshness_gap
+    && !healthPlanTextNeedsVerification(planSectionText(plan, ["summary"]))
+  ) {
+    appendGeneratedPlanSummary(
+      plan,
+      healthPlanSafetyOverlayText(language, "summaryVerification"),
+      contractSummaryRefs.slice(0, Math.max(minimumSummarySignals, 2)),
+      healthPlanRequirementMatchers("refresh_live_status", promptInput),
+    );
+  }
+
+  if (
+    generationContract?.must_acknowledge_conflict
+    && !textMatchesAny(plan.summary_text, healthPlanRequirementMatchers("reconcile_conflicting_evidence", promptInput))
+  ) {
+    appendGeneratedPlanSummary(
+      plan,
+      healthPlanSafetyOverlayText(language, "summaryConflict"),
+      contractSummaryRefs.slice(0, Math.max(minimumSummarySignals, 2)),
+      healthPlanRequirementMatchers("reconcile_conflicting_evidence", promptInput),
+    );
+  }
+
+  if (
+    generationContract?.must_name_alternate_route
+    && !textMatchesAny(planSectionText(plan, ["monitoring", "escalation"]), healthPlanRequirementMatchers("adapt_contact_path", promptInput))
+  ) {
+    appendGeneratedPlanSectionItem(
+      plan,
+      "monitoring",
+      routeLearning
+        ? healthPlanRouteSpecificMonitoringText(routeLearning, language)
+        : healthPlanSafetyOverlayText(language, "monitoringAlternateRoute"),
+      normalizePatchSignalIds(sourceSignalIds, routeLearning?.supporting_signal_ids, contractMonitoringRefs),
+      "generation-contract-alternate-route-monitoring",
+      healthPlanRequirementMatchers("adapt_contact_path", promptInput),
+    );
+    appendGeneratedPlanSectionItem(
+      plan,
+      "escalation",
+      routeLearning
+        ? healthPlanRouteSpecificEscalationText(routeLearning, language)
+        : healthPlanSafetyOverlayText(language, "escalationAlternateRoute"),
+      normalizePatchSignalIds(sourceSignalIds, routeLearning?.supporting_signal_ids, contractEscalationRefs),
+      "generation-contract-alternate-route-escalation",
+      healthPlanRequirementMatchers("adapt_contact_path", promptInput),
+    );
+  }
+
+  if (
+    generationContract?.must_name_stronger_next_move
+    && !textMatchesAny(
+      planSectionText(plan, ["escalation"]),
+      [
+        ...healthPlanRequirementMatchers("change_course_after_worsening", promptInput),
+        ...healthPlanRequirementMatchers("unstick_stalled_outcome", promptInput),
+        ...healthPlanRequirementMatchers("upgrade_stalled_tactic", promptInput),
+      ],
+    )
+  ) {
+    appendGeneratedPlanSectionItem(
+      plan,
+      "escalation",
+      healthPlanSafetyOverlayText(language, "escalationOutcomeStalled"),
+      contractEscalationRefs,
+      "generation-contract-stronger-next-move",
+      [
+        ...healthPlanRequirementMatchers("change_course_after_worsening", promptInput),
+        ...healthPlanRequirementMatchers("unstick_stalled_outcome", promptInput),
+        ...healthPlanRequirementMatchers("upgrade_stalled_tactic", promptInput),
+      ],
+    );
+  }
+
+  if (
+    generationContract?.must_name_completion_receipt
+    && !textMatchesAny(planSectionText(plan, ["monitoring", "escalation"]), healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput))
+  ) {
+    appendGeneratedPlanSectionItem(
+      plan,
+      "monitoring",
+      routeLearning
+        ? healthPlanRouteSpecificMonitoringText(routeLearning, language)
+        : healthPlanSafetyOverlayText(language, "monitoringAccountability"),
+      normalizePatchSignalIds(sourceSignalIds, routeLearning?.supporting_signal_ids, contractMonitoringRefs),
+      "generation-contract-completion-receipt-monitoring",
+      healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput),
+    );
+    appendGeneratedPlanSectionItem(
+      plan,
+      "escalation",
+      routeLearning
+        ? healthPlanRouteSpecificEscalationText(routeLearning, language)
+        : healthPlanSafetyOverlayText(language, "escalationAccountability"),
+      normalizePatchSignalIds(sourceSignalIds, routeLearning?.supporting_signal_ids, contractEscalationRefs),
+      "generation-contract-completion-receipt-escalation",
+      healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput),
+    );
+  }
+
+  if (
+    (generationExecutionBrief?.load_state === "overloaded" || generationExecutionBrief?.load_state === "busy")
+    && !healthPlanTextShowsExecutionOrdering(planSectionText(plan, ["summary", "monitoring", "escalation"]))
+  ) {
+    if (openingTaskInitiallyCovered) {
+      // The plan already gives the opening lane enough grounding to act on without extra copy.
+    } else {
+    appendGeneratedPlanSummary(
+      plan,
+      healthPlanGenerationExecutionTriageText(language, "summary", generationExecutionBrief),
+      executionBriefSignalIds.slice(0, Math.max(minimumSummarySignals, 2)),
+    );
+    appendGeneratedPlanSectionItem(
+      plan,
+      "monitoring",
+      healthPlanGenerationExecutionTriageText(language, "monitoring", generationExecutionBrief),
+      executionBriefSignalIds,
+      "generation-execution-triage-monitoring",
+    );
+    if (generationExecutionBrief?.load_state === "overloaded") {
+      appendGeneratedPlanSectionItem(
+        plan,
+        "escalation",
+        healthPlanGenerationExecutionTriageText(language, "escalation", generationExecutionBrief),
+        executionBriefSignalIds,
+        "generation-execution-triage-escalation",
+      );
+    }
+    }
+  }
+
+  const ensureRequirementOverlay = (requirementCode, sectionTextMap) => {
+    const requirement = requirementMap.get(requirementCode);
+    if (!requirement) return;
+    const requiredSignalIds = Array.isArray(requirement.required_signal_ids)
+      ? requirement.required_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+      : [];
+    const requiredSections = Array.isArray(requirement.required_sections) ? requirement.required_sections.filter(Boolean) : [];
+    if (!requiredSignalIds.length || !requiredSections.length) return;
+    const matchers = healthPlanRequirementMatchers(requirementCode, promptInput);
+    const sectionSatisfiesRequirement = (sectionName) =>
+      generatedHealthPlanSectionCoversRequirement(plan, sectionName, requiredSignalIds, requirement.match)
+      && (!matchers.length || textMatchesAny(planSectionText(plan, [sectionName]), matchers));
+    const coveredSections = requiredSections.filter((sectionName) => sectionSatisfiesRequirement(sectionName));
+    const requirementCovered =
+      requirement?.match === "all"
+        ? requiredSignalIds.every((signalId) =>
+            requiredSections.some((sectionName) =>
+              generatedHealthPlanSectionRefs(plan, sectionName).has(signalId)
+              && (!matchers.length || textMatchesAny(planSectionText(plan, [sectionName]), matchers))),
+          )
+        : coveredSections.length > 0;
+    const minimumSectionCoverage = Number.isFinite(Number(requirement?.minimum_section_coverage))
+      ? Math.max(1, Math.round(Number(requirement.minimum_section_coverage)))
+      : 1;
+    if (requirementCovered && coveredSections.length >= minimumSectionCoverage) return;
+
+    for (const sectionName of requiredSections) {
+      const text = sectionTextMap[sectionName];
+      if (!text) continue;
+      if (sectionSatisfiesRequirement(sectionName)) continue;
+      enrichGeneratedPlanCoverage(plan, sectionName, requiredSignalIds, matchers, text);
+      if (sectionSatisfiesRequirement(sectionName)) {
+        const nextCoveredSections = requiredSections.filter((name) =>
+          sectionSatisfiesRequirement(name),
+        );
+        const nextRequirementCovered =
+          requirement?.match === "all"
+            ? requiredSignalIds.every((signalId) =>
+                requiredSections.some((name) =>
+                  generatedHealthPlanSectionRefs(plan, name).has(signalId)
+                  && (!matchers.length || textMatchesAny(planSectionText(plan, [name]), matchers))),
+              )
+            : nextCoveredSections.length > 0;
+        if (nextRequirementCovered && nextCoveredSections.length >= minimumSectionCoverage) break;
+        continue;
+      }
+      if (sectionName === "summary") {
+        appendGeneratedPlanSummary(plan, text, requiredSignalIds, matchers);
+      } else {
+        appendGeneratedPlanSectionItem(plan, sectionName, text, requiredSignalIds, requirementCode, matchers);
+      }
+      const nextCoveredSections = requiredSections.filter((name) =>
+        sectionSatisfiesRequirement(name),
+      );
+      const nextRequirementCovered =
+        requirement?.match === "all"
+          ? requiredSignalIds.every((signalId) =>
+              requiredSections.some((name) =>
+                generatedHealthPlanSectionRefs(plan, name).has(signalId)
+                && (!matchers.length || textMatchesAny(planSectionText(plan, [name]), matchers))),
+            )
+          : nextCoveredSections.length > 0;
+      if (nextRequirementCovered && nextCoveredSections.length >= minimumSectionCoverage) break;
+    }
+  };
+
+  ensureRequirementOverlay("respect_sharing_boundary", {
+    caregiver_guidance: healthPlanSafetyOverlayText(language, "caregiverBoundary"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationBoundary"),
+  });
+  ensureRequirementOverlay("assign_named_owner", {
+    caregiver_guidance: healthPlanSafetyOverlayText(language, "caregiverOwner"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationOwner"),
+  });
+  ensureRequirementOverlay("support_medication_followup", {
+    daily_support: healthPlanSafetyOverlayText(language, "dailyMedication"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringMedication"),
+  });
+  ensureRequirementOverlay("review_active_alerts", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringAlerts"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationAlerts"),
+  });
+  ensureRequirementOverlay("check_sensor_reliability", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringSensors"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationSensors"),
+  });
+  ensureRequirementOverlay("separate_medication_from_signal_reliability", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringMedicationVsSignals"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationMedicationVsSignals"),
+  });
+  ensureRequirementOverlay("maintain_service_routines", {
+    daily_support: healthPlanSafetyOverlayText(language, "dailyServices"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringServices"),
+  });
+  ensureRequirementOverlay("preserve_effective_tactics", {
+    goals: healthPlanSafetyOverlayText(language, "goalEffectiveTactics"),
+    daily_support: healthPlanSafetyOverlayText(language, "dailyEffectiveTactics"),
+  });
+  ensureRequirementOverlay("reframe_contradicted_effective_tactics", {
+    summary: healthPlanSafetyOverlayText(language, "summaryContradictedEffectiveTactics"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringContradictedEffectiveTactics"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationContradictedEffectiveTactics"),
+  });
+  ensureRequirementOverlay("carry_forward_open_operational_loops", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringOpenLoop"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationOpenLoop"),
+  });
+  ensureRequirementOverlay("resolve_prior_plan_gaps", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringPriorPlan"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationPriorPlan"),
+  });
+  ensureRequirementOverlay("raise_operational_actionability", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringActionability"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationActionability"),
+  });
+  ensureRequirementOverlay("strengthen_live_grounding", {
+    summary: healthPlanSafetyOverlayText(language, "summaryGrounding"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringGrounding"),
+  });
+  ensureRequirementOverlay("change_course_after_worsening", {
+    summary: healthPlanSafetyOverlayText(language, "summaryOutcomeWorsened"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringOutcomeWorsened"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationOutcomeWorsened"),
+  });
+  ensureRequirementOverlay("unstick_stalled_outcome", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringOutcomeStalled"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationOutcomeStalled"),
+  });
+  ensureRequirementOverlay("adapt_contact_path", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringAlternateRoute"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationAlternateRoute"),
+  });
+  ensureRequirementOverlay("differentiate_repeated_tactic", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringRepeatedTactic"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationRepeatedTactic"),
+  });
+  ensureRequirementOverlay("upgrade_stalled_tactic", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringStalledTactic"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationStalledTactic"),
+  });
+  ensureRequirementOverlay("close_execution_receipt_gap", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringReceiptGap"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationReceiptGap"),
+  });
+  ensureRequirementOverlay("explain_material_change", {
+    summary: healthPlanSafetyOverlayText(language, "summaryChange"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringChange"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationChange"),
+  });
+  ensureRequirementOverlay("branch_after_first_check", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringBranching"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationBranching"),
+  });
+  ensureRequirementOverlay("anchor_accountability_receipts", {
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringAccountability"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationAccountability"),
+  });
+  ensureRequirementOverlay("reconcile_conflicting_evidence", {
+    summary: healthPlanSafetyOverlayText(language, "summaryConflict"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringConflict"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationConflict"),
+  });
+  ensureRequirementOverlay("cover_high_risk_outlook", {
+    goals: healthPlanSafetyOverlayText(language, "goalRisk"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringRisk"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationRisk"),
+  });
+  ensureRequirementOverlay("stabilize_low_confidence_context", {
+    summary: healthPlanSafetyOverlayText(language, "summaryVerification"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationVerification"),
+  });
+  ensureRequirementOverlay("refresh_live_status", {
+    summary: healthPlanSafetyOverlayText(language, "summaryVerification"),
+    monitoring: healthPlanSafetyOverlayText(language, "monitoringVerification"),
+    escalation: healthPlanSafetyOverlayText(language, "escalationVerification"),
+  });
+
+  const ensureSectionGuidance = (sectionName) => {
+    const guidance = sectionGuidance?.[sectionName];
+    const guidanceSignalIds = Array.isArray(guidance?.signal_ids)
+      ? guidance.signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+      : [];
+    const focusText = nullIfBlank(guidance?.focus_text);
+    const cautionText = nullIfBlank(guidance?.caution_text);
+    const evidenceGapText = nullIfBlank(guidance?.evidence_gap_text);
+    const successCriteria = nullIfBlank(guidance?.success_criteria);
+    if (!guidanceSignalIds.length || !focusText) return;
+    const alreadyGrounded = generatedHealthPlanSectionCoversRequirement(plan, sectionName, guidanceSignalIds, "any");
+    if (!alreadyGrounded) {
+      const enriched = enrichGeneratedPlanCoverage(plan, sectionName, guidanceSignalIds, [focusText], focusText);
+      if (!enriched) {
+        if (sectionName === "summary") appendGeneratedPlanSummary(plan, focusText, guidanceSignalIds, [focusText]);
+        else appendGeneratedPlanSectionItem(plan, sectionName, focusText, guidanceSignalIds, `section-guidance-${sectionName}`, [focusText]);
+      }
+    }
+    if (!cautionText) return;
+    const sectionText = planSectionText(plan, [sectionName]);
+    if (guidance?.evidence_posture === "verify_first" && !healthPlanTextNeedsVerification(sectionText)) {
+      if (sectionName === "summary") appendGeneratedPlanSummary(plan, cautionText, guidanceSignalIds, [cautionText]);
+      else appendGeneratedPlanSectionItem(plan, sectionName, cautionText, guidanceSignalIds, `section-guidance-caution-${sectionName}`, [cautionText]);
+      return;
+    }
+    if (guidance?.evidence_posture === "boundary_limited" && !textMatchesAny(sectionText, healthPlanRequirementMatchers("respect_sharing_boundary", promptInput))) {
+      if (sectionName === "summary") appendGeneratedPlanSummary(plan, cautionText, guidanceSignalIds, [cautionText]);
+      else appendGeneratedPlanSectionItem(plan, sectionName, cautionText, guidanceSignalIds, `section-guidance-caution-${sectionName}`, [cautionText]);
+    }
+    const updatedSectionText = planSectionText(plan, [sectionName]);
+    if (
+      evidenceGapText
+      && ["summary", "monitoring", "caregiver_guidance"].includes(sectionName)
+      && !(
+        textMatchesAny(updatedSectionText, [/\bstill needs\b/i, /\bneeds fresh\b/i, /\bunresolved\b/i, /\bbefore .* current\b/i, /\bbefore .* confirmed\b/i, /\bevidence gap\b/i, /\bverify\b/i, /\bverification\b/i, /\bconfirm\b/i, /\brefresh\b/i, /\btouchpoint\b/i, /\bcheck(ed|ing)?\b/i])
+        || (sectionName === "caregiver_guidance" && textMatchesAny(updatedSectionText, healthPlanRequirementMatchers("respect_sharing_boundary", promptInput)))
+      )
+    ) {
+      if (sectionName === "summary") appendGeneratedPlanSummary(plan, evidenceGapText, guidanceSignalIds, [evidenceGapText]);
+      else appendGeneratedPlanSectionItem(plan, sectionName, evidenceGapText, guidanceSignalIds, `section-guidance-gap-${sectionName}`, [evidenceGapText]);
+    }
+    const finalSectionText = planSectionText(plan, [sectionName]);
+    if (
+      successCriteria
+      && ["monitoring", "escalation"].includes(sectionName)
+      && !textMatchesAny(finalSectionText, [/\bcounts as\b/i, /\bsuccess\b/i, /\buseful only if\b/i, /\bproof\b/i, /\breceipt\b/i, /\brecord\b/i, /\bclose(s|d|ure)?\b/i])
+    ) {
+      if (sectionName === "summary") appendGeneratedPlanSummary(plan, successCriteria, guidanceSignalIds, [successCriteria]);
+      else appendGeneratedPlanSectionItem(plan, sectionName, successCriteria, guidanceSignalIds, `section-guidance-success-${sectionName}`, [successCriteria]);
+    }
+  };
+
+  for (const sectionName of ["summary", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"]) {
+    ensureSectionGuidance(sectionName);
+  }
+
+  const ensureSectionEvidenceBalance = (sectionName) => {
+    const evidenceBundle = sectionEvidenceBundles?.[sectionName];
+    if (!evidenceBundle) return;
+    const sectionKey = generatedHealthPlanSectionKey(sectionName);
+    const currentRefs = generatedHealthPlanSectionRefs(plan, sectionName);
+    const candidateSignalIds = normalizePatchSignalIds(
+      sourceSignalIds,
+      evidenceBundle?.primary_signal_ids,
+      evidenceBundle?.signal_ids,
+      Array.isArray(evidenceBundle?.coverage_targets)
+        ? evidenceBundle.coverage_targets.flatMap((target) => Array.isArray(target?.signal_ids) ? target.signal_ids : [])
+        : [],
+    );
+    const addSignalsToSection = (signalIds) => {
+      const ids = normalizePatchSignalIds(sourceSignalIds, signalIds);
+      if (!ids.length) return;
+      if (sectionName === "summary") {
+        plan.summary_signal_ids = [...new Set([...(Array.isArray(plan.summary_signal_ids) ? plan.summary_signal_ids : []), ...ids])];
+        return;
+      }
+      if (!Array.isArray(plan?.[sectionKey]) || !plan[sectionKey].length) return;
+      const firstItem = plan[sectionKey][0];
+      plan[sectionKey][0] = {
+        ...firstItem,
+        source_signal_ids: [...new Set([...(Array.isArray(firstItem?.source_signal_ids) ? firstItem.source_signal_ids : []), ...ids])],
+      };
+    };
+    for (const target of Array.isArray(evidenceBundle?.coverage_targets) ? evidenceBundle.coverage_targets : []) {
+      const targetIds = normalizePatchSignalIds(sourceSignalIds, target?.signal_ids);
+      if (!targetIds.length) continue;
+      const targetCovered = target?.match === "all"
+        ? targetIds.every((signalId) => currentRefs.has(signalId))
+        : targetIds.some((signalId) => currentRefs.has(signalId));
+      if (!targetCovered) {
+        if (
+          sectionName === "daily_support"
+          && targetIds.includes("medication-plan")
+          && !textMatchesAny(planSectionText(plan, [sectionName]), healthPlanRequirementMatchers("support_medication_followup", promptInput))
+        ) {
+          appendGeneratedPlanSectionItem(
+            plan,
+            sectionName,
+            healthPlanSafetyOverlayText(language, "dailyMedication"),
+            targetIds,
+            "section-evidence-daily-medication",
+            healthPlanRequirementMatchers("support_medication_followup", promptInput),
+          );
+        }
+        addSignalsToSection(target?.match === "all" ? targetIds : targetIds.slice(0, 1));
+      }
+    }
+    const minimumDistinctSignalCount = Number(evidenceBundle?.minimum_distinct_signal_count);
+    const refreshedRefs = generatedHealthPlanSectionRefs(plan, sectionName);
+    if (
+      Number.isFinite(minimumDistinctSignalCount)
+      && minimumDistinctSignalCount > 1
+      && refreshedRefs.size < minimumDistinctSignalCount
+    ) {
+      addSignalsToSection(candidateSignalIds.slice(0, minimumDistinctSignalCount));
+    }
+    const minimumDistinctCategoryCount = Number(evidenceBundle?.minimum_distinct_category_count);
+    if (Number.isFinite(minimumDistinctCategoryCount) && minimumDistinctCategoryCount > 1) {
+      const latestRefs = generatedHealthPlanSectionRefs(plan, sectionName);
+      const existingCategories = new Set(
+        [...latestRefs]
+          .map((signalId) => normalizeHealthPlanSignalCategory(
+            sourceSignals.find((signal) => signal?.id === signalId)?.category,
+            null,
+          ))
+          .filter(Boolean),
+      );
+      if (existingCategories.size < minimumDistinctCategoryCount) {
+        const missingCategorySignals = candidateSignalIds.filter((signalId) => {
+          const category = normalizeHealthPlanSignalCategory(
+            sourceSignals.find((signal) => signal?.id === signalId)?.category,
+            null,
+          );
+          return category && !existingCategories.has(category);
+        });
+        if (missingCategorySignals.length) addSignalsToSection(missingCategorySignals.slice(0, 1));
+      }
+    }
+    if (
+      sectionName === "daily_support"
+      && candidateSignalIds.includes("medication-plan")
+      && !textMatchesAny(planSectionText(plan, [sectionName]), healthPlanRequirementMatchers("support_medication_followup", promptInput))
+    ) {
+      appendGeneratedPlanSectionItem(
+        plan,
+        sectionName,
+        healthPlanSafetyOverlayText(language, "dailyMedication"),
+        ["medication-plan"],
+        "section-evidence-daily-medication-visible",
+        healthPlanRequirementMatchers("support_medication_followup", promptInput),
+      );
+    }
+  };
+
+  for (const sectionName of ["summary", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"]) {
+    ensureSectionEvidenceBalance(sectionName);
+  }
+
+  const strengthenUrgentSectionItems = (sectionName, verificationText, branchingText, receiptText) => {
+    const key = generatedHealthPlanSectionKey(sectionName);
+    const currentItems = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+    plan[key] = currentItems.map((item) => {
+      const trustMetadata = deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot);
+      const enrichedItem = {
+        ...item,
+        ...deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals, contextSnapshot),
+        ...trustMetadata,
+        ...deriveHealthPlanRecommendationEvidenceReview(
+          { ...item, ...trustMetadata },
+          sectionName,
+          sourceSignals,
+          contextSnapshot,
+        ),
+      };
+      const specificity = describeHealthPlanRecommendationUrgentSpecificity(enrichedItem, sectionName, promptInput);
+      if (!specificity.urgent || !specificity.missing.length) return item;
+
+      let nextItem = { ...item };
+      const explicitTimingMissing = !healthPlanRecommendationHasTimingCue(String(item?.text || ""), null);
+      if (
+        specificity.missing.includes("timing")
+        || specificity.missing.includes("verification")
+        || (sectionName === "escalation" && explicitTimingMissing)
+      ) {
+        nextItem = appendTextToGeneratedPlanItem(
+          nextItem,
+          verificationText,
+          healthPlanRequirementMatchers("refresh_live_status", promptInput),
+        );
+      }
+      if (specificity.missing.includes("branch")) {
+        nextItem = appendTextToGeneratedPlanItem(
+          nextItem,
+          branchingText,
+          healthPlanRequirementMatchers("branch_after_first_check", promptInput),
+        );
+      }
+      if (specificity.missing.includes("receipt")) {
+        nextItem = appendTextToGeneratedPlanItem(
+          nextItem,
+          receiptText,
+          healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput),
+        );
+      }
+      return nextItem;
+    });
+  };
+
+  strengthenUrgentSectionItems(
+    "monitoring",
+    healthPlanSafetyOverlayText(language, "monitoringVerification"),
+    healthPlanSafetyOverlayText(language, "monitoringBranching"),
+    healthPlanSafetyOverlayText(language, "monitoringAccountability"),
+  );
+  strengthenUrgentSectionItems(
+    "escalation",
+    healthPlanSafetyOverlayText(language, "escalationVerification"),
+    healthPlanSafetyOverlayText(language, "escalationBranching"),
+    healthPlanSafetyOverlayText(language, "escalationAccountability"),
+  );
+
+  const operationalOwnerLabel = healthPlanPreferredOwnerLabel(promptInput, language);
+  const ensureUrgentOperationalMetadata = (sectionName) => {
+    const key = generatedHealthPlanSectionKey(sectionName);
+    const currentItems = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+    plan[key] = currentItems.map((item) => {
+      const trustMetadata = deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot);
+      const actionability = deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals, contextSnapshot);
+      const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(
+        { ...item, ...trustMetadata, ...actionability },
+        sectionName,
+        sourceSignals,
+        contextSnapshot,
+      );
+      const specificity = describeHealthPlanRecommendationUrgentSpecificity(
+        { ...item, ...trustMetadata, ...actionability, ...evidenceReview },
+        sectionName,
+        promptInput,
+      );
+      const priority = normalizeHealthPlanItemPriority(firstValue(item?.priority, actionability?.priority), null);
+      const dueWindow = normalizeHealthPlanDueWindow(firstValue(item?.due_window, actionability?.due_window), null);
+      const needsMetadata = specificity.urgent || priority === "high" || dueWindow === "same_day";
+      if (!needsMetadata) return item;
+      return {
+        ...item,
+        owner_label: nullIfBlank(item?.owner_label) || operationalOwnerLabel,
+        completion_proof:
+          nullIfBlank(item?.completion_proof)
+          || (sectionName === "escalation"
+            ? healthPlanOperationalMetadataText(language, "escalationProof")
+            : healthPlanOperationalMetadataText(language, "monitoringProof")),
+        escalation_if_not_done:
+          nullIfBlank(item?.escalation_if_not_done)
+          || (sectionName === "escalation"
+            ? healthPlanOperationalMetadataText(language, "escalationFallback")
+            : healthPlanOperationalMetadataText(language, "monitoringFallback")),
+      };
+    });
+  };
+
+  ensureUrgentOperationalMetadata("monitoring");
+  ensureUrgentOperationalMetadata("escalation");
+
+  const strengthenRationaleSectionItems = (sectionName) => {
+    const key = generatedHealthPlanSectionKey(sectionName);
+    const currentItems = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+    plan[key] = currentItems.map((item) => {
+      const rationale = deriveHealthPlanRecommendationRationale(item, sectionName, sourceSignals, contextSnapshot);
+      if (rationale.recommendation_rationale_state === "explicit") return item;
+      const rationaleSummary = nullIfBlank(rationale.recommendation_rationale_summary);
+      const linkedSignalIds = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) : [];
+      const touchesGroundingRepair = linkedSignalIds.includes("plan-memory-grounding-weak");
+      const actionability = deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals, contextSnapshot);
+      const trustMetadata = deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot);
+      const evidenceReview = deriveHealthPlanRecommendationEvidenceReview(
+        { ...item, ...trustMetadata },
+        sectionName,
+        sourceSignals,
+        contextSnapshot,
+      );
+      const specificity = describeHealthPlanRecommendationUrgentSpecificity(
+        { ...item, ...actionability, ...trustMetadata, ...evidenceReview },
+        sectionName,
+        promptInput,
+      );
+      const rationaleNeedsInlineRepair =
+        touchesGroundingRepair
+        || (specificity.urgent && ["missing", "thin"].includes(rationale.recommendation_rationale_state));
+      const shouldStrengthen = rationaleNeedsInlineRepair;
+      if (!shouldStrengthen || !rationaleSummary) return item;
+      return appendTextToGeneratedPlanItem(item, rationaleSummary, [rationaleSummary]);
+    });
+  };
+
+  for (const sectionName of ["goals", "daily_support", "monitoring", "escalation"]) {
+    strengthenRationaleSectionItems(sectionName);
+  }
+
+  const strengthenInlineGuardrailSectionItems = (sectionName) => {
+    const key = generatedHealthPlanSectionKey(sectionName);
+    const currentItems = Array.isArray(plan?.[key]) ? [...plan[key]] : [];
+    plan[key] = currentItems.map((item) => {
+      const inlineGuardrail = deriveHealthPlanRecommendationInlineGuardrail(item, sectionName, sourceSignals, contextSnapshot);
+      const summary = nullIfBlank(inlineGuardrail.inline_guardrail_summary);
+      if (!summary || inlineGuardrail.inline_guardrail_state === "clear") return item;
+      if (healthPlanRecommendationHasInlineGuardrailCue(item, promptInput)) return item;
+      return appendTextToGeneratedPlanItem(item, summary, [summary]);
+    });
+  };
+
+  for (const sectionName of ["goals", "daily_support", "caregiver_guidance"]) {
+    strengthenInlineGuardrailSectionItems(sectionName);
+  }
+
+  return plan;
 }
 
 function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) {
   const sourceSignalIds = new Set(sourceSignals.map((signal) => signal.id));
+  const signalMap = new Map(sourceSignals.map((signal) => [signal.id, signal]));
   const criticalSignalIds = new Set(Array.isArray(promptInput?.critical_signal_ids) ? promptInput.critical_signal_ids : []);
+  const generationContract = normalizeHealthPlanGenerationContract(promptInput?.generation_contract);
+  const sectionGuidance = normalizeHealthPlanSectionGuidance(promptInput?.section_guidance);
+  const sectionEvidenceBundles = normalizeHealthPlanSectionEvidenceBundles(promptInput?.section_evidence_bundles);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(
+    promptInput?.context_snapshot && typeof promptInput.context_snapshot === "object" && !Array.isArray(promptInput.context_snapshot)
+      ? { ...promptInput.context_snapshot, ...promptInput }
+      : promptInput,
+  );
+  const generationExecutionBrief = normalizeHealthPlanGenerationExecutionBrief(
+    promptInput?.generation_execution_brief || contextSnapshot?.generation_execution_brief,
+  );
+  const staleOrUnknownSignalIds = new Set(
+    sourceSignals
+      .filter((signal) => {
+        const freshness = normalizeHealthPlanSignalFreshness(signal?.freshness, "unknown");
+        return freshness === "stale" || freshness === "unknown";
+      })
+      .map((signal) => signal.id)
+      .filter(Boolean),
+  );
   const sections = [
     ["goals", generatedPlan.goals_json],
     ["daily_support", generatedPlan.daily_support_json],
@@ -1058,6 +14972,13 @@ function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) 
   if (!Array.isArray(generatedPlan.summary_signal_ids) || generatedPlan.summary_signal_ids.length === 0) {
     throw httpError(502, "Health plan generation returned a summary without evidence links");
   }
+  const minimumSummarySignals =
+    criticalSignalIds.size > 0 || sourceSignals.length >= 4
+      ? 2
+      : 1;
+  if (generatedPlan.summary_signal_ids.length < minimumSummarySignals) {
+    throw httpError(502, "Health plan generation grounded the summary in too few signals");
+  }
   for (const ref of generatedPlan.summary_signal_ids) {
     if (!sourceSignalIds.has(ref)) throw httpError(502, "Health plan generation referenced an unknown source signal in the summary");
     referencedIds.add(ref);
@@ -1065,18 +14986,815 @@ function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) 
 
   for (const [sectionName, items] of sections) requireValidSignalRefs(items, sectionName);
 
+  const repeatedLanguage = repeatedHealthPlanLanguage(generatedPlan);
+  if (repeatedLanguage.length) {
+    throw httpError(502, "Health plan generation repeated generic language across too many sections");
+  }
+
+  const sectionRefMap = new Map([
+    ["summary", new Set((Array.isArray(generatedPlan.summary_signal_ids) ? generatedPlan.summary_signal_ids : []).filter(Boolean))],
+    ...sections.map(([sectionName, items]) => [
+      sectionName,
+      new Set((items || []).flatMap((item) => item?.source_signal_ids || []).filter(Boolean)),
+    ]),
+  ]);
   const escalationRefs = new Set((generatedPlan.escalation_json || []).flatMap((item) => item?.source_signal_ids || []));
   const monitoringRefs = new Set((generatedPlan.monitoring_json || []).flatMap((item) => item?.source_signal_ids || []));
+  const summaryRefs = new Set((Array.isArray(generatedPlan.summary_signal_ids) ? generatedPlan.summary_signal_ids : []).filter(Boolean));
+  const executionBriefSignalIds = healthPlanGenerationExecutionBriefSignalIds(generationExecutionBrief, [
+    ...summaryRefs,
+    ...monitoringRefs,
+    ...escalationRefs,
+  ]);
+  const nextExecutionTaskSignalIds = Array.isArray(generationExecutionBrief?.triage_tasks?.[0]?.signal_ids)
+    ? generationExecutionBrief.triage_tasks[0].signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
   for (const criticalId of criticalSignalIds) {
     if (!referencedIds.has(criticalId)) {
       throw httpError(502, "Health plan generation did not address a critical client signal");
+    }
+    if (!monitoringRefs.has(criticalId) && !escalationRefs.has(criticalId)) {
+      throw httpError(502, "Health plan generation did not turn a critical signal into monitoring or escalation guidance");
     }
   }
   if (criticalSignalIds.size && (!escalationRefs.size || !monitoringRefs.size)) {
     throw httpError(502, "Health plan generation did not include enough monitoring or escalation support for critical signals");
   }
+  const highPriorityIds = [...criticalSignalIds].filter((signalId) => normalizeHealthPlanSignalStrength(signalMap.get(signalId)?.strength, "medium") === "high");
+  if (highPriorityIds.length && !highPriorityIds.some((signalId) => escalationRefs.has(signalId))) {
+    throw httpError(502, "Health plan generation did not include escalation guidance for high-priority signals");
+  }
+  const responseSectionsText = planSectionText(generatedPlan, ["summary", "monitoring", "escalation"]);
+  const nextConfirmationSignalIds = Array.isArray(promptInput?.next_confirmations)
+    ? promptInput.next_confirmations.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []).filter(Boolean)
+    : [];
+  const openQuestionSignalIds = Array.isArray(promptInput?.open_questions)
+    ? promptInput.open_questions.flatMap((item) => Array.isArray(item?.signal_ids) ? item.signal_ids : []).filter(Boolean)
+    : [];
+  const hasLowConfidence = promptInput?.generation_assessment?.confidence === "low";
+  const hasFreshnessGap = Boolean(promptInput?.evidence_digest?.freshness_gap);
+  const accountabilityCommitments = Array.isArray(promptInput?.accountability_commitments)
+    ? promptInput.accountability_commitments.filter((commitment) => commitment?.status === "open")
+    : [];
+  const urgentAccountabilityCommitments = accountabilityCommitments.filter((commitment) =>
+    commitment?.priority === "high" || commitment?.due_window === "same_day",
+  );
+  const accountabilityResponseText = planSectionText(generatedPlan, ["monitoring", "escalation"]);
+
+  if (hasLowConfidence && !healthPlanTextNeedsVerification(responseSectionsText)) {
+    throw httpError(502, "Health plan generation sounded too settled for a low-confidence care picture");
+  }
+  if ((hasLowConfidence || hasFreshnessGap) && healthPlanTextOverstatesConfidence(generatedPlan.summary_text)) {
+    throw httpError(502, "Health plan generation overstated certainty despite live evidence gaps");
+  }
+  const confirmationCovered = nextConfirmationSignalIds.length === 0
+    ? true
+    : nextConfirmationSignalIds.some((signalId) => referencedIds.has(signalId));
+  if (!confirmationCovered) {
+    throw httpError(502, "Health plan generation did not turn pending confirmations into concrete follow-up guidance");
+  }
+  if (nextConfirmationSignalIds.length > 0 && !healthPlanTextNeedsVerification(responseSectionsText)) {
+    throw httpError(502, "Health plan generation did not make pending confirmations operationally explicit");
+  }
+  const openQuestionCovered = openQuestionSignalIds.length === 0
+    ? true
+    : openQuestionSignalIds.some((signalId) => referencedIds.has(signalId));
+  if (!openQuestionCovered) {
+    throw httpError(502, "Health plan generation ignored open questions in the live care picture");
+  }
+  const staleReferenced = [...referencedIds].filter((signalId) => staleOrUnknownSignalIds.has(signalId));
+  if (staleReferenced.length > 0 && !healthPlanTextNeedsVerification(responseSectionsText)) {
+    throw httpError(502, "Health plan generation used stale or unverified signals without making verification explicit");
+  }
+  if (
+    Array.isArray(generationContract?.summary_required_signal_ids)
+    && generationContract.summary_required_signal_ids.length
+    && !generationContract.summary_required_signal_ids.some((signalId) => summaryRefs.has(signalId))
+  ) {
+    throw httpError(502, "Health plan generation summary missed required grounding for the current care picture");
+  }
+  if (
+    Array.isArray(generationContract?.monitoring_required_signal_ids)
+    && generationContract.monitoring_required_signal_ids.length
+    && !generationContract.monitoring_required_signal_ids.some((signalId) => monitoringRefs.has(signalId))
+  ) {
+    throw httpError(502, "Health plan generation monitoring missed required live follow-up grounding");
+  }
+  if (
+    Array.isArray(generationContract?.escalation_required_signal_ids)
+    && generationContract.escalation_required_signal_ids.length
+    && !generationContract.escalation_required_signal_ids.some((signalId) => escalationRefs.has(signalId))
+  ) {
+    throw httpError(502, "Health plan generation escalation missed required response-path grounding");
+  }
+  if (
+    generationContract?.must_acknowledge_material_change
+    && !textMatchesAny(generatedPlan.summary_text, healthPlanRequirementMatchers("explain_material_change", promptInput))
+  ) {
+    throw httpError(502, "Health plan generation summary did not explain the material change in the live care picture");
+  }
+  if (
+    generationContract?.must_acknowledge_freshness_gap
+    && !healthPlanTextNeedsVerification(planSectionText(generatedPlan, ["summary", "monitoring"]))
+  ) {
+    throw httpError(502, "Health plan generation did not make the live evidence gap explicit");
+  }
+  if (
+    generationContract?.must_acknowledge_conflict
+    && !textMatchesAny(generatedPlan.summary_text, healthPlanRequirementMatchers("reconcile_conflicting_evidence", promptInput))
+  ) {
+    throw httpError(502, "Health plan generation summary did not acknowledge conflicting evidence");
+  }
+  if (
+    generationContract?.must_name_alternate_route
+    && !textMatchesAny(planSectionText(generatedPlan, ["monitoring", "escalation"]), healthPlanRequirementMatchers("adapt_contact_path", promptInput))
+  ) {
+    throw httpError(502, "Health plan generation did not name an alternate route when the current path was not landing");
+  }
+  if (
+    generationContract?.must_name_stronger_next_move
+    && !textMatchesAny(
+      planSectionText(generatedPlan, ["escalation"]),
+      [
+        ...healthPlanRequirementMatchers("change_course_after_worsening", promptInput),
+        ...healthPlanRequirementMatchers("unstick_stalled_outcome", promptInput),
+        ...healthPlanRequirementMatchers("upgrade_stalled_tactic", promptInput),
+      ],
+    )
+  ) {
+    throw httpError(502, "Health plan generation did not upgrade the next move after stalled or worsening evidence");
+  }
+  if (
+    generationContract?.must_name_completion_receipt
+    && !textMatchesAny(planSectionText(generatedPlan, ["monitoring", "escalation"]), healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput))
+  ) {
+    throw httpError(502, "Health plan generation did not say what receipt closes the urgent follow-up loop");
+  }
+  if (urgentAccountabilityCommitments.length && !textMatchesAny(
+    accountabilityResponseText,
+    healthPlanRequirementMatchers("anchor_accountability_receipts", promptInput),
+  )) {
+    throw httpError(502, "Health plan generation did not say what counts as done for urgent follow-up");
+  }
+  if (
+    (generationExecutionBrief?.load_state === "overloaded" || generationExecutionBrief?.load_state === "busy")
+    && !healthPlanTextShowsExecutionOrdering(planSectionText(generatedPlan, ["summary", "monitoring", "escalation"]))
+  ) {
+    const openingTaskCovered = nextExecutionTaskSignalIds.length === 0
+      ? false
+      : nextExecutionTaskSignalIds.some((signalId) => summaryRefs.has(signalId) || monitoringRefs.has(signalId) || escalationRefs.has(signalId));
+    const triageLaneCovered = executionBriefSignalIds.length === 0
+      ? false
+      : executionBriefSignalIds.some((signalId) => monitoringRefs.has(signalId) || escalationRefs.has(signalId));
+    if (!openingTaskCovered || !triageLaneCovered) {
+      throw httpError(502, "Health plan generation did not make the opening move and same-day task order explicit");
+    }
+  }
+  const minimumDistinctSignals =
+    sourceSignals.length >= 6
+      ? 3
+      : sourceSignals.length >= 3
+        ? 2
+        : 1;
+  if (referencedIds.size < minimumDistinctSignals) {
+    throw httpError(502, "Health plan generation relied on too few client signals");
+  }
+
+  for (const sectionName of ["summary", "goals", "daily_support", "monitoring", "escalation", "caregiver_guidance"]) {
+    const guidance = sectionGuidance?.[sectionName];
+    const evidenceBundle = sectionEvidenceBundles?.[sectionName];
+    const guidanceSignalIds = Array.isArray(guidance?.signal_ids)
+      ? guidance.signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+      : [];
+    const sectionRefs = sectionRefMap.get(sectionName) || new Set();
+    if (guidanceSignalIds.length && !guidanceSignalIds.some((signalId) => sectionRefs.has(signalId))) {
+      throw httpError(502, `Health plan generation missed section-specific grounding in ${sectionName}`);
+    }
+    const sectionText = planSectionText(generatedPlan, [sectionName]);
+    if (guidance?.evidence_posture === "verify_first" && !healthPlanTextNeedsVerification(sectionText)) {
+      throw httpError(502, `Health plan generation missed section-specific caution in ${sectionName}`);
+    }
+    if (
+      guidance?.evidence_posture === "boundary_limited"
+      && !textMatchesAny(sectionText, healthPlanRequirementMatchers("respect_sharing_boundary", promptInput))
+    ) {
+      throw httpError(502, `Health plan generation missed sharing-boundary caution in ${sectionName}`);
+    }
+    if (
+      guidance?.urgency_window === "same_day"
+      && (sectionName === "summary" || sectionName === "escalation")
+      && !textMatchesAny(sectionText, [/\bsame[- ]day\b/i, /\btoday\b/i, /\bimmediately\b/i, /\burgent\b/i])
+    ) {
+      throw httpError(502, `Health plan generation missed same-day timing guidance in ${sectionName}`);
+    }
+    if (
+      ["summary", "monitoring", "caregiver_guidance"].includes(sectionName)
+      && nullIfBlank(guidance?.evidence_gap_text)
+      && !(
+        textMatchesAny(sectionText, [/\bstill needs\b/i, /\bneeds fresh\b/i, /\bunresolved\b/i, /\bbefore .* current\b/i, /\bbefore .* confirmed\b/i, /\bevidence gap\b/i, /\bverify\b/i, /\bverification\b/i, /\bconfirm\b/i, /\brefresh\b/i, /\btouchpoint\b/i, /\bcheck(ed|ing)?\b/i])
+        || (sectionName === "caregiver_guidance" && textMatchesAny(sectionText, healthPlanRequirementMatchers("respect_sharing_boundary", promptInput)))
+      )
+    ) {
+      throw httpError(502, `Health plan generation missed evidence-gap guidance in ${sectionName}`);
+    }
+    if (
+      ["monitoring", "escalation"].includes(sectionName)
+      && nullIfBlank(guidance?.success_criteria)
+      && !textMatchesAny(sectionText, [/\bcounts as\b/i, /\bsuccess\b/i, /\buseful only if\b/i, /\bproof\b/i, /\breceipt\b/i, /\brecord\b/i, /\bclose(s|d|ure)?\b/i])
+    ) {
+      throw httpError(502, `Health plan generation missed success-criteria guidance in ${sectionName}`);
+    }
+    const primarySignalIds = Array.isArray(evidenceBundle?.primary_signal_ids)
+      ? evidenceBundle.primary_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+      : [];
+    if (primarySignalIds.length && !primarySignalIds.some((signalId) => sectionRefs.has(signalId))) {
+      throw httpError(502, `Health plan generation missed primary evidence bundle grounding in ${sectionName}`);
+    }
+    const sectionCoverageTargets = Array.isArray(evidenceBundle?.coverage_targets)
+      ? evidenceBundle.coverage_targets
+      : [];
+    for (const target of sectionCoverageTargets) {
+      const targetSignalIds = Array.isArray(target?.signal_ids)
+        ? target.signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+        : [];
+      if (!targetSignalIds.length) continue;
+      const targetCovered = target?.match === "all"
+        ? targetSignalIds.every((signalId) => sectionRefs.has(signalId))
+        : targetSignalIds.some((signalId) => sectionRefs.has(signalId));
+      if (!targetCovered) {
+        throw httpError(
+          502,
+          `Health plan generation missed section evidence target in ${sectionName}: ${nullIfBlank(target?.label) || nullIfBlank(target?.code) || "coverage target"}`,
+        );
+      }
+    }
+    const minimumDistinctSignalCount = Number(evidenceBundle?.minimum_distinct_signal_count);
+    if (
+      Number.isFinite(minimumDistinctSignalCount)
+      && minimumDistinctSignalCount > 1
+      && sectionRefs.size < minimumDistinctSignalCount
+    ) {
+      throw httpError(502, `Health plan generation did not use enough distinct evidence in ${sectionName}`);
+    }
+    const minimumDistinctCategoryCount = Number(evidenceBundle?.minimum_distinct_category_count);
+    const referencedCategories = new Set(
+      [...sectionRefs]
+        .map((signalId) => normalizeHealthPlanSignalCategory(signalMap.get(signalId)?.category, null))
+        .filter(Boolean),
+    );
+    if (
+      Number.isFinite(minimumDistinctCategoryCount)
+      && minimumDistinctCategoryCount > 1
+      && referencedCategories.size < minimumDistinctCategoryCount
+    ) {
+      throw httpError(502, `Health plan generation did not balance evidence categories in ${sectionName}`);
+    }
+    const bundleNeedsVerification = (
+      (Array.isArray(evidenceBundle?.unresolved_signal_ids) && evidenceBundle.unresolved_signal_ids.length > 0)
+      || (Array.isArray(evidenceBundle?.stale_signal_ids) && evidenceBundle.stale_signal_ids.length > 0)
+    );
+    if (
+      bundleNeedsVerification
+      && ["summary", "monitoring", "escalation"].includes(sectionName)
+      && !healthPlanTextNeedsVerification(sectionText)
+    ) {
+      throw httpError(502, `Health plan generation missed verification language for unresolved evidence in ${sectionName}`);
+    }
+  }
+
+  const coverageRequirements = Array.isArray(promptInput?.must_cover) ? promptInput.must_cover : [];
+  for (const requirement of coverageRequirements) {
+    const requiredSignalIds = Array.isArray(requirement?.required_signal_ids)
+      ? requirement.required_signal_ids.filter((id) => sourceSignalIds.has(id))
+      : [];
+    const requiredSections = Array.isArray(requirement?.required_sections)
+      ? requirement.required_sections.filter(Boolean)
+      : [];
+    if (!requiredSignalIds.length || !requiredSections.length) continue;
+    const coveredSections = new Set();
+    const coveredSignalIds = new Set();
+    for (const sectionName of requiredSections) {
+      const refs = sectionRefMap.get(sectionName);
+      if (!refs) continue;
+      let sectionCovered = false;
+      for (const signalId of requiredSignalIds) {
+        if (refs.has(signalId)) {
+          coveredSignalIds.add(signalId);
+          sectionCovered = true;
+        }
+      }
+      if (sectionCovered) coveredSections.add(sectionName);
+    }
+    const covered =
+      requirement?.match === "all"
+        ? requiredSignalIds.every((signalId) => coveredSignalIds.has(signalId))
+        : requiredSignalIds.some((signalId) => coveredSignalIds.has(signalId));
+    if (!covered) {
+      throw httpError(
+        502,
+        `Health plan generation missed required care coverage: ${nullIfBlank(requirement?.description) || nullIfBlank(requirement?.code) || "unknown"}`,
+      );
+    }
+    const minimumSectionCoverage = Number(requirement?.minimum_section_coverage);
+    if (Number.isFinite(minimumSectionCoverage) && minimumSectionCoverage > 1 && coveredSections.size < minimumSectionCoverage) {
+      throw httpError(
+        502,
+        `Health plan generation did not carry required care coverage across enough sections: ${nullIfBlank(requirement?.description) || nullIfBlank(requirement?.code) || "unknown"}`,
+      );
+    }
+    const requirementMatchers = healthPlanRequirementMatchers(requirement?.code, promptInput);
+    if (requirementMatchers.length) {
+      const requirementText = planSectionText(generatedPlan, requiredSections);
+      if (!textMatchesAny(requirementText, requirementMatchers)) {
+        throw httpError(
+          502,
+          `Health plan generation missed specific guidance for required care coverage: ${nullIfBlank(requirement?.description) || nullIfBlank(requirement?.code) || "unknown"}`,
+        );
+      }
+    }
+  }
+
+  if (
+    coverageRequirements.some((requirement) => requirement?.code === "separate_medication_from_signal_reliability")
+    && !generatedHealthPlanSeparatesMedicationFromSignalReliability(generatedPlan, promptInput)
+  ) {
+    throw httpError(
+      502,
+      "Health plan generation did not keep medication adherence risk distinct from sensor or data-reliability risk",
+    );
+  }
+
+  for (const [sectionName, items] of [["monitoring", generatedPlan.monitoring_json], ["escalation", generatedPlan.escalation_json]]) {
+    for (const item of Array.isArray(items) ? items : []) {
+      const trustMetadata = deriveHealthPlanRecommendationTrustMetadata(item, sourceSignals, contextSnapshot);
+      const enrichedItem = {
+        ...item,
+        ...deriveHealthPlanRecommendationActionability(item, sectionName, sourceSignals, contextSnapshot),
+        ...trustMetadata,
+        ...deriveHealthPlanRecommendationEvidenceReview(
+          { ...item, ...trustMetadata },
+          sectionName,
+          sourceSignals,
+          contextSnapshot,
+        ),
+      };
+      const specificity = describeHealthPlanRecommendationUrgentSpecificity(enrichedItem, sectionName, promptInput);
+      if (specificity.urgent && specificity.missing.length) {
+        throw httpError(
+          502,
+          `Health plan generation returned ${sectionName} guidance that is too vague for urgent follow-up (${specificity.missing.join(", ")})`,
+        );
+      }
+    }
+  }
+
+  for (const [sectionName, items] of [
+    ["goals", generatedPlan.goals_json],
+    ["daily_support", generatedPlan.daily_support_json],
+    ["caregiver_guidance", generatedPlan.caregiver_guidance_json],
+  ]) {
+    for (const item of Array.isArray(items) ? items : []) {
+      const inlineGuardrail = deriveHealthPlanRecommendationInlineGuardrail(item, sectionName, sourceSignals, contextSnapshot);
+      if (inlineGuardrail.inline_guardrail_state === "clear") continue;
+      if (!healthPlanRecommendationHasInlineGuardrailCue(item, promptInput)) {
+        throw httpError(
+          502,
+          `Health plan generation returned ${sectionName} guidance that hid evidence uncertainty instead of naming the live check or boundary still needed`,
+        );
+      }
+    }
+  }
 
   return generatedPlan;
+}
+
+const structuredHealthPlanAutomatedReviewSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["verdict", "summary_text", "grounded_signal_ids", "strengths", "concerns", "required_actions", "shareability", "rubric_scores"],
+  properties: {
+    verdict: { type: "string", enum: ["pass", "revise", "block"] },
+    summary_text: { type: "string" },
+    grounded_signal_ids: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+    },
+    strengths: {
+      type: "array",
+      items: { type: "string" },
+    },
+    concerns: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["code", "severity", "detail"],
+        properties: {
+          code: { type: "string" },
+          severity: { type: "string", enum: ["low", "medium", "high"] },
+          detail: { type: "string" },
+        },
+      },
+    },
+    required_actions: {
+      type: "array",
+      items: { type: "string" },
+    },
+    shareability: { type: "string", enum: ["shareable", "staff_only"] },
+    rubric_scores: {
+      type: "object",
+      additionalProperties: false,
+      required: ["grounding", "actionability", "timeliness", "safety", "shareability", "overall"],
+      properties: {
+        grounding: { type: "number", minimum: 0, maximum: 100 },
+        actionability: { type: "number", minimum: 0, maximum: 100 },
+        timeliness: { type: "number", minimum: 0, maximum: 100 },
+        safety: { type: "number", minimum: 0, maximum: 100 },
+        shareability: { type: "number", minimum: 0, maximum: 100 },
+        overall: { type: "number", minimum: 0, maximum: 100 },
+      },
+    },
+  },
+};
+
+function validateHealthPlanAutomatedReview(review, sourceSignals) {
+  const normalized = normalizeHealthPlanAutomatedReview(review);
+  if (!normalized) throw httpError(502, "Health plan automated review returned an empty response");
+  if (!normalized.summary_text) throw httpError(502, "Health plan automated review returned an invalid summary");
+  if (!normalized.rubric_scores) throw httpError(502, "Health plan automated review returned no quality rubric");
+  const sourceSignalIds = new Set((Array.isArray(sourceSignals) ? sourceSignals : []).map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  if (!normalized.grounded_signal_ids.length) {
+    throw httpError(502, "Health plan automated review returned no grounding signals");
+  }
+  for (const signalId of normalized.grounded_signal_ids) {
+    if (!sourceSignalIds.has(signalId)) {
+      throw httpError(502, "Health plan automated review referenced an unknown source signal");
+    }
+  }
+  return normalized;
+}
+
+function applyHealthPlanAutomatedReviewGuardrails(
+  review,
+  sourceSignals,
+  {
+    plan = null,
+    audit = null,
+    reviewAssessment = null,
+    quality = null,
+  } = {},
+) {
+  const normalized = validateHealthPlanAutomatedReview(review, sourceSignals);
+  const sourceSignalIds = new Set((Array.isArray(sourceSignals) ? sourceSignals : []).map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(plan?.context_snapshot_json);
+  const improvementSummary = quality?.improvement_summary || null;
+  const currentCriticalSignalIds = Array.isArray(audit?.current_critical_signal_ids)
+    ? audit.current_critical_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const changeHighlightSignalIds = Array.isArray(contextSnapshot?.change_context?.highlight_signal_ids)
+    ? contextSnapshot.change_context.highlight_signal_ids.filter((signalId) => sourceSignalIds.has(signalId))
+    : [];
+  const groundedSignalIds = normalizePatchSignalIds(
+    sourceSignalIds,
+    [...normalized.grounded_signal_ids, ...changeHighlightSignalIds, ...currentCriticalSignalIds],
+    Array.isArray(sourceSignals) ? sourceSignals.slice(0, 3).map((signal) => signal?.id) : [],
+  );
+  const strengths = [...new Set((Array.isArray(normalized.strengths) ? normalized.strengths : []).map((item) => nullIfBlank(item)).filter(Boolean))];
+  const concerns = Array.isArray(normalized.concerns)
+    ? normalized.concerns
+      .map((item) => item && typeof item === "object" ? {
+        code: nullIfBlank(item.code),
+        severity: item.severity === "high" ? "high" : item.severity === "low" ? "low" : "medium",
+        detail: nullIfBlank(item.detail),
+      } : null)
+      .filter((item) => item?.code && item?.detail)
+    : [];
+  const requiredActions = [...new Set((Array.isArray(normalized.required_actions) ? normalized.required_actions : []).map((item) => nullIfBlank(item)).filter(Boolean))];
+  let verdict = normalized.verdict;
+  let summaryText = normalized.summary_text;
+  let shareability = normalized.shareability;
+
+  const hasConcernCode = (code) => concerns.some((item) => item.code === code);
+  const pushConcern = (code, severity, detail) => {
+    const normalizedCode = nullIfBlank(code);
+    const normalizedDetail = nullIfBlank(detail);
+    if (!normalizedCode || !normalizedDetail || hasConcernCode(normalizedCode)) return;
+    concerns.push({
+      code: normalizedCode,
+      severity: severity === "high" ? "high" : severity === "low" ? "low" : "medium",
+      detail: normalizedDetail,
+    });
+  };
+  const pushAction = (text) => {
+    const normalizedText = nullIfBlank(text);
+    if (!normalizedText || requiredActions.includes(normalizedText)) return;
+    requiredActions.push(normalizedText);
+  };
+  const replaceSummary = (text) => {
+    const normalizedText = nullIfBlank(text);
+    if (normalizedText) summaryText = normalizedText;
+  };
+
+  if (audit?.status === "needs_regeneration") {
+    verdict = "block";
+    pushConcern(
+      "audit_requires_regeneration",
+      "high",
+      "Deterministic audit still says this plan should be regenerated against the live care picture before broader reliance.",
+    );
+    pushAction("Regenerate or materially rewrite the plan against the current live signals before relying on it broadly.");
+    replaceSummary("Automated reviewer found blocking live-signal gaps that require regeneration before staff rely on this version.");
+  } else if (audit?.status === "needs_review" && verdict === "pass") {
+    verdict = "revise";
+    pushConcern(
+      "audit_follow_up_pending",
+      "medium",
+      "Deterministic audit still found follow-up gaps that should be revised before broader sharing.",
+    );
+    replaceSummary("Automated reviewer found follow-up gaps that should be revised before broader sharing.");
+  }
+
+  if (reviewAssessment?.status === "hold") {
+    verdict = "block";
+    pushConcern(
+      "operational_review_blocked",
+      "high",
+      "Deterministic review still found blocking operational gaps in the plan.",
+    );
+    const topNextMove = Array.isArray(reviewAssessment?.next_moves) ? reviewAssessment.next_moves[0]?.text : null;
+    pushAction(topNextMove || "Close the blocking operational gaps before staff rely on this version.");
+    replaceSummary("Automated reviewer found blocking operational gaps that should be resolved before staff rely on this plan.");
+  } else if (reviewAssessment?.status === "needs_review" && verdict === "pass") {
+    verdict = "revise";
+    pushConcern(
+      "operational_review_pending",
+      "medium",
+      "Deterministic review still found follow-up detail that should be tightened before broader sharing.",
+    );
+    const topNextMove = Array.isArray(reviewAssessment?.next_moves) ? reviewAssessment.next_moves[0]?.text : null;
+    pushAction(topNextMove || "Tighten the remaining follow-up gaps before broader sharing.");
+  }
+
+  if (improvementSummary?.status === "regressed") {
+    verdict = quality?.trust_level === "low" || reviewAssessment?.status === "hold" || audit?.status === "needs_regeneration"
+      ? "block"
+      : verdict === "pass"
+        ? "revise"
+        : verdict;
+    pushConcern(
+      "version_regressed",
+      quality?.trust_level === "low" ? "high" : "medium",
+      improvementSummary.summary_text || "This version appears weaker than the previous saved plan.",
+    );
+    pushAction("Rewrite this version so it clearly resolves more gaps than it reopens compared with the previous saved plan.");
+    replaceSummary(
+      improvementSummary.summary_text
+        ? `Automated reviewer found this version weaker than the previous saved plan. ${improvementSummary.summary_text}`
+        : "Automated reviewer found this version weaker than the previous saved plan and not ready for broader reliance.",
+    );
+  } else if (improvementSummary?.status === "mixed") {
+    if (verdict === "pass") verdict = "revise";
+    pushConcern(
+      "version_improvement_mixed",
+      "medium",
+      improvementSummary.summary_text || "This version mixes some improvements with some reopened gaps compared with the previous saved plan.",
+    );
+    pushAction("Tighten the version delta so the next saved plan clearly improves on the previous one before broader sharing.");
+    if (!/mixed|improv|previous saved plan/i.test(summaryText)) {
+      replaceSummary(
+        improvementSummary.summary_text
+          ? `Automated reviewer found only partial improvement against the previous saved plan. ${improvementSummary.summary_text}`
+          : "Automated reviewer found only partial improvement against the previous saved plan and recommends revisions before wider use.",
+      );
+    }
+  } else if (improvementSummary?.status === "improved" && improvementSummary.summary_text) {
+    const strengthText = `Version delta looks stronger than the previous saved plan. ${improvementSummary.summary_text}`;
+    if (!strengths.includes(strengthText)) strengths.push(strengthText);
+  }
+
+  if (verdict !== "pass") shareability = "staff_only";
+
+  const prioritizedConcernCodes = new Map([
+    ["version_regressed", 0],
+    ["version_improvement_mixed", 1],
+    ["audit_requires_regeneration", 2],
+    ["operational_review_blocked", 3],
+    ["audit_follow_up_pending", 4],
+    ["operational_review_pending", 5],
+  ]);
+  concerns.sort((left, right) => {
+    const leftRank = prioritizedConcernCodes.has(left?.code) ? prioritizedConcernCodes.get(left.code) : 100;
+    const rightRank = prioritizedConcernCodes.has(right?.code) ? prioritizedConcernCodes.get(right.code) : 100;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    const leftSeverity = left?.severity === "high" ? 0 : left?.severity === "medium" ? 1 : 2;
+    const rightSeverity = right?.severity === "high" ? 0 : right?.severity === "medium" ? 1 : 2;
+    return leftSeverity - rightSeverity;
+  });
+  if (requiredActions.length > 1) {
+    requiredActions.sort((left, right) => {
+      const leftVersion = /previous saved plan|version delta|improves on the previous/i.test(left) ? 0 : 1;
+      const rightVersion = /previous saved plan|version delta|improves on the previous/i.test(right) ? 0 : 1;
+      return leftVersion - rightVersion;
+    });
+  }
+
+  return validateHealthPlanAutomatedReview({
+    ...normalized,
+    verdict,
+    summary_text: summaryText,
+    grounded_signal_ids: groundedSignalIds.length ? groundedSignalIds : normalized.grounded_signal_ids,
+    strengths: strengths.slice(0, 4),
+    concerns: concerns.slice(0, 8),
+    required_actions: requiredActions.slice(0, 6),
+    shareability,
+  }, sourceSignals);
+}
+
+function buildFallbackHealthPlanAutomatedReview(plan, profile, predictiveContext, sourceSignals, organization = null, checkedAt = new Date()) {
+  const candidatePlan = {
+    ...plan,
+    automated_review_json: null,
+    automated_reviewed_at: null,
+  };
+  const audit = buildHealthPlanAudit(candidatePlan, profile, predictiveContext, organization, checkedAt);
+  const review = buildHealthPlanReviewerAssessment(candidatePlan, profile, predictiveContext, organization, audit);
+  const quality = buildHealthPlanQualitySummary(candidatePlan, profile, predictiveContext, organization, checkedAt, audit, review);
+  const rubricScores = buildHealthPlanAutomatedReviewRubric(candidatePlan, profile, predictiveContext, organization, audit, review, quality);
+  const criticalSignals = Array.isArray(audit?.current_critical_signal_ids) ? audit.current_critical_signal_ids : [];
+  const groundedSignalIds = [
+    ...new Set([
+      ...criticalSignals,
+      ...(Array.isArray(plan?.summary_signal_ids) ? plan.summary_signal_ids : []),
+      ...(Array.isArray(sourceSignals) ? sourceSignals.slice(0, 3).map((signal) => nullIfBlank(signal?.id)).filter(Boolean) : []),
+    ]),
+  ].filter(Boolean);
+  const verdict =
+    audit?.status === "ready" && review?.status === "ready"
+      ? "pass"
+      : audit?.status === "needs_regeneration" || review?.status === "hold"
+        ? "block"
+        : "revise";
+  const summaryText =
+    verdict === "pass"
+      ? "Automated reviewer found the plan grounded, actionable, and aligned with the current care picture."
+      : verdict === "block"
+        ? "Automated reviewer found blocking issues that should be resolved before staff rely on this plan."
+        : "Automated reviewer found follow-up gaps that should be revised before broader sharing.";
+
+  return applyHealthPlanAutomatedReviewGuardrails({
+    verdict,
+    checked_at: normalizeTimestampValue(checkedAt) || new Date().toISOString(),
+    summary_text: summaryText,
+    grounded_signal_ids: groundedSignalIds.length ? groundedSignalIds : (Array.isArray(sourceSignals) ? sourceSignals.slice(0, 1).map((signal) => signal.id).filter(Boolean) : []),
+    strengths: Array.isArray(quality?.strengths)
+      ? quality.strengths.slice(0, 3).map((item) => {
+          if (item?.code === "reviewed_by_staff") return "Staff review is already aligned with the current plan.";
+          if (item?.code === "evidence_well_linked") return "Recommendations are linked back to saved evidence signals.";
+          if (item?.code === "critical_signals_actioned") return "Critical signals are translated into monitoring or escalation actions.";
+          if (item?.code === "sharing_boundary_respected") return "Sharing boundaries are respected in the saved guidance.";
+          return "The plan has one or more grounded strengths.";
+        })
+      : [],
+    concerns: [
+      ...(Array.isArray(audit?.reasons) ? audit.reasons : []),
+      ...((Array.isArray(review?.checks) ? review.checks : [])
+        .filter((item) => item?.state && item.state !== "good")
+        .map((item) => ({
+          code: item.code,
+          severity: item.state === "critical" ? "high" : "medium",
+          detail: item.detail,
+        }))),
+    ].slice(0, 6),
+    required_actions: Array.isArray(review?.next_moves) ? review.next_moves.map((item) => item.text).filter(Boolean).slice(0, 4) : [],
+    shareability: Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given) ? "shareable" : "staff_only",
+    rubric_scores: rubricScores,
+    provider: "fallback",
+    model: "deterministic-review",
+    version: `${healthPlanGeneratorVersion}-review-fallback`,
+    audit_status: audit?.status || null,
+    review_status: review?.status || null,
+  }, sourceSignals, {
+    plan: candidatePlan,
+    audit,
+    reviewAssessment: review,
+    quality,
+  });
+}
+
+async function reviewHealthPlanWithOpenAI(plan, profile, predictiveContext, sourceSignals, language, organization = null) {
+  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before automated health-plan review can run");
+
+  const promptInput = assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization);
+  const candidatePlan = { ...plan, automated_review_json: null, automated_reviewed_at: null };
+  const auditPreview = buildHealthPlanAudit(candidatePlan, profile, predictiveContext, organization, new Date());
+  const reviewerPreview = buildHealthPlanReviewerAssessment(candidatePlan, profile, predictiveContext, organization, auditPreview);
+  const qualityPreview = buildHealthPlanQualitySummary(candidatePlan, profile, predictiveContext, organization, new Date(), auditPreview, reviewerPreview);
+  const coordinationPreview = buildHealthPlanCoordinationSummary(candidatePlan, profile, predictiveContext, organization, new Date(), auditPreview, reviewerPreview);
+  const executionPreview = buildHealthPlanExecutionPack(candidatePlan, profile, predictiveContext, organization, new Date(), auditPreview, reviewerPreview, coordinationPreview);
+  const systemPrompt = [
+    "You are a second-pass reviewer for personalized client support plans in a Red Cross operations console.",
+    "You are reviewing the plan, not writing a new one.",
+    "Evaluate whether the plan is grounded in evidence, operationally specific, safe to act on, and honest about uncertainty.",
+    "Do not diagnose, prescribe, or suggest treatment changes.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "A verdict of pass means the plan is grounded and specific enough for staff review and use.",
+    "A verdict of revise means the plan needs clearer wording or follow-up detail before wider use.",
+    "A verdict of block means the plan has dangerous or materially incomplete operational gaps.",
+    "Use the provided source signal ids for grounding.",
+    "Return rubric_scores from 0 to 100 for grounding, actionability, timeliness, safety, shareability, and overall.",
+    "Actionability should reflect whether a real staff team could execute the next 24 hours from this plan without guessing.",
+    "Overall should stay anchored to the weakest operational risk, not to writing polish alone.",
+    "Treat deterministic_quality_preview as the version-delta truth about whether this candidate improved, regressed, or only mixed some gains with new gaps compared with the previous saved plan.",
+    "If deterministic_quality_preview.improvement_summary.status is regressed, do not return pass.",
+    "If deterministic_quality_preview.improvement_summary.status is mixed, do not return pass unless the candidate clearly resolves more operational gaps than it introduces.",
+    "If deterministic_audit_preview says needs_regeneration or deterministic_reviewer_preview says hold, do not return pass.",
+    "If deterministic_execution_preview.load_state is overloaded, do not return pass unless the opening same-day lane is clearly triaged and operationally runnable.",
+    "If the version delta is weak, say that plainly in summary_text and required_actions instead of praising the rewrite.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    "Review this generated personalized health plan.",
+    JSON.stringify({
+      prompt_input: promptInput,
+      candidate_plan: {
+        summary_text: plan.summary_text,
+        goals: plan.goals_json,
+        daily_support: plan.daily_support_json,
+        monitoring: plan.monitoring_json,
+        escalation: plan.escalation_json,
+        caregiver_guidance: plan.caregiver_guidance_json,
+      },
+      deterministic_audit_preview: auditPreview,
+      deterministic_reviewer_preview: reviewerPreview,
+      deterministic_quality_preview: qualityPreview,
+      deterministic_execution_preview: executionPreview,
+    }, null, 2),
+  ].join("\n\n");
+
+  const response = await fetch(`${openAiBaseUrl}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${openAiApiKey}`,
+    },
+    body: JSON.stringify({
+      model: healthPlanReviewerOpenAiModel,
+      input: [
+        { role: "system", content: [{ type: "input_text", text: systemPrompt }] },
+        { role: "user", content: [{ type: "input_text", text: userPrompt }] },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "personalized_health_plan_review",
+          strict: true,
+          schema: structuredHealthPlanAutomatedReviewSchema,
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const message = await response.text().catch(() => "");
+    throw httpError(502, `Health plan automated review failed: ${message || response.statusText}`);
+  }
+
+  const body = await response.json();
+  const outputText = readResponseOutputText(body);
+  if (!outputText) throw httpError(502, "Health plan automated review returned no structured output");
+
+  let parsed;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    throw httpError(502, "Health plan automated review returned malformed JSON");
+  }
+
+  return applyHealthPlanAutomatedReviewGuardrails({
+    ...parsed,
+    checked_at: new Date().toISOString(),
+    provider: "openai",
+    model: healthPlanReviewerOpenAiModel,
+    version: `${healthPlanGeneratorVersion}-review`,
+  }, sourceSignals, {
+    plan: candidatePlan,
+    audit: auditPreview,
+    reviewAssessment: reviewerPreview,
+    quality: qualityPreview,
+  });
+}
+
+async function reviewHealthPlan(plan, profile, predictiveContext, sourceSignals, language, organization = null) {
+  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+    try {
+      return await reviewHealthPlanWithOpenAI(plan, profile, predictiveContext, sourceSignals, language, organization);
+    } catch (error) {
+      console.warn("Health plan automated review failed, using deterministic fallback:", error?.message || error);
+      return buildFallbackHealthPlanAutomatedReview(plan, profile, predictiveContext, sourceSignals, organization, new Date());
+    }
+  }
+  return buildFallbackHealthPlanAutomatedReview(plan, profile, predictiveContext, sourceSignals, organization, new Date());
 }
 
 function fallbackPlanText(language, key) {
@@ -1124,8 +15842,55 @@ function fallbackPlanText(language, key) {
   return (copy[language] || copy.en)[key] || copy.en[key];
 }
 
-function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language) {
+function fallbackPolicyText(language, key) {
+  const copy = {
+    en: {
+      summaryShareable: "Keep the plan shareable with the approved care circle.",
+      summaryConsentBoundary: "Keep sharing within staff or approved providers until family consent is confirmed.",
+      caregiverStaffOnly: "Keep client-specific updates within staff notes or approved providers until family consent is confirmed.",
+      caregiverAssignOwner: "Assign one named staff owner before the next outreach cycle and document who will follow up.",
+      caregiverConfirmOwner: "Confirm one named owner for follow-up in the care circle.",
+      sameDayReview: "Same-day review is expected.",
+      within24hReview: "Review within 24 hours is expected.",
+    },
+    de: {
+      summaryShareable: "Der Plan soll mit dem freigegebenen Betreuungskreis teilbar bleiben.",
+      summaryConsentBoundary: "Teilen Sie Inhalte nur mit Mitarbeitenden oder freigegebenen Bezugspersonen, bis die Familienfreigabe bestaetigt ist.",
+      caregiverStaffOnly: "Klientenspezifische Updates nur in Teamnotizen oder mit freigegebenen Bezugspersonen teilen, bis die Familienfreigabe bestaetigt ist.",
+      caregiverAssignOwner: "Vor dem naechsten Kontaktzyklus eine namentlich benannte verantwortliche Person festlegen und dokumentieren.",
+      caregiverConfirmOwner: "Im Betreuungskreis eine namentlich benannte Person fuer die Nachverfolgung bestaetigen.",
+      sameDayReview: "Eine Pruefung noch am selben Tag ist vorgesehen.",
+      within24hReview: "Eine Pruefung innerhalb von 24 Stunden ist vorgesehen.",
+    },
+    es: {
+      summaryShareable: "Manten el plan compartible con el circulo de cuidado aprobado.",
+      summaryConsentBoundary: "Mantén la información dentro del equipo o de proveedores aprobados hasta confirmar el consentimiento familiar.",
+      caregiverStaffOnly: "Mantén las actualizaciones específicas del cliente dentro de las notas del equipo o con proveedores aprobados hasta confirmar el consentimiento familiar.",
+      caregiverAssignOwner: "Asigna una persona responsable con nombre antes del siguiente ciclo de seguimiento y deja registro.",
+      caregiverConfirmOwner: "Confirma una persona responsable con nombre dentro del círculo de cuidado.",
+      sameDayReview: "Se espera una revisión el mismo día.",
+      within24hReview: "Se espera una revisión dentro de 24 horas.",
+    },
+  };
+  return (copy[language] || copy.en)[key] || copy.en[key];
+}
+
+function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language, organization = null) {
+  const promptInput = assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization);
   const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const policy = promptInput?.policy || buildHealthPlanPolicy(profile, predictiveContext, organization, language);
+  const generationAssessment = normalizeHealthPlanGenerationAssessment(promptInput?.generation_assessment);
+  const evidenceDigest = normalizeHealthPlanEvidenceDigest(promptInput?.evidence_digest);
+  const routeLearning = normalizeHealthPlanRouteLearning(promptInput?.route_learning);
+  const executionBrief = normalizeHealthPlanGenerationExecutionBrief(promptInput?.generation_execution_brief);
+  const mustCoverCodes = new Set(
+    (Array.isArray(promptInput?.must_cover) ? promptInput.must_cover : [])
+      .map((item) => nullIfBlank(item?.code))
+      .filter(Boolean),
+  );
+  const ownerLabel = healthPlanPreferredOwnerLabel(promptInput, language);
+  const defaultDueWindow = policy.response_expectation === "same-day review" ? "same_day" : "within_24h";
+
   const pickIds = (preferredMatchers, fallbackCount = 2) => {
     const matched = preferredMatchers
       .map((matcher) => sourceSignals.find(matcher)?.id)
@@ -1134,40 +15899,505 @@ function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, lang
     return sourceSignals.slice(0, fallbackCount).map((signal) => signal.id).filter(Boolean);
   };
   const ensureRefs = (refs) => {
-    const picked = [...new Set([...(refs || []), ...criticalSignalIds.slice(0, 1)])].filter(Boolean);
+    const picked = [...new Set([...(refs || []), ...criticalSignalIds])].filter(Boolean);
     return picked.length ? picked : sourceSignals.slice(0, 1).map((signal) => signal.id).filter(Boolean);
   };
+  const fallbackJoin = (...parts) => parts.map((part) => nullIfBlank(part)).filter(Boolean).join(" ");
+  const buildFallbackItem = ({
+    id,
+    text,
+    signalIds,
+    priority = "medium",
+    dueWindow = defaultDueWindow,
+    owner = null,
+    proof = null,
+    fallback = null,
+    sourceTaskCode = null,
+  }) => ({
+    id,
+    text,
+    source_signal_ids: ensureRefs(signalIds),
+    priority,
+    due_window: dueWindow,
+    ...(owner ? { owner_label: owner } : {}),
+    ...(proof ? { completion_proof: proof } : {}),
+    ...(fallback ? { escalation_if_not_done: fallback } : {}),
+    ...(sourceTaskCode ? { source_task_code: sourceTaskCode } : {}),
+  });
+
   const medicationRefs = pickIds([(signal) => /medication/i.test(signal?.label)]);
   const riskRefs = pickIds([(signal) => /predictive risk score/i.test(signal?.label), (signal) => /risk forecast/i.test(signal?.label)]);
+  const sensorRefs = pickIds([(signal) => /sensor/i.test(signal?.label)], 1);
   const alertRefs = pickIds([(signal) => /active alert/i.test(signal?.label), (signal) => /sensor/i.test(signal?.label)]);
-  const careCircleRefs = pickIds([(signal) => /profile context/i.test(signal?.label)]);
+  const careCircleRefs = pickIds([(signal) => /profile context/i.test(signal?.label), (signal) => /family sharing consent/i.test(signal?.label), (signal) => /consent/i.test(signal?.label)]);
+  const executionRefs = ensureRefs(
+    healthPlanGenerationExecutionBriefSignalIds(executionBrief, [...alertRefs, ...riskRefs, ...careCircleRefs]),
+  );
+  const routeRefs = ensureRefs(routeLearning?.supporting_signal_ids || executionRefs);
+  const freshnessRefs = ensureRefs([
+    ...(Array.isArray(evidenceDigest?.stale_signal_ids) ? evidenceDigest.stale_signal_ids : []),
+    ...(Array.isArray(evidenceDigest?.unknown_freshness_signal_ids) ? evidenceDigest.unknown_freshness_signal_ids : []),
+    ...executionRefs,
+  ]);
+
+  const monitoringTextForTask = (task) => {
+    if (task?.code === "contact_client" && routeLearning) {
+      return healthPlanRouteSpecificMonitoringText(routeLearning, language);
+    }
+    if (task?.code === "refresh_live_status") {
+      return fallbackJoin(
+        task?.detail || task?.title,
+        healthPlanSafetyOverlayText(language, "monitoringVerification"),
+      );
+    }
+    return fallbackJoin(task?.title, task?.detail, task?.completion_proof);
+  };
+  const escalationTextForTask = (task) => {
+    if (task?.code === "contact_client" && routeLearning) {
+      return healthPlanRouteSpecificEscalationText(routeLearning, language);
+    }
+    if (task?.code === "assign_owner") {
+      return fallbackJoin(task?.detail || task?.title, healthPlanSafetyOverlayText(language, "escalationOwner"));
+    }
+    return fallbackJoin(task?.title, task?.escalation_if_not_done || task?.detail, task?.completion_proof);
+  };
+  const caregiverTextForTask = (task) => {
+    if (task?.code === "respect_sharing_boundary") {
+      return policy.family_sharing_allowed
+        ? fallbackPlanText(language, "caregiverShare")
+        : fallbackPolicyText(language, "caregiverStaffOnly");
+    }
+    if (task?.code === "update_care_circle") {
+      return fallbackJoin(task?.title, task?.detail || fallbackPlanText(language, "caregiverAction"));
+    }
+    return fallbackJoin(task?.title, task?.detail);
+  };
+  const taskSignalIds = (task, fallbackRefs = executionRefs) => ensureRefs([
+    ...(Array.isArray(task?.signal_ids) ? task.signal_ids : []),
+    ...fallbackRefs,
+  ]);
+
+  const triageTasks = Array.isArray(executionBrief?.triage_tasks) ? executionBrief.triage_tasks : [];
+  const goalTasks = triageTasks.filter((task) => healthPlanTaskSectionAffinity("goals", task)).slice(0, 1);
+  const dailyTasks = triageTasks.filter((task) => healthPlanTaskSectionAffinity("daily_support", task)).slice(0, 2);
+  const monitoringTasks = triageTasks.filter((task) => healthPlanTaskSectionAffinity("monitoring", task)).slice(0, 2);
+  const escalationTasks = triageTasks.filter((task) => healthPlanTaskSectionAffinity("escalation", task)).slice(0, 2);
+  const caregiverTasks = triageTasks.filter((task) => healthPlanTaskSectionAffinity("caregiver_guidance", task)).slice(0, 2);
+
+  const summaryLead =
+    policy.family_sharing_allowed
+      ? `${fallbackPlanText(language, "summaryLead")} ${fallbackPolicyText(language, "summaryShareable")}`
+      : `${fallbackPlanText(language, "summaryLead")} ${fallbackPolicyText(language, "summaryConsentBoundary")}`;
+  const summaryText = fallbackJoin(
+    generationAssessment?.confidence !== "high" || evidenceDigest?.freshness_gap
+      ? healthPlanSafetyOverlayText(language, "summaryVerification")
+      : null,
+    executionBrief?.summary_text || executionBrief?.opening_move_text || summaryLead,
+    routeLearning?.summary_text,
+  );
+  const escalationUrgent =
+    `${fallbackPlanText(language, "escalationUrgent")} ${policy.response_expectation === "same-day review" ? fallbackPolicyText(language, "sameDayReview") : fallbackPolicyText(language, "within24hReview")}`;
+  const escalationCircle =
+    policy.has_assigned_care_circle
+      ? `${fallbackPlanText(language, "escalationCircle")} ${fallbackPolicyText(language, "caregiverConfirmOwner")}`
+      : `${fallbackPlanText(language, "escalationCircle")} ${fallbackPolicyText(language, "caregiverAssignOwner")}`;
+  const caregiverShare =
+    policy.family_sharing_allowed
+      ? fallbackPlanText(language, "caregiverShare")
+      : fallbackPolicyText(language, "caregiverStaffOnly");
+  const caregiverAction =
+    policy.has_assigned_care_circle
+      ? `${fallbackPlanText(language, "caregiverAction")} ${fallbackPolicyText(language, "caregiverConfirmOwner")}`
+      : `${fallbackPolicyText(language, "caregiverAssignOwner")} ${policy.organization_name}.`;
+
+  const monitoringItems = monitoringTasks.map((task, index) => buildFallbackItem({
+    id: `monitor-task-${index + 1}`,
+    text: monitoringTextForTask(task),
+    signalIds: taskSignalIds(task, freshnessRefs),
+    priority: task?.priority || (defaultDueWindow === "same_day" ? "high" : "medium"),
+    dueWindow: task?.due_window || defaultDueWindow,
+    owner: task?.owner_label || ownerLabel,
+    proof: task?.completion_proof || healthPlanOperationalMetadataText(language, "monitoringProof"),
+    fallback: task?.escalation_if_not_done || healthPlanOperationalMetadataText(language, "monitoringFallback"),
+    sourceTaskCode: task?.code || null,
+  }));
+  if (!monitoringItems.length || mustCoverCodes.has("adapt_contact_path")) {
+    monitoringItems.push(buildFallbackItem({
+      id: `monitor-route-${monitoringItems.length + 1}`,
+      text: routeLearning
+        ? healthPlanRouteSpecificMonitoringText(routeLearning, language)
+        : fallbackPlanText(language, "monitoringRisk"),
+      signalIds: routeRefs,
+      priority: defaultDueWindow === "same_day" ? "high" : "medium",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: routeLearning?.proof_requirement_text || healthPlanOperationalMetadataText(language, "monitoringProof"),
+      fallback: healthPlanOperationalMetadataText(language, "monitoringFallback"),
+      sourceTaskCode: mustCoverCodes.has("adapt_contact_path") ? "contact_client" : null,
+    }));
+  }
+  if (monitoringItems.length < 2) {
+    monitoringItems.push(buildFallbackItem({
+      id: `monitor-generic-${monitoringItems.length + 1}`,
+      text: evidenceDigest?.freshness_gap
+        ? fallbackJoin(
+            fallbackPlanText(language, "monitoringAlerts"),
+            healthPlanSafetyOverlayText(language, "monitoringVerification"),
+          )
+        : fallbackPlanText(language, "monitoringAlerts"),
+      signalIds: freshnessRefs,
+      priority: defaultDueWindow === "same_day" ? "high" : "medium",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: healthPlanOperationalMetadataText(language, "monitoringProof"),
+      fallback: healthPlanOperationalMetadataText(language, "monitoringFallback"),
+    }));
+  }
+  if (mustCoverCodes.has("separate_medication_from_signal_reliability")) {
+    monitoringItems.push(buildFallbackItem({
+      id: `monitor-signal-split-${monitoringItems.length + 1}`,
+      text: healthPlanSafetyOverlayText(language, "monitoringMedicationVsSignals"),
+      signalIds: [...medicationRefs, ...sensorRefs],
+      priority: defaultDueWindow === "same_day" ? "high" : "medium",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: healthPlanOperationalMetadataText(language, "monitoringProof"),
+      fallback: healthPlanOperationalMetadataText(language, "monitoringFallback"),
+      sourceTaskCode: "reconcile_medication_vs_signal_reliability",
+    }));
+  }
+
+  const escalationItems = escalationTasks.map((task, index) => buildFallbackItem({
+    id: `escalation-task-${index + 1}`,
+    text: escalationTextForTask(task),
+    signalIds: taskSignalIds(task, routeRefs),
+    priority: task?.priority || "high",
+    dueWindow: task?.due_window || defaultDueWindow,
+    owner: task?.owner_label || ownerLabel,
+    proof: task?.completion_proof || healthPlanOperationalMetadataText(language, "escalationProof"),
+    fallback: task?.escalation_if_not_done || healthPlanOperationalMetadataText(language, "escalationFallback"),
+    sourceTaskCode: task?.code || null,
+  }));
+  if (!escalationItems.length || mustCoverCodes.has("adapt_contact_path")) {
+    escalationItems.push(buildFallbackItem({
+      id: `escalation-route-${escalationItems.length + 1}`,
+      text: routeLearning
+        ? healthPlanRouteSpecificEscalationText(routeLearning, language)
+        : escalationUrgent,
+      signalIds: routeRefs,
+      priority: "high",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: routeLearning?.proof_requirement_text || healthPlanOperationalMetadataText(language, "escalationProof"),
+      fallback: healthPlanOperationalMetadataText(language, "escalationFallback"),
+      sourceTaskCode: mustCoverCodes.has("adapt_contact_path") ? "contact_client" : null,
+    }));
+  }
+  if (!escalationItems.some((item) => item.source_task_code === "assign_owner") || mustCoverCodes.has("assign_named_owner")) {
+    escalationItems.push(buildFallbackItem({
+      id: `escalation-owner-${escalationItems.length + 1}`,
+      text: healthPlanSafetyOverlayText(language, "escalationOwner"),
+      signalIds: [...careCircleRefs, ...executionRefs],
+      priority: "high",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: healthPlanOperationalMetadataText(language, "escalationProof"),
+      fallback: healthPlanOperationalMetadataText(language, "escalationFallback"),
+      sourceTaskCode: "assign_owner",
+    }));
+  }
+  if (mustCoverCodes.has("separate_medication_from_signal_reliability")) {
+    escalationItems.push(buildFallbackItem({
+      id: `escalation-signal-split-${escalationItems.length + 1}`,
+      text: healthPlanSafetyOverlayText(language, "escalationMedicationVsSignals"),
+      signalIds: [...medicationRefs, ...sensorRefs, ...riskRefs],
+      priority: "high",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      proof: healthPlanOperationalMetadataText(language, "escalationProof"),
+      fallback: healthPlanOperationalMetadataText(language, "escalationFallback"),
+      sourceTaskCode: "reconcile_medication_vs_signal_reliability",
+    }));
+  }
+
+  const caregiverItems = caregiverTasks.map((task, index) => buildFallbackItem({
+    id: `caregiver-task-${index + 1}`,
+    text: caregiverTextForTask(task),
+    signalIds: taskSignalIds(task, careCircleRefs),
+    priority: task?.priority || "medium",
+    dueWindow: task?.due_window || defaultDueWindow,
+    owner: task?.owner_label || ownerLabel,
+    sourceTaskCode: task?.code || null,
+  }));
+  if (!caregiverItems.length) {
+    caregiverItems.push(buildFallbackItem({
+      id: "caregiver-1",
+      text: caregiverShare,
+      signalIds: careCircleRefs,
+      priority: "medium",
+      dueWindow: defaultDueWindow,
+      owner: ownerLabel,
+      sourceTaskCode: "respect_sharing_boundary",
+    }));
+  }
+  caregiverItems.push(buildFallbackItem({
+    id: `caregiver-${caregiverItems.length + 1}`,
+    text: caregiverAction,
+    signalIds: [...careCircleRefs, ...alertRefs],
+    priority: "medium",
+    dueWindow: defaultDueWindow,
+    owner: ownerLabel,
+    sourceTaskCode: policy.has_assigned_care_circle ? "update_care_circle" : "assign_owner",
+  }));
+
+  const prioritizeFallbackItems = (items, sourceTaskCode) => {
+    if (!sourceTaskCode) return items;
+    const priorityItems = items.filter((item) => item?.source_task_code === sourceTaskCode);
+    if (!priorityItems.length) return items;
+    return [
+      ...priorityItems,
+      ...items.filter((item) => item?.source_task_code !== sourceTaskCode),
+    ];
+  };
+  const prioritizedMonitoringItems = mustCoverCodes.has("separate_medication_from_signal_reliability")
+    ? prioritizeFallbackItems(monitoringItems, "reconcile_medication_vs_signal_reliability")
+    : monitoringItems;
+  const prioritizedEscalationItems = mustCoverCodes.has("separate_medication_from_signal_reliability")
+    ? prioritizeFallbackItems(escalationItems, "reconcile_medication_vs_signal_reliability")
+    : escalationItems;
 
   return {
-    summary_text: fallbackPlanText(language, "summaryLead"),
-    summary_signal_ids: ensureRefs([...riskRefs, ...alertRefs]),
+    summary_text: summaryText,
+    summary_signal_ids: ensureRefs([...executionRefs, ...routeRefs, ...riskRefs, ...alertRefs]),
     goals_json: [
-      { id: "goal-1", text: fallbackPlanText(language, "goalSafety"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "goal-2", text: fallbackPlanText(language, "goalRoutine"), source_signal_ids: ensureRefs([...medicationRefs, ...riskRefs]) },
+      buildFallbackItem({
+        id: "goal-1",
+        text: goalTasks[0]?.detail || goalTasks[0]?.title || fallbackPlanText(language, "goalSafety"),
+        signalIds: goalTasks[0]?.signal_ids || [...executionRefs, ...riskRefs, ...alertRefs],
+        priority: goalTasks[0]?.priority || "high",
+        dueWindow: goalTasks[0]?.due_window || defaultDueWindow,
+        owner: goalTasks[0]?.owner_label || ownerLabel,
+        sourceTaskCode: goalTasks[0]?.code || null,
+      }),
+      buildFallbackItem({
+        id: "goal-2",
+        text: fallbackPlanText(language, "goalRoutine"),
+        signalIds: [...medicationRefs, ...riskRefs],
+        priority: "medium",
+        dueWindow: defaultDueWindow,
+      }),
     ],
     daily_support_json: [
-      { id: "daily-1", text: fallbackPlanText(language, "supportDaily"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "daily-2", text: fallbackPlanText(language, "supportMedication"), source_signal_ids: ensureRefs(medicationRefs) },
+      buildFallbackItem({
+        id: "daily-1",
+        text: dailyTasks[0]?.detail || dailyTasks[0]?.title || fallbackPlanText(language, "supportDaily"),
+        signalIds: dailyTasks[0]?.signal_ids || [...riskRefs, ...alertRefs],
+        priority: dailyTasks[0]?.priority || (defaultDueWindow === "same_day" ? "high" : "medium"),
+        dueWindow: dailyTasks[0]?.due_window || defaultDueWindow,
+        owner: dailyTasks[0]?.owner_label || ownerLabel,
+        sourceTaskCode: dailyTasks[0]?.code || null,
+      }),
+      buildFallbackItem({
+        id: "daily-2",
+        text: fallbackPlanText(language, "supportMedication"),
+        signalIds: medicationRefs,
+        priority: dailyTasks[1]?.priority || "medium",
+        dueWindow: dailyTasks[1]?.due_window || defaultDueWindow,
+        owner: dailyTasks[1]?.owner_label || ownerLabel,
+        sourceTaskCode: dailyTasks[1]?.code || (mustCoverCodes.has("support_medication_followup") ? "verify_medication" : null),
+      }),
     ],
-    monitoring_json: [
-      { id: "monitor-1", text: fallbackPlanText(language, "monitoringRisk"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "monitor-2", text: fallbackPlanText(language, "monitoringAlerts"), source_signal_ids: ensureRefs(alertRefs) },
-    ],
+    monitoring_json: prioritizedMonitoringItems.slice(0, 3),
     escalation_json: [
-      { id: "escalation-1", text: fallbackPlanText(language, "escalationUrgent"), source_signal_ids: ensureRefs([...alertRefs, ...riskRefs]) },
-      { id: "escalation-2", text: fallbackPlanText(language, "escalationCircle"), source_signal_ids: ensureRefs([...careCircleRefs, ...riskRefs]) },
-    ],
-    caregiver_guidance_json: [
-      { id: "caregiver-1", text: fallbackPlanText(language, "caregiverShare"), source_signal_ids: ensureRefs(careCircleRefs) },
-      { id: "caregiver-2", text: fallbackPlanText(language, "caregiverAction"), source_signal_ids: ensureRefs([...careCircleRefs, ...alertRefs]) },
-    ],
+      ...prioritizedEscalationItems.slice(0, 2),
+      buildFallbackItem({
+        id: "escalation-generic",
+        text: escalationCircle,
+        signalIds: [...careCircleRefs, ...riskRefs],
+        priority: "medium",
+        dueWindow: defaultDueWindow,
+        owner: ownerLabel,
+        proof: healthPlanOperationalMetadataText(language, "escalationProof"),
+        fallback: healthPlanOperationalMetadataText(language, "escalationFallback"),
+        sourceTaskCode: policy.has_assigned_care_circle ? "update_care_circle" : "assign_owner",
+      }),
+    ].slice(0, 3),
+    caregiver_guidance_json: caregiverItems.slice(0, 3),
     generator_provider: "fallback",
     generator_model: "deterministic-template",
     generator_version: `${healthPlanGeneratorVersion}-fallback`,
+  };
+}
+
+function assessHealthPlanGenerationGuardrail(input) {
+  const assessment = normalizeHealthPlanGenerationAssessment(input?.generation_assessment);
+  const evidenceDigest = normalizeHealthPlanEvidenceDigest(input?.evidence_digest);
+  const freshLiveCount = Array.isArray(evidenceDigest?.live_signal_ids) ? evidenceDigest.live_signal_ids.length : 0;
+  const mediumReasonCount = Array.isArray(assessment?.reasons)
+    ? assessment.reasons.filter((reason) => reason?.severity === "medium").length
+    : 0;
+  const highReasonCodes = new Set(
+    (Array.isArray(assessment?.reasons) ? assessment.reasons : [])
+      .filter((reason) => reason?.severity === "high")
+      .map((reason) => reason.code),
+  );
+  const triggerCodes = [];
+  const triggerDetails = [];
+
+  if (!assessment) {
+    return {
+      use_fallback: false,
+      trigger_codes: [],
+      trigger_details: [],
+      summary_text: null,
+    };
+  }
+
+  if (
+    assessment.confidence === "low"
+    && assessment.critical_signal_count > 0
+    && Boolean(evidenceDigest?.freshness_gap)
+    && (assessment.stale_signal_count > 0 || assessment.unknown_freshness_signal_count > 0)
+  ) {
+    triggerCodes.push("critical_freshness_gap");
+    triggerDetails.push("Critical signals are stale or not timestamped clearly enough for the LLM to draft from them safely.");
+  }
+
+  if (
+    assessment.confidence === "low"
+    && assessment.critical_signal_count > 0
+    && freshLiveCount <= 2
+    && Boolean(evidenceDigest?.freshness_gap)
+  ) {
+    triggerCodes.push("critical_signal_snapshot_too_thin");
+    triggerDetails.push("There are critical signals, but too little fresh live evidence to support a trustworthy AI-authored plan.");
+  }
+
+  if (
+    assessment.response_expectation === "same-day review"
+    && highReasonCodes.has("no_named_owner")
+    && (highReasonCodes.has("no_structured_follow_up_path") || highReasonCodes.has("critical_signals_stale"))
+  ) {
+    triggerCodes.push("urgent_followup_path_missing");
+    triggerDetails.push("The case needs same-day action, but no named owner or structured follow-up path is in place yet.");
+  }
+
+  if (
+    assessment.confidence === "low"
+    && freshLiveCount <= 2
+    && (
+      highReasonCodes.has("conflicting_risk_story")
+      || highReasonCodes.has("passive_signals_conflict")
+      || highReasonCodes.has("critical_signals_stale")
+    )
+  ) {
+    triggerCodes.push("conflicted_live_picture_too_thin");
+    triggerDetails.push("The live picture is both conflicted and too thin, so the system should fall back to a deterministic stabilizing draft.");
+  }
+
+  const reviewOnlyCodes = [];
+  const reviewOnlyDetails = [];
+  const pushReviewOnly = (code, detail) => {
+    if (triggerCodes.includes(code) || reviewOnlyCodes.includes(code)) return;
+    reviewOnlyCodes.push(code);
+    reviewOnlyDetails.push(detail);
+  };
+  if (assessment.confidence !== "high") {
+    pushReviewOnly(
+      "generation_confidence_not_high",
+      "The generation context is not strong enough to treat the draft as broadly shareable without staff review.",
+    );
+  }
+  if (Boolean(evidenceDigest?.freshness_gap) && freshLiveCount <= 3) {
+    pushReviewOnly(
+      "fresh_live_evidence_limited",
+      "Fresh live evidence is limited, so the draft should stay in staff-review mode until a new touchpoint sharpens the picture.",
+    );
+  }
+  if (assessment.critical_signal_count > 0 && freshLiveCount <= 3) {
+    pushReviewOnly(
+      "critical_signals_need_fresher_followup",
+      "Critical signals are present, but the live follow-up evidence is still too thin for confident sharing.",
+    );
+  }
+  if (mediumReasonCount >= 2) {
+    pushReviewOnly(
+      "multiple_moderate_uncertainties",
+      "Several medium-severity uncertainties remain open, so the draft should stay review-only until staff closes them.",
+    );
+  }
+
+  const trustState = triggerCodes.length > 0
+    ? "fallback_only"
+    : reviewOnlyCodes.length > 0
+      ? "review_only"
+      : "eligible";
+  const summaryText = triggerCodes.length > 0
+    ? "Deterministic fallback was used because the live care picture was too fragile for a trustworthy AI-authored plan."
+    : reviewOnlyCodes.length > 0
+      ? "This AI-authored draft should stay staff-review only until fresher or stronger evidence closes the remaining uncertainty."
+      : "The live care picture is grounded enough for an AI-authored draft, subject to normal staff review.";
+
+  return {
+    use_fallback: triggerCodes.length > 0,
+    trigger_codes: triggerCodes,
+    trigger_details: triggerDetails,
+    summary_text: summaryText,
+    trust_state: trustState,
+    reason_codes: triggerCodes.length > 0 ? triggerCodes : reviewOnlyCodes,
+    reason_details: triggerCodes.length > 0 ? triggerDetails : reviewOnlyDetails,
+    operator_action: triggerCodes.length > 0
+      ? "Use the deterministic stabilizing draft and refresh the live picture before relying on a richer AI-authored plan."
+      : reviewOnlyCodes.length > 0
+        ? "Keep the draft staff-only, gather fresher receipts or confirmations, and review before sharing."
+        : "Proceed with the normal review flow.",
+  };
+}
+
+function applyHealthPlanGenerationGuardrail(assessment, guardrail) {
+  const normalizedAssessment = normalizeHealthPlanGenerationAssessment(assessment);
+  if (!normalizedAssessment) return normalizedAssessment;
+  const existingReasons = Array.isArray(normalizedAssessment.reasons) ? normalizedAssessment.reasons : [];
+  const existingCodes = new Set(existingReasons.map((reason) => reason.code));
+  const guardrailReasonCodes = Array.isArray(guardrail?.trigger_codes) && guardrail.trigger_codes.length
+    ? guardrail.trigger_codes
+    : Array.isArray(guardrail?.reason_codes)
+      ? guardrail.reason_codes
+      : [];
+  const guardrailReasonDetails = Array.isArray(guardrail?.trigger_details) && guardrail.trigger_details.length
+    ? guardrail.trigger_details
+    : Array.isArray(guardrail?.reason_details)
+      ? guardrail.reason_details
+      : [];
+  const guardrailReasons = guardrailReasonCodes
+    .map((code, index) => {
+      if (existingCodes.has(code)) return null;
+      return {
+        code,
+        severity: guardrail?.use_fallback ? "high" : "medium",
+        detail:
+          guardrailReasonDetails[index]
+          || "Deterministic fallback was used because the live care picture was too fragile for a trustworthy LLM-authored plan.",
+      };
+    })
+    .filter(Boolean);
+  return {
+    ...normalizedAssessment,
+    confidence: guardrail?.use_fallback
+      ? "low"
+      : guardrail?.trust_state === "review_only" && normalizedAssessment.confidence === "high"
+        ? "medium"
+        : normalizedAssessment.confidence,
+    readiness: guardrail?.use_fallback
+      ? "review_and_enrich"
+      : guardrail?.trust_state === "review_only" && normalizedAssessment.readiness === "ready_for_review"
+        ? "review_before_share"
+        : normalizedAssessment.readiness,
+    trust_gate_state: guardrail?.trust_state || normalizedAssessment.trust_gate_state || null,
+    trust_gate_reason_codes: Array.isArray(guardrail?.reason_codes) ? guardrail.reason_codes : normalizedAssessment.trust_gate_reason_codes || [],
+    trust_gate_summary_text: guardrail?.summary_text || normalizedAssessment.trust_gate_summary_text || null,
+    trust_gate_operator_action: guardrail?.operator_action || normalizedAssessment.trust_gate_operator_action || null,
+    reasons: [...existingReasons, ...guardrailReasons],
   };
 }
 
@@ -1182,27 +16412,7 @@ function readResponseOutputText(body) {
   return fragments.join("\n").trim() || null;
 }
 
-async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language) {
-  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated");
-
-  const promptInput = assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language);
-  const systemPrompt = [
-    "You create personalized client support plans for a Red Cross operations console.",
-    "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
-    `Write all user-facing text in ${languageName(language)}.`,
-    "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
-    "Be specific to the provided profile, but avoid inventing facts.",
-    "Keep each list item concise and actionable.",
-    "Every summary and recommendation must cite one or more source signal ids from the provided source_signals array.",
-    "Critical signal ids must be addressed clearly in monitoring or escalation guidance.",
-    "Return only valid JSON that matches the provided schema.",
-  ].join(" ");
-  const userPrompt = [
-    "Generate a structured personalized health plan from this profile context.",
-    "If predictive data is missing, rely on the live care profile, services, medication, sensors, and alerts.",
-    JSON.stringify(promptInput, null, 2),
-  ].join("\n\n");
-
+async function requestStructuredHealthPlanFromOpenAI(systemPrompt, userPrompt) {
   const response = await fetch(`${openAiBaseUrl}/responses`, {
     method: "POST",
     headers: {
@@ -1235,31 +16445,419 @@ async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSi
   const outputText = readResponseOutputText(body);
   if (!outputText) throw httpError(502, "Health plan generation returned no structured output");
 
-  let parsed;
   try {
-    parsed = JSON.parse(outputText);
+    return JSON.parse(outputText);
   } catch {
     throw httpError(502, "Health plan generation returned malformed JSON");
   }
+}
+
+function buildHealthPlanOpenAiCandidatePlan(value) {
+  const plan = normalizeGeneratedHealthPlan(value);
+  return {
+    summary_text: plan.summary_text,
+    summary_signal_ids: Array.isArray(plan.summary_signal_ids) ? plan.summary_signal_ids : [],
+    goals: normalizeHealthPlanSectionItems(plan.goals_json),
+    daily_support: normalizeHealthPlanSectionItems(plan.daily_support_json),
+    monitoring: normalizeHealthPlanSectionItems(plan.monitoring_json),
+    escalation: normalizeHealthPlanSectionItems(plan.escalation_json),
+    caregiver_guidance: normalizeHealthPlanSectionItems(plan.caregiver_guidance_json),
+  };
+}
+
+function buildHealthPlanOpenAiRewritePrompt(promptInput, candidatePlan, validationErrorMessage, language) {
+  const systemPrompt = [
+    "You are revising a personalized client support plan for a Red Cross operations console after deterministic validation found operational gaps.",
+    "Repair the candidate plan so it becomes more grounded, more actionable, and more honest about uncertainty without becoming generic.",
+    "Preserve any grounded client-specific detail that already works.",
+    "Do not diagnose, prescribe, or change treatment.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "Keep the structure exactly aligned to the required JSON schema.",
+    "Every summary and recommendation must cite one or more valid source signal ids from the provided source_signals array.",
+    "Treat the validator feedback as binding. Fix the gaps it names explicitly instead of rephrasing them vaguely.",
+    "If the validator says a section needs verification, timing, stronger escalation, accountability receipt, or a clearer why-now rationale, make that specific in the rewritten content.",
+    "Where the plan is operationally urgent, preserve or add structured owner_label, completion_proof, and escalation_if_not_done fields instead of hiding that detail only in prose.",
+    "Do not drop the distinct purpose of each section, and do not repeat the same generic sentence across sections.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    "Revise this structured personalized health plan so it passes deterministic validation.",
+    JSON.stringify({
+      validator_feedback: validationErrorMessage,
+      prompt_input: promptInput,
+      candidate_plan: buildHealthPlanOpenAiCandidatePlan(candidatePlan),
+    }, null, 2),
+  ].join("\n\n");
+  return { systemPrompt, userPrompt };
+}
+
+function buildHealthPlanReviewRewritePrompt(promptInput, candidatePlan, automatedReview, language, mode = "block") {
+  const normalizedReview = normalizeHealthPlanAutomatedReview(automatedReview);
+  const blocked = mode === "block";
+  const systemPrompt = [
+    blocked
+      ? "You are revising a personalized client support plan for a Red Cross operations console after an automated reviewer blocked it."
+      : "You are revising a personalized client support plan for a Red Cross operations console after an automated reviewer flagged material operational weaknesses.",
+    "Repair the plan so it becomes safe, grounded, operationally specific, and honest enough for staff to rely on.",
+    "Preserve client-specific detail that is already grounded in evidence.",
+    "Do not diagnose, prescribe, or change treatment.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "Treat the automated review summary, concerns, and required actions as binding correction targets.",
+    "If the blocked review says grounding is weak, tie each major move to live signals or to a fresh verification step.",
+    "If the blocked review says actionability is weak, make the owner, timing, branching logic, and completion receipt explicit.",
+    "If the blocked review says the plan is not safe to rely on broadly, favor verification, stabilizing steps, and stronger escalation over polished certainty.",
+    "Keep each section doing its own job and do not repeat one generic sentence across multiple sections.",
+    "Every summary and recommendation must cite one or more valid source signal ids from the provided source_signals array.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    blocked
+      ? "Revise this structured personalized health plan so it clears the blocked automated review."
+      : "Revise this structured personalized health plan so it materially improves the automated review while preserving grounded client-specific detail.",
+    JSON.stringify({
+      automated_review: normalizedReview,
+      prompt_input: promptInput,
+      candidate_plan: buildHealthPlanOpenAiCandidatePlan(candidatePlan),
+    }, null, 2),
+  ].join("\n\n");
+  return { systemPrompt, userPrompt };
+}
+
+function healthPlanAutomatedReviewRewriteSeverity(review) {
+  const normalizedReview = normalizeHealthPlanAutomatedReview(review);
+  if (!normalizedReview) return null;
+  const rubric = normalizeHealthPlanAutomatedReviewRubricScores(normalizedReview.rubric_scores);
+  const concerns = Array.isArray(normalizedReview.concerns) ? normalizedReview.concerns : [];
+  const requiredActions = Array.isArray(normalizedReview.required_actions) ? normalizedReview.required_actions : [];
+  const highConcernCount = concerns.filter((item) => item?.severity === "high").length;
+  const mediumConcernCount = concerns.filter((item) => item?.severity === "medium").length;
+  const weakDimensions = weakHealthPlanReviewDimensions(rubric);
+  const riskyWeakDimension = weakDimensions.some((dimension) => ["grounding", "actionability", "timeliness", "safety"].includes(dimension));
+  const overall = Number(rubric?.overall);
+
+  if (normalizedReview.verdict === "block") return "block";
+  if (normalizedReview.verdict !== "revise") return null;
+  if (riskyWeakDimension) return "revise";
+  if (highConcernCount > 0) return "revise";
+  if (requiredActions.length >= 2) return "revise";
+  if (Number.isFinite(overall) && overall < 68) return "revise";
+  if (mediumConcernCount >= 3) return "revise";
+  return null;
+}
+
+function healthPlanAutomatedReviewQualityScore(review) {
+  const normalizedReview = normalizeHealthPlanAutomatedReview(review);
+  if (!normalizedReview) return -Infinity;
+  const rubric = normalizeHealthPlanAutomatedReviewRubricScores(normalizedReview.rubric_scores);
+  const overall = Number(rubric?.overall);
+  const weakDimensions = weakHealthPlanReviewDimensions(rubric);
+  const highConcernCount = (Array.isArray(normalizedReview.concerns) ? normalizedReview.concerns : []).filter((item) => item?.severity === "high").length;
+  const mediumConcernCount = (Array.isArray(normalizedReview.concerns) ? normalizedReview.concerns : []).filter((item) => item?.severity === "medium").length;
+  const requiredActions = Array.isArray(normalizedReview.required_actions) ? normalizedReview.required_actions.length : 0;
+  let score = normalizedReview.verdict === "pass" ? 180 : normalizedReview.verdict === "revise" ? 120 : 40;
+  if (Number.isFinite(overall)) score += overall;
+  score -= weakDimensions.length * 8;
+  score -= highConcernCount * 14;
+  score -= mediumConcernCount * 6;
+  score -= requiredActions * 4;
+  return score;
+}
+
+function healthPlanAutomatedReviewImproved(previousReview, nextReview) {
+  const previous = normalizeHealthPlanAutomatedReview(previousReview);
+  const next = normalizeHealthPlanAutomatedReview(nextReview);
+  if (!previous || !next) return false;
+  if (previous.verdict === "block" && next.verdict !== "block") return true;
+  if (previous.verdict === "revise" && next.verdict === "pass") return true;
+  const previousScore = healthPlanAutomatedReviewQualityScore(previous);
+  const nextScore = healthPlanAutomatedReviewQualityScore(next);
+  if (!Number.isFinite(previousScore) || !Number.isFinite(nextScore)) return false;
+  return nextScore >= previousScore + 8;
+}
+
+function finalizeGeneratedHealthPlanCandidate(
+  value,
+  sourceSignals,
+  promptInput,
+  {
+    provider = "openai",
+    model = healthPlanOpenAiModel,
+    version = healthPlanGeneratorVersion,
+  } = {},
+) {
+  const normalizedPlan = normalizeGeneratedHealthPlan(value);
+  const repairedPlan = repairGeneratedHealthPlan(normalizedPlan, sourceSignals, promptInput);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(
+    promptInput?.context_snapshot && typeof promptInput.context_snapshot === "object" && !Array.isArray(promptInput.context_snapshot)
+      ? { ...promptInput.context_snapshot, ...promptInput }
+      : promptInput,
+  );
+  const actionablePlan = enrichHealthPlanRecommendationActionability({
+    ...repairedPlan,
+    source_signals_json: sourceSignals,
+    context_snapshot_json: contextSnapshot,
+  });
 
   return validateGeneratedHealthPlan({
-    ...normalizeGeneratedHealthPlan(parsed),
-    generator_provider: "openai",
-    generator_model: healthPlanOpenAiModel,
-    generator_version: healthPlanGeneratorVersion,
+    ...actionablePlan,
+    generator_provider: provider,
+    generator_model: model,
+    generator_version: version,
   }, sourceSignals, promptInput);
 }
 
-async function generateHealthPlan(profile, predictiveContext, sourceSignals, language) {
+async function resolveGeneratedHealthPlanSaveCandidate(
+  {
+    generatedPlan,
+    automatedReview,
+    profile,
+    predictiveContext,
+    sourceSignals,
+    language,
+    organization = null,
+    promptInput = null,
+  },
+  {
+    rewriteStructuredPlan = requestStructuredHealthPlanFromOpenAI,
+    reviewPlan = (plan) => reviewHealthPlan(plan, profile, predictiveContext, sourceSignals, language, organization),
+    buildFallbackPlanFn = () => buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language, organization),
+    buildFallbackReviewFn = (plan) => buildFallbackHealthPlanAutomatedReview(plan, profile, predictiveContext, sourceSignals, organization, new Date()),
+    canUseAiRewrite = healthPlanAiProvider === "openai" && Boolean(openAiApiKey),
+  } = {},
+) {
+  const normalizedReview = normalizeHealthPlanAutomatedReview(automatedReview);
+  const rewriteSeverity = healthPlanAutomatedReviewRewriteSeverity(normalizedReview);
+  if (!rewriteSeverity) {
+    return {
+      plan: generatedPlan,
+      automatedReview: normalizedReview,
+      strategy: "accepted",
+    };
+  }
+
+  const buildFallbackCandidate = () => {
+    const fallbackPlan = buildFallbackPlanFn();
+    const fallbackReview = buildFallbackReviewFn(fallbackPlan);
+    return {
+      plan: fallbackPlan,
+      automatedReview: fallbackReview,
+      strategy: "fallback_after_block",
+    };
+  };
+
+  if (!canUseAiRewrite) {
+    if (rewriteSeverity === "block") return buildFallbackCandidate();
+    return {
+      plan: generatedPlan,
+      automatedReview: normalizedReview,
+      strategy: "accepted",
+    };
+  }
+
+  try {
+    const rewritePrompt = buildHealthPlanReviewRewritePrompt(
+      promptInput,
+      generatedPlan,
+      normalizedReview,
+      language,
+      rewriteSeverity,
+    );
+    const rewritten = await rewriteStructuredPlan(rewritePrompt.systemPrompt, rewritePrompt.userPrompt);
+    const rewrittenPlan = finalizeGeneratedHealthPlanCandidate(rewritten, sourceSignals, promptInput, {
+      provider: "openai",
+      model: healthPlanOpenAiModel,
+      version: `${healthPlanGeneratorVersion}-review-rewrite-1`,
+    });
+    const rewrittenReview = normalizeHealthPlanAutomatedReview(await reviewPlan(rewrittenPlan));
+    if (rewriteSeverity === "block") {
+      if (rewrittenReview?.verdict === "block") {
+        return buildFallbackCandidate();
+      }
+      return {
+        plan: rewrittenPlan,
+        automatedReview: rewrittenReview,
+        strategy: "rewritten_after_block",
+      };
+    }
+    if (healthPlanAutomatedReviewImproved(normalizedReview, rewrittenReview)) {
+      return {
+        plan: rewrittenPlan,
+        automatedReview: rewrittenReview,
+        strategy: "rewritten_after_revise",
+      };
+    }
+    return {
+      plan: generatedPlan,
+      automatedReview: normalizedReview,
+      strategy: "accepted",
+    };
+  } catch (error) {
+    if (rewriteSeverity === "block") {
+      console.warn("Health plan blocked-review rewrite failed, using deterministic fallback:", error?.message || error);
+      return buildFallbackCandidate();
+    }
+    console.warn("Health plan revise-review rewrite failed, keeping original generated candidate:", error?.message || error);
+    return {
+      plan: generatedPlan,
+      automatedReview: normalizedReview,
+      strategy: "accepted",
+    };
+  }
+}
+
+async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language, organization = null, promptInputOverride = null, planMemory = null) {
+  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated");
+
+  const promptInput = promptInputOverride || assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization, planMemory);
+  const systemPrompt = [
+    "You create personalized client support plans for a Red Cross operations console.",
+    "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
+    "Be specific to the provided profile, but avoid inventing facts.",
+    "Never infer improvement, resolution, safety, stability, adherence, or family alignment unless the source signals directly support it.",
+    "Keep each list item concise and actionable.",
+    "Do not repeat the same generic sentence across multiple sections. Each section should do a distinct job.",
+    "Every summary and recommendation must cite one or more source signal ids from the provided source_signals array.",
+    "Treat source signal ids as your hard grounding layer. If you cannot ground a claim in them, do not make the claim.",
+    "When source_signals include priority_score or priority_reason_codes, treat higher scores and the attached reason codes as urgency hints for what should dominate same-day guidance.",
+    "When source_signals include usefulness_score_delta, usefulness_reason_codes, or tactic-family fields, treat them as history-weighted hints about what has actually helped, stalled, or been contradicted for this client over time.",
+    "Critical signal ids must be addressed clearly in monitoring or escalation guidance.",
+    "Treat each must_cover item as a binding operational obligation, not a suggestion.",
+    "If a must_cover item asks for more than one section, satisfy it in each required section rather than mentioning it only once.",
+    "When the input calls for a stabilizing or low-confidence plan, say that clearly and favor verification, refreshed live context, and named ownership over polished certainty.",
+    "Treat known_facts as grounded truth, open_questions as uncertainty that must not be invented away, and next_confirmations as concrete follow-up work that should shape the plan.",
+    "Treat recent_outcomes as evidence of what already happened, what is still open, and which response loops must be carried forward rather than restarted.",
+    "Treat recent_outcomes.execution_brief as the concise truth about whether the latest route actually landed, whether a handoff is still open, which receipt is still missing, and what next route should happen now.",
+    "Use response_path to avoid repeating a failed outreach route. If one channel or audience has already been tried without a recorded receipt, make the next route explicit.",
+    "Treat route_learning as the shortest answer to which follow-up route should be tried next, how confident the team should be in that route, and what proof would show it actually landed.",
+    "If route_learning.preferred_route points to an approved care-circle route, a different client channel, or a named owner path, make that route visible instead of falling back to generic follow-up wording.",
+    "If route_learning.proof_requirement_text is present, use it to make completion_proof or closure language concrete.",
+    "Treat change_context as the delta brief between the previous saved plan and the current live picture.",
+    "If change_context.must_explain_changes is true, say what changed since the last saved version or baseline and what is materially different in the response now.",
+    "Treat generation_execution_brief as the opening-lane brief for the first real-world moves, especially when too many same-day tasks are competing at once.",
+    "If generation_execution_brief.next_task_title is present, make the opening move explicit instead of leaving staff to infer where to start.",
+    "If generation_execution_brief.load_state is overloaded, the summary must make the first move explicit, monitoring or escalation must keep the first three same-day tasks in focus, and the plan must not present five equal-priority moves as if they can all happen at once.",
+    "If generation_execution_brief.load_state is busy, keep the next few same-day moves tightly ordered rather than evenly weighted.",
+    "Use generation_execution_brief.triage_tasks and triage_summary_text to decide what stays in active same-day focus and what can wait until one of the first tasks lands.",
+    "Treat section_guidance as the lane assignment for each section. Each section should do the job described there instead of drifting into another section's role.",
+    "When a section_guidance entry includes signal_ids, ground that section in at least one of those signals whenever the evidence supports it.",
+    "Use each section_guidance why_now note to explain why the section matters today, not as generic filler.",
+    "Use each section_guidance caution_text as a hard honesty boundary for that section.",
+    "If section_guidance evidence_gap_text is present, make the unresolved evidence gap visible instead of writing as if the uncertainty disappeared.",
+    "If section_guidance success_criteria is present, make at least one recommendation in that section concrete enough that staff can recognize success or closure.",
+    "If section_guidance evidence_posture is verify_first, that section should sound verification-led and avoid implying certainty before the next live check.",
+    "If section_guidance evidence_posture is boundary_limited, keep that section inside the approved sharing boundary and do not widen the audience casually.",
+    "If section_guidance urgency_window is same_day, make timing explicit instead of leaving it implicit.",
+    "Treat section_evidence_bundles as the compact evidence packet for each section. Use them before scanning the full source_signals list.",
+    "If a section_evidence_bundle includes primary_signal_ids, cite at least one of them in that section unless the evidence is truly unavailable.",
+    "If a section_evidence_bundle includes coverage_targets, make sure each target is represented in that section's cited signals whenever those signals are available.",
+    "If a section_evidence_bundle includes minimum_distinct_signal_count above 1, do not let that section ride on a single evidence thread.",
+    "If a section_evidence_bundle includes minimum_distinct_category_count above 1, balance the section across more than one evidence category when the packet makes that possible.",
+    "Use section_evidence_bundle.signal_cards to stay specific about freshness, category, and why the evidence matters operationally right now.",
+    "If a section_evidence_bundle signal_card includes priority_score or priority_reason_codes, let that signal pull more weight than calmer or older background context.",
+    "If a section_evidence_bundle signal_card includes usefulness metadata, preserve supported patterns only where today's evidence still supports them, and do not restate contradicted or stalled patterns without naming a stronger next move or proof step.",
+    "If a section_evidence_bundle includes unresolved_signal_ids or stale_signal_ids, keep verification language visible in that section instead of sounding fully settled.",
+    "Treat evidence_pack as the first-pass grounding brief before you scan the full source_signals list.",
+    "Start with evidence_pack.action_signals when deciding the opening move, same-day priorities, and what should dominate monitoring or escalation.",
+    "Start with evidence_pack.primary_signals when deciding what should dominate the summary, monitoring, and escalation story.",
+    "Use evidence_pack.verification_signals to justify confirm, refresh, reconcile, or verify language rather than false reassurance.",
+    "Use evidence_pack.stabilizing_signals to preserve routines or supports that have actually helped before, but only when today's evidence still supports them.",
+    "Use evidence_pack.caution_signals to avoid carrying forward contradicted, stalled, or conflict-heavy patterns as if they were still safe defaults.",
+    "Use evidence_pack.background_signals as secondary context only after the primary signals are already covered.",
+    "Do not let evidence_pack.deemphasized_signals outweigh fresher, stronger, or more action-relevant evidence.",
+    "If evidence_pack.focus_summary_text or caution_summary_text is present, treat it as the operating lens for how much certainty the plan deserves.",
+    "For each recommendation item, set priority to high, medium, or low based on the strength and urgency of the linked evidence.",
+    "For each recommendation item, set due_window to same_day or within_24h so staff can triage the next move quickly.",
+    "For monitoring and escalation items that drive real-world follow-up, populate owner_label with the best grounded responsible role or person available in the context.",
+    "For monitoring and escalation items that require follow-through, populate completion_proof with one concrete receipt that tells staff what counts as done.",
+    "For monitoring and escalation items where the first route may still fail, populate escalation_if_not_done with the next stronger route instead of leaving the fallback implicit.",
+    "If the context does not support a named individual, use a safe operational role label rather than inventing a person.",
+    "If predictive, passive, and live operational signals conflict, say that plainly and prefer direct reconciliation over a falsely tidy narrative.",
+    "Treat plan_memory as the team's recent learning about prior plan quality, review gaps, and evidence drift. Use it to avoid repeating weak patterns from the last version.",
+    "If plan_memory shows tactic families that previously helped, preserve the useful pattern only where today's evidence still supports it.",
+    "If plan_memory.current_plan includes outcome_confidence_state, treat verified improvement as reusable proof, treat mixed improvement as only partially proven, treat inferred improvement as a hypothesis to re-check, and treat stale improvement as something that must be freshly reconfirmed before you preserve it.",
+    "If plan_memory includes family_outcome_learning, treat repeatedly helpful tactic families as more trustworthy than one-off wins, treat repeatedly stalled tactic families as evidence against repeating the same approach unchanged, and treat mixed families as requiring explicit proof before relying on them.",
+    "Within family_outcome_learning, let recent behavior outweigh older history: a tactic that is recently slipping should not be treated like a clean success, and a tactic that recently recovered can be used again but still deserves explicit proof.",
+    "If plan_memory shows a previously helpful tactic now contradicted by today's live picture, say so plainly and name the verification step, stronger fallback, or alternate route that replaces it.",
+    "If plan_memory shows repeated tactic families, say what is materially different this time and what receipt or proof will show the new approach is actually working.",
+    "If plan_memory shows stalled tactic families, do not simply restate them. Upgrade to a stronger fallback, alternate route, or closure test and say what would count as real progress.",
+    "If plan_memory includes family_execution_learning, treat confirmed receipts as proof that a tactic family landed operationally, and treat deferred, open, mixed, or escalated receipt patterns as evidence that the next version needs clearer proof, stronger routing, or a more explicit follow-through path.",
+    "If plan_memory shows weak_review_dimensions or review_rubric_scores from the last automated review, treat them as explicit repair targets for the next version rather than as background metadata.",
+    "If actionability was weak before, make owner, timing, branching, and completion receipts concrete enough that a real staff team can act without guessing.",
+    "If grounding was weak before, tie each major move back to live signals or to a fresh verification step before treating the move as justified.",
+    "Treat generation_contract as the concise execution contract for this answer.",
+    "Honor generation_contract.plan_mode in the tone and level of certainty of the plan.",
+    "Treat generation_contract.summary_required_signal_ids, monitoring_required_signal_ids, and escalation_required_signal_ids as mandatory grounding targets for those sections.",
+    "Treat generation_contract.summary_obligations, monitoring_obligations, and escalation_obligations as binding content obligations, not optional hints.",
+    "If generation_contract.must_acknowledge_material_change is true, the summary must say what changed since the last saved version or baseline.",
+    "If generation_contract.must_acknowledge_freshness_gap is true, the summary and monitoring sections must make the evidence gap and refresh step explicit.",
+    "If generation_contract.must_acknowledge_conflict is true, the summary must say the evidence is mixed or conflicting and monitoring must show how staff will reconcile it.",
+    "If generation_contract.must_name_alternate_route is true, monitoring or escalation must name the next alternate route rather than repeating the current one.",
+    "If generation_contract.must_name_stronger_next_move is true, escalation must state the stronger next move, fallback, or closure proof now.",
+    "If generation_contract.must_name_completion_receipt is true, monitoring or escalation must say what counts as done or what proof closes the loop.",
+    "Treat decision_branches as operational contingencies. The plan should make clear what changes if the first verification lands, fails, or contradicts the calmer picture.",
+    "Treat accountability_commitments as operational receipts. For urgent or same-day follow-up, say what counts as done, what should be recorded, and what proof or receipt closes the step.",
+    "If the input suggests that the current contact route is not landing, do not just repeat the same tactic. Name the alternate path, owner, or escalation route that should happen next.",
+    "Open questions and next confirmations must visibly survive in the plan as verification, contact, ownership, or follow-up work. Do not write them away.",
+    "Treat evidence_digest as the truth about freshness. If it says there is a freshness gap, the plan must explicitly call for a fresh touchpoint or verification step before assuming safety.",
+    "Use observed_at and freshness on source_signals to distinguish live evidence from stale evidence.",
+    "If you reference stale or uncertain signals, the corresponding recommendation must explicitly say to verify, confirm, refresh, or re-check reality.",
+    "Respect the policy block. If family_sharing_allowed is false, do not instruct staff to share personal details with family or informal caregivers.",
+    "Read the generation_assessment block as an honesty boundary. If confidence is low, clearly favor stabilizing actions, verification steps, and named follow-up ownership over polished but overconfident recommendations.",
+    "If the care circle is thin or missing, emphasize assigning one named owner and same-day operational follow-up where the policy requires it.",
+    "Make timing, outreach, medication follow-up, sensor reliability, and sharing boundaries explicit whenever the input context calls for them.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    "Generate a structured personalized health plan from this profile context.",
+    "If predictive data is missing, rely on the live care profile, services, medication, sensors, and alerts.",
+    JSON.stringify(promptInput, null, 2),
+  ].join("\n\n");
+
+  const parsed = await requestStructuredHealthPlanFromOpenAI(systemPrompt, userPrompt);
+
+  try {
+    return finalizeGeneratedHealthPlanCandidate(parsed, sourceSignals, promptInput, {
+      provider: "openai",
+      model: healthPlanOpenAiModel,
+      version: healthPlanGeneratorVersion,
+    });
+  } catch (error) {
+    const rewritePrompt = buildHealthPlanOpenAiRewritePrompt(
+      promptInput,
+      parsed,
+      error?.message || "Deterministic validation rejected the generated plan.",
+      language,
+    );
+    const rewritten = await requestStructuredHealthPlanFromOpenAI(rewritePrompt.systemPrompt, rewritePrompt.userPrompt);
+    return finalizeGeneratedHealthPlanCandidate(rewritten, sourceSignals, promptInput, {
+      provider: "openai",
+      model: healthPlanOpenAiModel,
+      version: `${healthPlanGeneratorVersion}-rewrite-1`,
+    });
+  }
+}
+
+async function generateHealthPlan(profile, predictiveContext, sourceSignals, language, organization = null, planMemory = null) {
+  const promptInput = assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language, organization, planMemory);
+  const guardrail = assessHealthPlanGenerationGuardrail(promptInput);
+  if (guardrail.use_fallback) {
+    console.warn(
+      "Health plan LLM generation bypassed, using deterministic fallback:",
+      guardrail.trigger_codes.join(", ") || "guardrail_triggered",
+    );
+    return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language, organization);
+  }
   if (healthPlanAiProvider === "openai" && openAiApiKey) {
     try {
-      return await generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language);
+      return await generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language, organization, promptInput, planMemory);
     } catch (error) {
       console.warn("Health plan LLM generation failed, using deterministic fallback:", error?.message || error);
-      return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+      return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language, organization);
     }
   }
-  return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+  return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language, organization);
 }
 
 function normalizeHealthPlanPayload(
@@ -1276,28 +16874,48 @@ function normalizeHealthPlanPayload(
   } = {},
 ) {
   const reviewStatus = payload?.review_status === "reviewed" ? "reviewed" : "draft";
-  return {
-    action_type: normalizeHealthPlanActionType(payload?.action_type, actionType),
-    actor_user_id: nullIfBlank(payload?.actor_user_id) || actorUserId || generatedByUserId || null,
-    actor_email: normalizedEmail(payload?.actor_email || actorEmail || reviewedByEmail) || null,
-    language: normalizeLanguage(payload?.language, fallbackLanguage),
-    status: "current",
-    review_status: reviewStatus,
-    summary_text: nullIfBlank(payload?.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(payload?.goals_json ?? payload?.goals),
-    daily_support_json: normalizeHealthPlanSectionItems(payload?.daily_support_json ?? payload?.daily_support),
-    monitoring_json: normalizeHealthPlanSectionItems(payload?.monitoring_json ?? payload?.monitoring),
-    escalation_json: normalizeHealthPlanSectionItems(payload?.escalation_json ?? payload?.escalation),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(payload?.caregiver_guidance_json ?? payload?.caregiver_guidance),
-    source_signals_json: normalizeHealthPlanSourceSignals(payload?.source_signals_json ?? sourceSignals),
-    generator_provider: nullIfBlank(payload?.generator_provider) || generator?.provider || null,
-    generator_model: nullIfBlank(payload?.generator_model) || generator?.model || null,
-    generator_version: nullIfBlank(payload?.generator_version) || generator?.version || null,
-    generated_by_user_id: nullIfBlank(payload?.generated_by_user_id) || generatedByUserId || null,
-    reviewed_at: reviewStatus === "reviewed" ? normalizeTimestampValue(payload?.reviewed_at) || new Date().toISOString() : null,
-    reviewed_by_user_id: reviewStatus === "reviewed" ? nullIfBlank(payload?.reviewed_by_user_id) || generatedByUserId || null : null,
-    reviewed_by_email: reviewStatus === "reviewed" ? normalizedEmail(payload?.reviewed_by_email || reviewedByEmail) : null,
-  };
+  const generationAssessment = normalizeHealthPlanGenerationAssessment(payload?.generation_assessment_json ?? payload?.generation_assessment);
+  const contextSnapshot = normalizeHealthPlanContextSnapshot(payload?.context_snapshot_json ?? payload?.context_snapshot);
+  return enrichHealthPlanRecommendationVerificationTiming(
+    enrichHealthPlanRecommendationUseGuidance(
+      enrichHealthPlanRecommendationEvidenceReview(
+        enrichHealthPlanRecommendationRationale(
+          enrichHealthPlanRecommendationTrustMetadata(
+            enrichHealthPlanRecommendationActionability({
+            action_type: normalizeHealthPlanActionType(payload?.action_type, actionType),
+            actor_user_id: nullIfBlank(payload?.actor_user_id) || actorUserId || generatedByUserId || null,
+            actor_email: normalizedEmail(payload?.actor_email || actorEmail || reviewedByEmail) || null,
+            language: normalizeLanguage(payload?.language, fallbackLanguage),
+            status: "current",
+            review_status: reviewStatus,
+            summary_text: nullIfBlank(payload?.summary_text),
+            goals_json: normalizeHealthPlanSectionItems(payload?.goals_json ?? payload?.goals),
+            daily_support_json: normalizeHealthPlanSectionItems(payload?.daily_support_json ?? payload?.daily_support),
+            monitoring_json: normalizeHealthPlanSectionItems(payload?.monitoring_json ?? payload?.monitoring),
+            escalation_json: normalizeHealthPlanSectionItems(payload?.escalation_json ?? payload?.escalation),
+            caregiver_guidance_json: normalizeHealthPlanSectionItems(payload?.caregiver_guidance_json ?? payload?.caregiver_guidance),
+            source_signals_json: normalizeHealthPlanSourceSignals(payload?.source_signals_json ?? sourceSignals),
+            generator_provider: nullIfBlank(payload?.generator_provider) || generator?.provider || null,
+            generator_model: nullIfBlank(payload?.generator_model) || generator?.model || null,
+            generator_version: nullIfBlank(payload?.generator_version) || generator?.version || null,
+            generation_confidence: normalizeHealthPlanGenerationConfidence(payload?.generation_confidence, generationAssessment?.confidence || "medium"),
+            generation_assessment_json: generationAssessment,
+            context_snapshot_json: contextSnapshot,
+            change_summary_json: normalizeHealthPlanChangeSummary(payload?.change_summary_json),
+            review_valid_until: normalizeTimestampValue(payload?.review_valid_until),
+            review_attestation_json: normalizeHealthPlanReviewAttestation(payload?.review_attestation_json),
+            automated_review_json: normalizeHealthPlanAutomatedReview(payload?.automated_review_json),
+            automated_reviewed_at: normalizeTimestampValue(payload?.automated_reviewed_at),
+            generated_by_user_id: nullIfBlank(payload?.generated_by_user_id) || generatedByUserId || null,
+            reviewed_at: reviewStatus === "reviewed" ? normalizeTimestampValue(payload?.reviewed_at) || new Date().toISOString() : null,
+            reviewed_by_user_id: reviewStatus === "reviewed" ? nullIfBlank(payload?.reviewed_by_user_id) || generatedByUserId || null : null,
+            reviewed_by_email: reviewStatus === "reviewed" ? normalizedEmail(payload?.reviewed_by_email || reviewedByEmail) : null,
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 async function saveHealthPlan(client, userId, context, payload) {
@@ -1320,7 +16938,7 @@ async function saveHealthPlan(client, userId, context, payload) {
   const organizationId = scopeOrganizationId(context);
   const currentResult = await client.query(
     `
-      SELECT id::text, current_version
+      SELECT *, id::text, vyva_user_id::text, organization_id::text
       FROM public.vyva_user_health_plans
       WHERE vyva_user_id = $1
         AND organization_id = $2
@@ -1339,6 +16957,11 @@ async function saveHealthPlan(client, userId, context, payload) {
     : normalized.action_type === "regenerated"
       ? "generated"
       : normalized.action_type;
+  const existingPlan = normalizeHealthPlanRow(existing);
+  const changeSummary = normalized.change_summary_json || buildHealthPlanChangeSummary(existingPlan, {
+    ...normalized,
+    generated_at: generatedAt,
+  }, effectiveActionType);
 
   let currentPlanId = existing?.id || null;
   let result;
@@ -1366,13 +16989,21 @@ async function saveHealthPlan(client, userId, context, payload) {
           generator_provider,
           generator_model,
           generator_version,
+          generation_confidence,
+          generation_assessment_json,
+          context_snapshot_json,
+          change_summary_json,
+          review_valid_until,
+          review_attestation_json,
+          automated_review_json,
+          automated_reviewed_at,
           generated_at,
           generated_by_user_id,
           reviewed_at,
           reviewed_by_user_id,
           reviewed_by_email
         )
-        VALUES ($1, $2, $3, $4, now(), $5, $6, $7, 'current', $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19::timestamptz, $20, $21::timestamptz, $22, $23)
+        VALUES ($1, $2, $3, $4, now(), $5, $6, $7, 'current', $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20::jsonb, $21::jsonb, $22::jsonb, $23::timestamptz, $24::jsonb, $25::jsonb, $26::timestamptz, $27::timestamptz, $28, $29::timestamptz, $30, $31)
         RETURNING *, id::text, vyva_user_id::text, organization_id::text
       `,
       [
@@ -1394,6 +17025,14 @@ async function saveHealthPlan(client, userId, context, payload) {
         normalized.generator_provider,
         normalized.generator_model,
         normalized.generator_version,
+        normalized.generation_confidence,
+        JSON.stringify(normalized.generation_assessment_json || {}),
+        JSON.stringify(normalized.context_snapshot_json || {}),
+        JSON.stringify(changeSummary || {}),
+        normalized.review_valid_until,
+        JSON.stringify(normalized.review_attestation_json || {}),
+        JSON.stringify(normalized.automated_review_json || {}),
+        normalized.automated_reviewed_at,
         generatedAt,
         normalized.generated_by_user_id,
         normalized.reviewed_at,
@@ -1426,11 +17065,19 @@ async function saveHealthPlan(client, userId, context, payload) {
           generator_provider = $16,
           generator_model = $17,
           generator_version = $18,
-          generated_at = $19::timestamptz,
-          generated_by_user_id = $20,
-          reviewed_at = $21::timestamptz,
-          reviewed_by_user_id = $22,
-          reviewed_by_email = $23,
+          generation_confidence = $19,
+          generation_assessment_json = $20::jsonb,
+          context_snapshot_json = $21::jsonb,
+          change_summary_json = $22::jsonb,
+          review_valid_until = $23::timestamptz,
+          review_attestation_json = $24::jsonb,
+          automated_review_json = $25::jsonb,
+          automated_reviewed_at = $26::timestamptz,
+          generated_at = $27::timestamptz,
+          generated_by_user_id = $28,
+          reviewed_at = $29::timestamptz,
+          reviewed_by_user_id = $30,
+          reviewed_by_email = $31,
           updated_at = now()
         WHERE id = $1
           AND organization_id = $2
@@ -1455,6 +17102,14 @@ async function saveHealthPlan(client, userId, context, payload) {
         normalized.generator_provider,
         normalized.generator_model,
         normalized.generator_version,
+        normalized.generation_confidence,
+        JSON.stringify(normalized.generation_assessment_json || {}),
+        JSON.stringify(normalized.context_snapshot_json || {}),
+        JSON.stringify(changeSummary || {}),
+        normalized.review_valid_until,
+        JSON.stringify(normalized.review_attestation_json || {}),
+        JSON.stringify(normalized.automated_review_json || {}),
+        normalized.automated_reviewed_at,
         generatedAt,
         normalized.generated_by_user_id,
         normalized.reviewed_at,
@@ -1489,13 +17144,21 @@ async function saveHealthPlan(client, userId, context, payload) {
         generator_provider,
         generator_model,
         generator_version,
+        generation_confidence,
+        generation_assessment_json,
+        context_snapshot_json,
+        change_summary_json,
+        review_valid_until,
+        review_attestation_json,
+        automated_review_json,
+        automated_reviewed_at,
         generated_at,
         generated_by_user_id,
         reviewed_at,
         reviewed_by_user_id,
         reviewed_by_email
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'current', $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20::timestamptz, $21, $22::timestamptz, $23, $24)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'current', $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21::jsonb, $22::jsonb, $23::jsonb, $24::timestamptz, $25::jsonb, $26::jsonb, $27::timestamptz, $28::timestamptz, $29, $30::timestamptz, $31, $32)
     `,
     [
       currentPlanId,
@@ -1517,6 +17180,14 @@ async function saveHealthPlan(client, userId, context, payload) {
       normalized.generator_provider,
       normalized.generator_model,
       normalized.generator_version,
+      normalized.generation_confidence,
+      JSON.stringify(normalized.generation_assessment_json || {}),
+      JSON.stringify(normalized.context_snapshot_json || {}),
+      JSON.stringify(changeSummary || {}),
+      normalized.review_valid_until,
+      JSON.stringify(normalized.review_attestation_json || {}),
+      JSON.stringify(normalized.automated_review_json || {}),
+      normalized.automated_reviewed_at,
       generatedAt,
       normalized.generated_by_user_id,
       normalized.reviewed_at,
@@ -1561,15 +17232,26 @@ async function loadHealthPlanProfile(rawUserId, context, { createShadow = false,
 
 async function loadExternalUserLocalServices(externalUserId, context) {
   const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context);
-  if (!localUserId) return { checkins: null, brainCoach: null, medicationActivity: null, sensors: [], alerts: [], healthPlan: null };
+  if (!localUserId) {
+    return {
+      checkins: null,
+      brainCoach: null,
+      medicationActivity: null,
+      sensors: [],
+      alerts: [],
+      healthPlan: null,
+      predictiveContext: { latestScore: null, forecastRows: [] },
+    };
+  }
 
-  const [checkins, brainCoach, medicationActivity, sensors, alerts, healthPlan] = await Promise.all([
+  const [checkins, brainCoach, medicationActivity, sensors, alerts, healthPlan, predictiveContext] = await Promise.all([
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
     optionalRows("SELECT *, id::text, vyva_user_id::text AS user_id FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [localUserId]),
     loadLatestMedicationActivity(localUserId),
     optionalRows("SELECT *, id::text, vyva_user_id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [localUserId]),
     optionalRows("SELECT *, id::text, vyva_user_id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [localUserId]),
     loadCurrentHealthPlan(localUserId, context),
+    loadHealthPlanPredictiveContext(localUserId, scopeOrganizationId(context)),
   ]);
 
   return {
@@ -1579,6 +17261,7 @@ async function loadExternalUserLocalServices(externalUserId, context) {
     sensors,
     alerts,
     healthPlan,
+    predictiveContext,
   };
 }
 
@@ -1588,7 +17271,7 @@ async function loadExternalUserCarePlanAccess(externalUserId, context) {
   return (await loadCarePlanAccessMap([localUserId], context)).get(String(localUserId)) || null;
 }
 
-function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null, scheduledContact = null) {
+function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null, scheduledContact = null, organization = null) {
   const normalized = normalizeExternalProfilePayload(data);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
@@ -1613,11 +17296,22 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
     edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
   };
-  return applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
+  const mergedWithContact = applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
     checkins: merged.checkins,
     brainCoach: merged.brainCoach,
     medicationActivity: merged.medicationActivity,
   })));
+  return mergedWithContact.healthPlan
+    ? {
+        ...mergedWithContact,
+        healthPlan: enrichHealthPlanWithAudit(
+          mergedWithContact.healthPlan,
+          mergedWithContact,
+          localServices?.predictiveContext || { latestScore: null, forecastRows: [] },
+          organization,
+        ),
+      }
+    : mergedWithContact;
 }
 
 function normalizeLivingContextValue(value) {
@@ -2211,6 +17905,10 @@ function absoluteAppUrl(pathOrUrl, origin) {
   return new URL(normalizedPath, `${baseUrl}/`).toString();
 }
 
+function normalizePublicGuideUrl(url) {
+  return url ? String(url).replace(/^https:\/\/rcadmin\.vyva\.life(?=\/|$)/i, "https://redcross.vyva.life") : null;
+}
+
 function inviteEmailLanguage(organization) {
   const language = String(organization?.defaultLanguage || organization?.default_language || "").toLowerCase();
   if (language.startsWith("de")) return "de";
@@ -2256,7 +17954,7 @@ function inviteRoleLabel(role, language) {
 }
 
 function teamInviteGuideUrl(origin) {
-  return absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin);
+  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin));
 }
 
 function teamInviteRedirectUrl(origin) {
@@ -2264,7 +17962,7 @@ function teamInviteRedirectUrl(origin) {
 }
 
 function userManualUrl(origin) {
-  return absoluteAppUrl(userManualUrlOverride, origin);
+  return normalizePublicGuideUrl(absoluteAppUrl(userManualUrlOverride, origin));
 }
 
 function teamInviteMetadata({ context, role, organization, origin }) {
@@ -2282,6 +17980,7 @@ function teamInviteMetadata({ context, role, organization, origin }) {
       organization_id: organization?.id || null,
       organization_name: organization?.name || null,
       guide_url: guideUrl,
+      manual_url: guideUrl,
     },
     guideUrl,
     language,
@@ -3795,6 +19494,10 @@ function dashboardUser(row) {
     primaryCaregiverName: row.primary_caregiver_name || null,
     primaryProfessionalName: row.primary_professional_name || null,
     careProviderNames: Array.isArray(row.care_provider_names) ? row.care_provider_names : [],
+    healthPlanAudit: buildDashboardHealthPlanAuditSummary({
+      ...row,
+      risk_score: riskScore,
+    }),
   };
 }
 
@@ -3870,7 +19573,11 @@ async function loadDashboardUsers(context) {
       COALESCE(cp.care_provider_count, 0) AS care_provider_count,
       cp.primary_caregiver_name,
       cp.primary_professional_name,
-      COALESCE(cp.care_provider_names, ARRAY[]::text[]) AS care_provider_names
+      COALESCE(cp.care_provider_names, ARRAY[]::text[]) AS care_provider_names,
+      hp.review_status,
+      hp.generator_provider,
+      hp.generated_at,
+      hp.source_signals_json
     FROM public.vyva_users u
     LEFT JOIN sensor_counts s ON s.vyva_user_id = u.id
     LEFT JOIN alert_counts a ON a.vyva_user_id = u.id
@@ -3878,6 +19585,7 @@ async function loadDashboardUsers(context) {
     LEFT JOIN missed_med_counts m ON m.vyva_user_id = u.id
     LEFT JOIN public.vyva_user_checkins c ON c.vyva_user_id = u.id
     LEFT JOIN care_provider_counts cp ON cp.vyva_user_id = u.id
+    LEFT JOIN public.vyva_user_health_plans hp ON hp.vyva_user_id = u.id AND hp.organization_id = u.organization_id
     WHERE u.organization_id = $1
     ORDER BY COALESCE(a.critical_alerts, 0) DESC, COALESCE(a.active_alerts, 0) DESC, u.created_at DESC
   `, [organizationId]);
@@ -5836,7 +21544,7 @@ async function loadUserInfo(
   const user = userResult.rows[0];
   if (!user) return null;
 
-  const [consent, health, medications, medicationActivity, checkins, brainCoach, careProviders, sensors, alerts, healthPlan] = await Promise.all([
+  const [consent, health, medications, medicationActivity, checkins, brainCoach, careProviders, sensors, alerts, healthPlan, predictiveContext] = await Promise.all([
     optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
@@ -5847,6 +21555,7 @@ async function loadUserInfo(
     optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId], client),
     includeHealthPlan ? loadCurrentHealthPlan(userId, context, client) : Promise.resolve(null),
+    includeHealthPlan ? loadHealthPlanPredictiveContext(userId, organizationId, client) : Promise.resolve({ latestScore: null, forecastRows: [] }),
   ]);
   const caregivers = careProviders
     .filter((provider) => provider.provider_type === "caregiver")
@@ -5879,7 +21588,7 @@ async function loadUserInfo(
         edit_block_reason: null,
       };
 
-  return {
+  const payload = {
     user,
     consent: consent[0] || null,
     health: health[0] || null,
@@ -5898,6 +21607,11 @@ async function loadUserInfo(
     can_edit_checkins: carePlanAccess.can_edit_checkins,
     can_edit_brain_coach: carePlanAccess.can_edit_brain_coach,
     edit_block_reason: carePlanAccess.edit_block_reason,
+  };
+  if (!healthPlan) return payload;
+  return {
+    ...payload,
+    healthPlan: enrichHealthPlanWithAudit(healthPlan, payload, predictiveContext, context?.organization || null),
   };
 }
 
@@ -8278,7 +23992,7 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries));
+      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, req.context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -8330,6 +24044,18 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       },
     });
     if (upstream?.ok) {
+      if (pool && !req.context) {
+        try {
+          req.context = await resolveRequestContext(req);
+        } catch (error) {
+          if (error.status && error.status !== 401) throw error;
+        }
+      }
+      const normalizedProfile = normalizeExternalProfilePayload(upstream.data);
+      if (req.context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, req.context.organization)) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
       let careProviders = [];
       let localServices = { checkins: null, brainCoach: null };
       let carePlanAccess = null;
@@ -8344,7 +24070,15 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
           if (error.status && error.status !== 401) throw error;
         }
       }
-      res.json(mergeExternalProfileWithLocalAssignments(upstream.data, careProviders, userId, localServices, carePlanAccess, scheduledContact));
+      res.json(mergeExternalProfileWithLocalAssignments(
+        normalizedProfile,
+        careProviders,
+        userId,
+        localServices,
+        carePlanAccess,
+        scheduledContact,
+        req.context?.organization || null,
+      ));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -8386,7 +24120,22 @@ app.get("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
     return;
   }
   if (resolved.error) throw httpError(400, resolved.error);
-  res.json(await loadCurrentHealthPlan(resolved.value, req.context));
+  const profileResult = await loadHealthPlanProfile(req.params.id, req.context, { createShadow: false });
+  if (profileResult.notFound) {
+    res.json(null);
+    return;
+  }
+  if (profileResult.error) throw httpError(400, profileResult.error);
+  const [plan, predictiveContext] = await Promise.all([
+    loadCurrentHealthPlan(resolved.value, req.context),
+    loadHealthPlanPredictiveContext(resolved.value, scopeOrganizationId(req.context)),
+  ]);
+  res.json(enrichHealthPlanWithAudit(
+    plan,
+    profileResult.value.profile,
+    predictiveContext,
+    req.context?.organization || null,
+  ));
 }));
 
 app.get("/api/v1/user-dashboard/users/:id/health-plan/history", asyncRoute(async (req, res) => {
@@ -8426,24 +24175,96 @@ app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(asy
       profileResult.value.profile?.user?.language,
       req.context?.organization?.defaultLanguage || "de",
     );
-    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
-    const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
-    const generated = await generateHealthPlan(profileResult.value.profile, predictiveContext, sourceSignals, language);
+    const [predictiveContext, currentPlan, planHistory] = await Promise.all([
+      loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client),
+      loadCurrentHealthPlan(profileResult.value.userId, req.context, client),
+      loadHealthPlanHistory(profileResult.value.userId, req.context, client),
+    ]);
+    const planMemory = buildHealthPlanPlanMemory(currentPlan, planHistory, profileResult.value.profile);
+    const sourceSignals = assembleRichHealthPlanSourceSignals(profileResult.value.profile, predictiveContext, planMemory);
+    const evidenceDigest = buildHealthPlanEvidenceDigest(sourceSignals);
+    const generationAssessment = buildHealthPlanGenerationAssessment(
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      req.context?.organization || null,
+      planMemory,
+    );
+    const generationGuardrail = assessHealthPlanGenerationGuardrail({
+      generation_assessment: generationAssessment,
+      evidence_digest: evidenceDigest,
+    });
+    const guardedGenerationAssessment = applyHealthPlanGenerationGuardrail(generationAssessment, generationGuardrail);
+    const contextSnapshot = buildHealthPlanContextSnapshot(
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      req.context?.organization || null,
+      new Date(),
+      planMemory,
+    );
+    const generated = await generateHealthPlan(
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      req.context?.organization || null,
+      planMemory,
+    );
+    const generatedAt = new Date().toISOString();
+    const automatedReview = await reviewHealthPlan(
+      {
+        ...generated,
+        language,
+        review_status: "draft",
+        source_signals_json: sourceSignals,
+        generation_confidence: guardedGenerationAssessment?.confidence || generationAssessment.confidence,
+        generation_assessment_json: guardedGenerationAssessment,
+        generated_at: generatedAt,
+      },
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      req.context?.organization || null,
+    );
+    const resolvedCandidate = await resolveGeneratedHealthPlanSaveCandidate({
+      generatedPlan: generated,
+      automatedReview,
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      organization: req.context?.organization || null,
+      promptInput: {
+        ...contextSnapshot,
+        generation_assessment: guardedGenerationAssessment,
+      },
+    });
+    const finalGeneratedPlan = resolvedCandidate.plan;
+    const finalAutomatedReview = resolvedCandidate.automatedReview;
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
       action_type: "generated",
       language,
       review_status: "draft",
-      summary_text: generated.summary_text,
-      goals_json: generated.goals_json,
-      daily_support_json: generated.daily_support_json,
-      monitoring_json: generated.monitoring_json,
-      escalation_json: generated.escalation_json,
-      caregiver_guidance_json: generated.caregiver_guidance_json,
+      summary_text: finalGeneratedPlan.summary_text,
+      goals_json: finalGeneratedPlan.goals_json,
+      daily_support_json: finalGeneratedPlan.daily_support_json,
+      monitoring_json: finalGeneratedPlan.monitoring_json,
+      escalation_json: finalGeneratedPlan.escalation_json,
+      caregiver_guidance_json: finalGeneratedPlan.caregiver_guidance_json,
       source_signals_json: sourceSignals,
-      generator_provider: generated.generator_provider,
-      generator_model: generated.generator_model,
-      generator_version: generated.generator_version,
+      generator_provider: finalGeneratedPlan.generator_provider,
+      generator_model: finalGeneratedPlan.generator_model,
+      generator_version: finalGeneratedPlan.generator_version,
+      generation_confidence: guardedGenerationAssessment?.confidence || generationAssessment.confidence,
+      generation_assessment_json: guardedGenerationAssessment,
+      context_snapshot_json: contextSnapshot,
+      automated_review_json: finalAutomatedReview,
+      automated_reviewed_at: finalAutomatedReview?.checked_at || generatedAt,
       generated_by_user_id: req.context?.userId || null,
+      generated_at: generatedAt,
     });
     if (saved.error) {
       await client.query("ROLLBACK");
@@ -8452,7 +24273,12 @@ app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(asy
     }
 
     await client.query("COMMIT");
-    res.json(saved.value);
+    res.json(enrichHealthPlanWithAudit(
+      saved.value,
+      profileResult.value.profile,
+      predictiveContext,
+      req.context?.organization || null,
+    ));
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -8486,36 +24312,162 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
       return;
     }
 
-    const requestedReviewStatus =
-      req.body?.review_status === "reviewed"
-        ? "reviewed"
-        : req.body?.review_status === "draft"
-          ? "draft"
-          : existing.review_status === "reviewed"
-            ? "reviewed"
-            : "draft";
-    const preserveReviewedMetadata = requestedReviewStatus === "reviewed" && req.body?.review_status !== "reviewed";
+    const reviewWriteState = resolveHealthPlanReviewWriteState(existing, req.body);
+    const requestedReviewStatus = reviewWriteState.requestedReviewStatus;
+    const preserveReviewedMetadata = reviewWriteState.preserveReviewedMetadata;
     const actionType = req.body?.review_status === "reviewed" ? "reviewed" : "edited";
+    const [predictiveContext, planHistory] = await Promise.all([
+      loadHealthPlanPredictiveContext(
+        profileResult.value.userId,
+        scopeOrganizationId(req.context),
+        client,
+      ),
+      loadHealthPlanHistory(profileResult.value.userId, req.context, client),
+    ]);
+    const planMemory = buildHealthPlanPlanMemory(existing, planHistory, profileResult.value.profile);
+    const liveSourceSignals = assembleRichHealthPlanSourceSignals(profileResult.value.profile, predictiveContext, planMemory);
+    const nextGenerationAssessment = buildHealthPlanGenerationAssessment(
+      profileResult.value.profile,
+      predictiveContext,
+      liveSourceSignals,
+      req.context?.organization || null,
+      planMemory,
+    );
+    const nextPlanLanguage = req.body?.language || existing.language || profileResult.value.profile?.user?.language || req.context?.organization?.defaultLanguage || "de";
+    const sectionChangedAt = new Date();
+    const nextGoalsJson = Object.prototype.hasOwnProperty.call(req.body || {}, "goals_json")
+      ? mergeHealthPlanSectionDispositionMetadata(req.body?.goals_json, existing.goals_json, {
+        userId: req.context?.userId || null,
+        email: req.context?.email || null,
+        changedAt: sectionChangedAt,
+      })
+      : existing.goals_json;
+    const nextDailySupportJson = Object.prototype.hasOwnProperty.call(req.body || {}, "daily_support_json")
+      ? mergeHealthPlanSectionDispositionMetadata(req.body?.daily_support_json, existing.daily_support_json, {
+        userId: req.context?.userId || null,
+        email: req.context?.email || null,
+        changedAt: sectionChangedAt,
+      })
+      : existing.daily_support_json;
+    const nextMonitoringJson = Object.prototype.hasOwnProperty.call(req.body || {}, "monitoring_json")
+      ? mergeHealthPlanSectionDispositionMetadata(req.body?.monitoring_json, existing.monitoring_json, {
+        userId: req.context?.userId || null,
+        email: req.context?.email || null,
+        changedAt: sectionChangedAt,
+      })
+      : existing.monitoring_json;
+    const nextEscalationJson = Object.prototype.hasOwnProperty.call(req.body || {}, "escalation_json")
+      ? mergeHealthPlanSectionDispositionMetadata(req.body?.escalation_json, existing.escalation_json, {
+        userId: req.context?.userId || null,
+        email: req.context?.email || null,
+        changedAt: sectionChangedAt,
+      })
+      : existing.escalation_json;
+    const nextCaregiverGuidanceJson = Object.prototype.hasOwnProperty.call(req.body || {}, "caregiver_guidance_json")
+      ? mergeHealthPlanSectionDispositionMetadata(req.body?.caregiver_guidance_json, existing.caregiver_guidance_json, {
+        userId: req.context?.userId || null,
+        email: req.context?.email || null,
+        changedAt: sectionChangedAt,
+      })
+      : existing.caregiver_guidance_json;
+    const nextContextSnapshot = buildHealthPlanContextSnapshot(
+      profileResult.value.profile,
+      predictiveContext,
+      liveSourceSignals,
+      nextPlanLanguage,
+      req.context?.organization || null,
+      new Date(),
+      planMemory,
+    );
+    const candidatePlanForSave = {
+      ...existing,
+      language: nextPlanLanguage,
+      review_status: requestedReviewStatus,
+      summary_text: req.body?.summary_text ?? existing.summary_text,
+      goals_json: nextGoalsJson,
+      daily_support_json: nextDailySupportJson,
+      monitoring_json: nextMonitoringJson,
+      escalation_json: nextEscalationJson,
+      caregiver_guidance_json: nextCaregiverGuidanceJson,
+      source_signals_json: liveSourceSignals,
+      generation_confidence: nextGenerationAssessment.confidence,
+      generation_assessment_json: nextGenerationAssessment,
+      context_snapshot_json: nextContextSnapshot,
+      automated_review_json: null,
+      automated_reviewed_at: null,
+    };
+    const automatedReview = await reviewHealthPlan(
+      candidatePlanForSave,
+      profileResult.value.profile,
+      predictiveContext,
+      liveSourceSignals,
+      candidatePlanForSave.language,
+      req.context?.organization || null,
+    );
+    let reviewApproval = null;
+    if (req.body?.review_status === "reviewed") {
+      if (!reviewAttestationHasRequiredConfirmations(req.body?.review_attestation_json)) {
+        await client.query("ROLLBACK");
+        res.status(400).json({
+          error: "Complete the required review confirmations before marking this plan as reviewed.",
+        });
+        return;
+      }
+      const candidateReviewedPlan = {
+        ...candidatePlanForSave,
+        review_status: "reviewed",
+        automated_review_json: automatedReview,
+        automated_reviewed_at: automatedReview?.checked_at || new Date().toISOString(),
+      };
+      reviewApproval = buildHealthPlanReviewApproval(
+        candidateReviewedPlan,
+        profileResult.value.profile,
+        predictiveContext,
+        req.context?.organization || null,
+        new Date(),
+      );
+      if (!reviewApproval.allowed) {
+        await client.query("ROLLBACK");
+        res.status(409).json({
+          error: "Health plan is not ready to be marked reviewed yet.",
+          audit: reviewApproval.audit,
+          review: reviewApproval.review,
+        });
+        return;
+      }
+      reviewApproval.attestation = mergeHealthPlanReviewAttestation(
+        reviewApproval.attestation,
+        req.body?.review_attestation_json,
+        new Date(),
+      );
+    }
 
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
       action_type: actionType,
-      language: req.body?.language || existing.language,
+      language: nextPlanLanguage,
       review_status: requestedReviewStatus,
       summary_text: req.body?.summary_text,
-      goals_json: req.body?.goals_json,
-      daily_support_json: req.body?.daily_support_json,
-      monitoring_json: req.body?.monitoring_json,
-      escalation_json: req.body?.escalation_json,
-      caregiver_guidance_json: req.body?.caregiver_guidance_json,
-      source_signals_json: existing.source_signals_json,
+      goals_json: nextGoalsJson,
+      daily_support_json: nextDailySupportJson,
+      monitoring_json: nextMonitoringJson,
+      escalation_json: nextEscalationJson,
+      caregiver_guidance_json: nextCaregiverGuidanceJson,
+      source_signals_json: liveSourceSignals,
       generator_provider: existing.generator_provider,
       generator_model: existing.generator_model,
       generator_version: existing.generator_version,
+      generation_confidence: nextGenerationAssessment.confidence,
+      generation_assessment_json: nextGenerationAssessment,
+      context_snapshot_json: nextContextSnapshot,
+      automated_review_json: automatedReview,
+      automated_reviewed_at: automatedReview?.checked_at,
       generated_by_user_id: existing.generated_by_user_id || req.context?.userId || null,
       generated_at: existing.generated_at,
       reviewed_at: preserveReviewedMetadata ? existing.reviewed_at : undefined,
       reviewed_by_user_id: preserveReviewedMetadata ? existing.reviewed_by_user_id : undefined,
       reviewed_by_email: preserveReviewedMetadata ? existing.reviewed_by_email : undefined,
+      review_valid_until: preserveReviewedMetadata ? existing.review_valid_until : reviewApproval?.valid_until,
+      review_attestation_json: preserveReviewedMetadata ? existing.review_attestation_json : reviewApproval?.attestation,
     });
     if (saved.error) {
       await client.query("ROLLBACK");
@@ -8524,7 +24476,12 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
     }
 
     await client.query("COMMIT");
-    res.json(saved.value);
+    res.json(enrichHealthPlanWithAudit(
+      saved.value,
+      profileResult.value.profile,
+      predictiveContext,
+      req.context?.organization || null,
+    ));
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -9481,7 +25438,8 @@ app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(upstream.data, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
+      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(scopedPayload, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -9587,7 +25545,13 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
       },
     });
     if (upstream?.ok) {
-      const payload = filterUpstreamCheckins(upstream.data, "standard");
+      let context = null;
+      try {
+        context = await resolveRequestContext(req);
+      } catch {
+        context = null;
+      }
+      const payload = filterUpstreamCheckins(filterExternalRoutinePayloadForOrganization(upstream.data, context), "standard");
       const item = extractUpstreamList(payload, ["checkins", "data", "sessions"]).find((entry) =>
         scheduledSessionMatchesUser(entry, userId),
       );
@@ -9635,7 +25599,8 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload(upstream.data, "brain_coach", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
+      res.json(await overlayRoutineServicePayload(scopedPayload, "brain_coach", context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -9651,7 +25616,8 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       } catch {
         context = null;
       }
-      res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(checkinsUpstream.data) }, "brain_coach", context));
+      const scopedPayload = filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context);
+      res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(scopedPayload) }, "brain_coach", context));
       return;
     }
     if (!pool) {
@@ -9775,7 +25741,7 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-if (isProduction) {
+if (!isVitest && isProduction) {
   app.use(express.static(distDir));
   app.use((req, res, next) => {
     if (req.method !== "GET" || req.path.startsWith("/api/")) {
@@ -9789,27 +25755,117 @@ if (isProduction) {
     }
     res.sendFile(indexPath);
   });
-} else {
+} else if (!isVitest) {
   const { createServer: createViteServer } = await import("vite");
   const vite = await createViteServer({
     root: rootDir,
     server: {
       middlewareMode: true,
-      hmr: { server: undefined },
+      watch: {
+        ignored: [
+          "**/.codex*",
+          "**/src/**/*.test.ts",
+          "**/src/**/*.test.tsx",
+          "**/server/**/*.test.*",
+        ],
+      },
+      hmr: {
+        server: undefined,
+        host: devHmrHost,
+        port: devHmrPort,
+        clientPort: devHmrPort,
+        overlay: false,
+      },
     },
     appType: "spa",
   });
   app.use(vite.middlewares);
 }
 
-app.listen(port, host, () => {
-  const mode = isProduction ? "production" : "development";
-  const dbState = pool ? "configured" : "missing DATABASE_URL";
-  console.log(`RC admin server running in ${mode} on http://${host}:${port} with database ${dbState}`);
+if (!isVitest) {
+  app.listen(port, host, () => {
+    const mode = isProduction ? "production" : "development";
+    const dbState = pool ? "configured" : "missing DATABASE_URL";
+    console.log(`RC admin server running in ${mode} on http://${host}:${port} with database ${dbState}`);
 
-  if (pool) {
-    initializeDatabase().catch((error) => {
-      console.error("Database schema initialization failed after startup:", error);
-    });
-  }
-});
+    if (pool) {
+      initializeDatabase().catch((error) => {
+        console.error("Database schema initialization failed after startup:", error);
+      });
+    }
+  });
+}
+
+export {
+  assessHealthPlanGenerationGuardrail,
+  assembleHealthPlanPromptInput,
+  assembleHealthPlanSourceSignals,
+  assembleRichHealthPlanSourceSignals,
+  applyHealthPlanGenerationGuardrail,
+  applyHealthPlanAutomatedReviewGuardrails,
+  buildHealthPlanAudit,
+  buildHealthPlanGenerationAssessment,
+  buildHealthPlanPlanMemory,
+  buildHealthPlanVerificationContext,
+  buildHealthPlanContextSnapshot,
+  buildHealthPlanCoordinationSummary,
+  buildHealthPlanRouteLearning,
+  buildHealthPlanExecutionPack,
+  buildHealthPlanApprovalGate,
+  buildHealthPlanRegenerationFocus,
+  buildHealthPlanQualitySummary,
+  buildHealthPlanReviewApproval,
+  buildHealthPlanReviewerAssessment,
+  buildHealthPlanReviewValidUntil,
+  buildPatchedHealthPlanDraft,
+  buildHealthPlanCoverageRequirements,
+  reviewAttestationHasRequiredConfirmations,
+  buildHealthPlanPolicy,
+  buildFallbackHealthPlan,
+  buildFallbackHealthPlanAutomatedReview,
+  buildHealthPlanOpenAiRewritePrompt,
+  buildHealthPlanReviewRewritePrompt,
+  buildHealthPlanChangeSummary,
+  buildHealthPlanEvidenceDigest,
+  buildHealthPlanEvidencePack,
+  deriveCriticalHealthPlanSignalIds,
+  deriveHealthPlanRecommendationActionability,
+  deriveHealthPlanRecommendationEvidenceReview,
+  deriveHealthPlanRecommendationProvenanceMetadata,
+  deriveHealthPlanRecommendationRationale,
+  deriveHealthPlanRecommendationTrustMetadata,
+  deriveHealthPlanRecommendationUseGuidance,
+  deriveHealthPlanRecommendationVerificationTiming,
+  enrichHealthPlanWithAudit,
+  enrichHealthPlanRecommendationActionability,
+  enrichHealthPlanRecommendationEvidenceReview,
+  enrichHealthPlanRecommendationExecutionMetadata,
+  enrichHealthPlanRecommendationProvenance,
+  enrichHealthPlanRecommendationTrustMetadata,
+  enrichHealthPlanRecommendationUseGuidance,
+  enrichHealthPlanRecommendationVerificationTiming,
+  healthPlanTextContainsForbiddenMedicalClaims,
+  hasMaterialHealthPlanEdits,
+  mergeHealthPlanSectionDispositionMetadata,
+  normalizeHealthPlanAutomatedReview,
+  normalizeHealthPlanDueWindow,
+  normalizeHealthPlanItemPriority,
+  normalizeHealthPlanRecommendationConflict,
+  normalizeHealthPlanRecommendationDisposition,
+  normalizeHealthPlanRecommendationFreshness,
+  normalizeHealthPlanRecommendationProvenanceStrength,
+  normalizeHealthPlanRecommendationUseMode,
+  normalizeRecommendationRecheckHours,
+  normalizeHealthPlanSectionItems,
+  normalizeHealthPlanSignalCategory,
+  normalizeHealthPlanSignalStrength,
+  normalizeHealthPlanSourceSignals,
+  finalizeGeneratedHealthPlanCandidate,
+  resolveGeneratedHealthPlanSaveCandidate,
+  repairGeneratedHealthPlan,
+  reviewHealthPlan,
+  resolveHealthPlanReviewWriteState,
+  validateHealthPlanAutomatedReview,
+  validateGeneratedHealthPlan,
+};
+

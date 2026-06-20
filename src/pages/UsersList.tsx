@@ -71,6 +71,7 @@ type QueueRow = {
   hasNoResponse: boolean;
   isUnassigned: boolean;
   livingContextKey?: string;
+  healthPlanAudit?: OperationalQueueUser["healthPlanAudit"] | null;
 };
 
 const filterKeys: FilterKey[] = ["all", "urgent", "review", "no-response", "medication", "checkins", "unassigned"];
@@ -158,6 +159,7 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     hasNoResponse: Boolean(meta?.noResponse),
     isUnassigned: !assignedTo && careProviderCount === 0,
     livingContextKey: meta?.livingContextKey ?? livingContextKey(user.living_context),
+    healthPlanAudit: user.healthPlanAudit ?? null,
   };
 }
 
@@ -170,6 +172,18 @@ function statusClasses(status: OperationalStatus) {
     case "stable":
       return "bg-emerald-50 text-emerald-700 ring-emerald-200";
   }
+}
+
+function healthPlanAuditBadgeClasses(status?: string | null) {
+  if (status === "needs_regeneration") return "border-red-200 bg-red-50 text-red-700";
+  if (status === "needs_review") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function healthPlanAuditLabel(t: (key: string) => string, status?: string | null) {
+  if (status === "needs_regeneration") return t("usersList.healthPlanNeedsRegeneration");
+  if (status === "needs_review") return t("usersList.healthPlanNeedsReview");
+  return t("profile.healthPlanReviewedBadge");
 }
 
 function channelIcon(channel: OperationalChannel) {
@@ -510,7 +524,20 @@ export default function UsersList() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <p className="max-w-md text-sm font-medium text-foreground">{t(user.reasonKey)}</p>
+                        <div className="space-y-2">
+                          <p className="max-w-md text-sm font-medium text-foreground">{t(user.reasonKey)}</p>
+                          {user.healthPlanAudit?.status && user.healthPlanAudit.status !== "ready" && (
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "rounded-full px-2.5 py-1 text-[11px] font-semibold",
+                                healthPlanAuditBadgeClasses(user.healthPlanAudit.status),
+                              )}
+                            >
+                              {healthPlanAuditLabel(t, user.healthPlanAudit.status)}
+                            </Badge>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -658,6 +685,17 @@ export default function UsersList() {
                         <div>
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{t("usersList.reason")}</p>
                           <p className="mt-1 font-medium text-foreground">{t(user.reasonKey)}</p>
+                          {user.healthPlanAudit?.status && user.healthPlanAudit.status !== "ready" && (
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "mt-2 rounded-full px-2.5 py-1 text-[11px] font-semibold",
+                                healthPlanAuditBadgeClasses(user.healthPlanAudit.status),
+                              )}
+                            >
+                              {healthPlanAuditLabel(t, user.healthPlanAudit.status)}
+                            </Badge>
+                          )}
                         </div>
                         <div>
                           <p className="text-xs font-bold uppercase tracking-[0.12em] text-muted-foreground">{t("usersList.channel")}</p>

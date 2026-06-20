@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Search, UsersRound } from "lucide-react";
 
@@ -22,6 +22,9 @@ interface AssignCareProviderDialogProps {
   onOpenChange: (open: boolean) => void;
   userId: string;
   userName?: string;
+  initialStaffRole?: string | null;
+  initialNotes?: string | null;
+  contextHint?: string | null;
 }
 
 async function fetchCareProviders(search: string, type: CareProviderType) {
@@ -31,7 +34,15 @@ async function fetchCareProviders(search: string, type: CareProviderType) {
   return data.providers ?? [];
 }
 
-export function AssignCareProviderDialog({ open, onOpenChange, userId, userName }: AssignCareProviderDialogProps) {
+export function AssignCareProviderDialog({
+  open,
+  onOpenChange,
+  userId,
+  userName,
+  initialStaffRole = null,
+  initialNotes = null,
+  contextHint = null,
+}: AssignCareProviderDialogProps) {
   const { t } = useLanguage();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
@@ -59,6 +70,13 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
     () => providers.find((provider) => provider.provider_id === selectedProviderId) ?? null,
     [providers, selectedProviderId],
   );
+
+  useEffect(() => {
+    if (!open) return;
+    setStaffRole(initialStaffRole || "primary_field_staff");
+    setNotes(initialNotes || "");
+    setMakePrimary(true);
+  }, [initialNotes, initialStaffRole, open]);
 
   const close = () => {
     onOpenChange(false);
@@ -131,6 +149,11 @@ export function AssignCareProviderDialog({ open, onOpenChange, userId, userName 
           <div className="rounded-2xl border border-primary/15 bg-primary/5 px-4 py-3">
             <p className="text-sm leading-6 text-muted-foreground">{t("careProviders.assignStaffHelp")}</p>
           </div>
+          {contextHint ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              {contextHint}
+            </div>
+          ) : null}
 
           <div className="space-y-2">
             <Label htmlFor="care-provider-search">{t("careProviders.searchStaff")}</Label>

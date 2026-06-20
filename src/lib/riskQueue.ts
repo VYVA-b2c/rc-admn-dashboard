@@ -30,6 +30,7 @@ export type RiskQueueRow = {
   hasNoResponse: boolean;
   isUnassigned: boolean;
   livingContextKey?: string;
+  healthPlanAudit?: OperationalQueueUser["healthPlanAudit"] | null;
 };
 
 export const riskQueueFilterKeys: FilterKey[] = [
@@ -124,6 +125,7 @@ export function toRiskQueueRow(user: OperationalQueueUser): RiskQueueRow {
     hasNoResponse: Boolean(meta?.noResponse),
     isUnassigned: !assignedTo && careProviderCount === 0,
     livingContextKey: meta?.livingContextKey ?? livingContextKey(user.living_context),
+    healthPlanAudit: user.healthPlanAudit ?? null,
   };
 
   return {

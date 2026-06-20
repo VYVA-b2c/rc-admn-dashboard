@@ -1,0 +1,5 @@
+
+> vite_react_shadcn_ts@0.0.0 dev
+> node server/index.mjs
+
+RC admin server running in development on http://0.0.0.0:8097 with database missing DATABASE_URL

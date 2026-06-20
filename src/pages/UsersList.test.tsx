@@ -8,6 +8,10 @@ import UsersList from "@/pages/UsersList";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
+const useGISDataMock = vi.hoisted(() => vi.fn(() => ({
+  data: { gisUsers: [] },
+  isLoading: false,
+})));
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -40,12 +44,7 @@ vi.mock("@/hooks/useCurrentUserContext", () => ({
 }));
 
 vi.mock("@/hooks/useGISData", () => ({
-  useGISData: () => ({
-    data: {
-      gisUsers: [],
-    },
-    isLoading: false,
-  }),
+  useGISData: () => useGISDataMock(),
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -107,6 +106,10 @@ describe("UsersList Add User flow", () => {
   beforeEach(() => {
     navigateMock.mockReset();
     toastMock.mockReset();
+    useGISDataMock.mockReturnValue({
+      data: { gisUsers: [] },
+      isLoading: false,
+    });
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -116,6 +119,47 @@ describe("UsersList Add User flow", () => {
         disconnect() {}
       },
     );
+  });
+
+  it("shows a plan attention badge when a saved health plan needs regeneration", () => {
+    useGISDataMock.mockReturnValue({
+      data: {
+        gisUsers: [
+          {
+            id: "client-1",
+            first_name: "Carmen",
+            last_name: "Lopez",
+            city: "Madrid",
+            phone: "+34 600 010 245",
+            date_of_birth: "1942-05-01",
+            coords: null,
+            activeAlerts: 2,
+            criticalAlerts: 1,
+            sensorCount: 1,
+            offlineSensors: 0,
+            checkinEnabled: true,
+            healthConditions: 2,
+            missedMeds7d: 1,
+            riskScore: 82,
+            careProviderCount: 1,
+            primaryCaregiverName: "Maria Garcia",
+            primaryProfessionalName: "Ana Novak",
+            careProviderNames: ["Maria Garcia", "Ana Novak"],
+            healthPlanAudit: {
+              status: "needs_regeneration",
+              review_required: true,
+              regeneration_recommended: true,
+              reasons: [{ code: "new_critical_signals", severity: "high" }],
+            },
+          },
+        ],
+      },
+      isLoading: false,
+    });
+
+    renderUsersList();
+
+    expect(screen.getByText("Plan regenerate")).toBeInTheDocument();
   });
 
   afterEach(() => {

@@ -3,6 +3,22 @@ import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 
+export interface HealthPlanAuditReasonSummary {
+  code: string;
+  severity: "high" | "medium" | "low";
+}
+
+export interface HealthPlanAuditSummary {
+  status: "ready" | "needs_review" | "needs_regeneration";
+  review_required: boolean;
+  regeneration_recommended: boolean;
+  reviewed?: boolean;
+  generated_at?: string | null;
+  checked_at?: string | null;
+  reason_codes?: string[];
+  reasons?: HealthPlanAuditReasonSummary[];
+}
+
 export interface GISUser {
   id: string;
   first_name: string;
@@ -30,6 +46,7 @@ export interface GISUser {
   primaryCaregiverName?: string | null;
   primaryProfessionalName?: string | null;
   careProviderNames?: string[];
+  healthPlanAudit?: HealthPlanAuditSummary | null;
 }
 
 export interface ActiveAlert {

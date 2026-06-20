@@ -70,6 +70,12 @@ describe("RiskQueue", () => {
               primaryCaregiverName: null,
               primaryProfessionalName: null,
               careProviderNames: [],
+              healthPlanAudit: {
+                status: "needs_regeneration",
+                review_required: true,
+                regeneration_recommended: true,
+                reasons: [{ code: "new_critical_signals", severity: "high" }],
+              },
             },
           ],
         };
@@ -103,5 +109,6 @@ describe("RiskQueue", () => {
     expect(screen.queryByText("Predictive insights are unavailable.")).not.toBeInTheDocument();
     expect(screen.getByText("Carmen Lopez")).toBeInTheDocument();
     expect(screen.getByText(/Forecast tables are unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Health plan needs regeneration")).toBeInTheDocument();
   });
 });

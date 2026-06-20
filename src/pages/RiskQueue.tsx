@@ -291,11 +291,18 @@ function fallbackFactors(row: RiskQueueRow): InsightFactor[] {
   if (row.hasMedicationIssue) factors.push({ signal: "medication", label: "Medication follow-up", severity: "high" });
   if (row.hasCheckinIssue) factors.push({ signal: "checkin", label: "Check-in inactive", severity: "moderate" });
   if (row.isUnassigned) factors.push({ signal: "assignment", label: "Unassigned", severity: "high" });
+  if (row.healthPlanAudit?.status === "needs_regeneration") {
+    factors.push({ signal: "plan", label: "Health plan needs regeneration", severity: "high" });
+  } else if (row.healthPlanAudit?.status === "needs_review") {
+    factors.push({ signal: "plan", label: "Health plan needs review", severity: "moderate" });
+  }
   if (!factors.length) factors.push({ signal: "review", label: "Operator review", severity: "moderate" });
   return factors;
 }
 
 function fallbackWindow(row: RiskQueueRow) {
+  if (row.healthPlanAudit?.status === "needs_regeneration") return "Regenerate the saved health plan before the next high-risk follow-up.";
+  if (row.healthPlanAudit?.status === "needs_review") return "Review the saved health plan against the latest care signals.";
   if (row.status === "urgent" || row.hasNoResponse) return "Immediate operator review recommended from live risk signals.";
   if (row.isUnassigned) return "Assign a care provider before the next follow-up.";
   if (row.hasMedicationIssue) return "Medication confirmation should be checked during the next outreach.";
