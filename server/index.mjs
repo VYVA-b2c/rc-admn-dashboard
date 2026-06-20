@@ -146,6 +146,11 @@ const isProduction =
 const host = argValue("--host") || process.env.HOST || "0.0.0.0";
 const port = Number(argValue("--port") || process.env.PORT || 8080);
 const databaseUrl = process.env.DATABASE_URL || process.env.LOVABLE_DATABASE_URL || process.env.POSTGRES_URL;
+const pgHost = process.env.PGHOST || process.env.POSTGRES_HOST;
+const pgDatabase = process.env.PGDATABASE || process.env.POSTGRES_DATABASE || process.env.POSTGRES_DB;
+const pgUser = process.env.PGUSER || process.env.POSTGRES_USER;
+const pgPassword = process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD;
+const pgPort = process.env.PGPORT || process.env.POSTGRES_PORT;
 const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
 const externalUserSource = "api.vyva.io";
 const vyvaBackendApiDisabled = process.env.VYVA_BACKEND_API_DISABLED === "true";
@@ -259,15 +264,36 @@ function sslConfig(connectionString) {
   return undefined;
 }
 
-const pool = databaseUrl
-  ? new Pool({
+function databasePoolConfig() {
+  if (databaseUrl) {
+    return {
       connectionString: databaseUrl,
       ssl: sslConfig(databaseUrl),
       max: Number(process.env.DATABASE_POOL_MAX || 10),
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
-    })
-  : null;
+    };
+  }
+
+  if (pgHost && pgDatabase && pgUser) {
+    return {
+      host: pgHost,
+      database: pgDatabase,
+      user: pgUser,
+      password: pgPassword,
+      port: pgPort ? Number(pgPort) : undefined,
+      ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+      max: Number(process.env.DATABASE_POOL_MAX || 10),
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    };
+  }
+
+  return null;
+}
+
+const poolConfig = databasePoolConfig();
+const pool = poolConfig ? new Pool(poolConfig) : null;
 
 const fallbackOrganizations = [
   {
@@ -372,7 +398,7 @@ function datesBetween(start, end) {
 
 function dbUnavailable(res) {
   res.status(503).json({
-    error: "Database is not configured. Add DATABASE_URL through Replit Database or Replit Secrets.",
+    error: "Database is not configured. Add DATABASE_URL or Replit PGHOST/PGDATABASE/PGUSER database variables.",
   });
 }
 
@@ -14119,7 +14145,7 @@ if (isProduction) {
 
 app.listen(port, host, () => {
   const mode = isProduction ? "production" : "development";
-  const dbState = pool ? "configured" : "missing DATABASE_URL";
+  const dbState = pool ? "configured" : "missing database configuration";
   console.log(`RC admin server running in ${mode} on http://${host}:${port} with database ${dbState}`);
 
   if (pool) {
