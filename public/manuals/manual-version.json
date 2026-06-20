@@ -17,8 +17,15 @@
       "title": "Manual de usuario - Consola VYVA x Cruz Roja",
       "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
       "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_ES_2026-06-20.pdf"
+    },
+    "de": {
+      "title": "Benutzerhandbuch - VYVA x Red Cross Konsole",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_DE_2026-06-20.pdf"
     }
   },
   "latestSpanishPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
-  "spanishManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_ES.pdf"
+  "spanishManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  "latestGermanPdf": "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+  "germanManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_DE.pdf"
 }
