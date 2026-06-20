@@ -1,5 +1,11 @@
 # Admin Manual Changelog
 
+## 2026-06-20 Spanish edition
+
+- Added `VYVA_Admin_Console_User_Manual_ES.docx` and `VYVA_Admin_Console_User_Manual_ES.pdf` as downloadable Spanish manual outputs.
+- Published the Spanish PDF under `public/manuals/` and added a dated Spanish archive copy.
+- Updated the public manual manifest with Spanish download metadata.
+
 ## 2026-06-20
 
 Full current-console refresh.

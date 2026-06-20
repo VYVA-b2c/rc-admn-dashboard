@@ -6,5 +6,19 @@
   "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-20.pdf",
   "language": "en",
   "audience": "admin",
-  "releaseNote": "Refreshes the manual for email-only login, organization-aware access, Clients, Brain Coach reports, Emergency Contacts, Check-ins, Medication adherence, Risk, Sensors, and VYVA Call Campaigns."
+  "releaseNote": "Refreshes the manual for email-only login, organization-aware access, Clients, Brain Coach reports, Emergency Contacts, Check-ins, Medication adherence, Risk, Sensors, and VYVA Call Campaigns.",
+  "languages": {
+    "en": {
+      "title": "VYVA Admin Console User Manual",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-20.pdf"
+    },
+    "es": {
+      "title": "Manual de Usuario - Consola VYVA x Cruz Roja",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_ES_2026-06-20.pdf"
+    }
+  },
+  "latestSpanishPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  "spanishManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_ES.pdf"
 }
