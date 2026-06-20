@@ -23,6 +23,12 @@ Si el email no tiene acceso concedido, la consola debe bloquear el acceso despu�
 4. Abrir el enlace mágico más reciente.
 5. Confirmar que la organización mostrada es la correcta.
 
+![Pantalla de inicio de sesión con acceso por enlace mágico.](../current/screenshots-from-english/screenshot-01.png)
+*Pantalla de inicio de sesión con acceso por enlace mágico.*
+
+![Correo de acceso seguro con botón para abrir la consola VYVA.](../current/screenshots-from-english/screenshot-02.png)
+*Correo de acceso seguro con botón para abrir la consola VYVA.*
+
 ## 3. Roles y permisos
 Los permisos se resuelven a partir del email autenticado y de los registros del backend. La interfaz debe mostrar el rol real del usuario, por ejemplo Super admin, Admin, Coordinador u Operador. No debe mostrar Operator si el usuario es Super admin.
 Los superadmins no se crean desde la interfaz. Se conceden desde controles backend, como variables de entorno o campos de perfil administrados. Esto reduce el riesgo de elevar permisos por error.
@@ -55,6 +61,9 @@ El encabezado superior muestra el nombre de la consola, la organización activa,
 | Medication | Seguimiento de medicación y adherencia. |
 | Campaigns | Campañas de llamadas VYVA. |
 
+![Barra lateral con las áreas principales de la consola.](../current/screenshots-from-english/screenshot-03.png)
+*Barra lateral con las áreas principales de la consola.*
+
 ## 6. Panel Today
 Today resume el estado operativo de la organización activa. Las tarjetas superiores deben mostrar números calculados con lógica clara y periodo definido. Cuando el usuario hace clic en una tarjeta, debe poder ver la lista que explica el número cuando aplique.
 El mapa debe estar arriba y debe mantener el comportamiento Leaflet: tamaño estable, resize correcto, tiles, clustering y viewport coherente. Debe mostrar clientes, oficinas y equipo de campo como capas.
@@ -66,6 +75,9 @@ Las métricas de check-ins deben ser semanales: completados frente a esperados d
 - Medicación: dosis o confirmaciones pendientes.
 - Sin asignar: clientes sin cobertura operativa suficiente.
 
+![Panel Today con métricas operativas, filtros y mapa superior.](../current/screenshots-from-english/screenshot-04.png)
+*Panel Today con métricas operativas, filtros y mapa superior.*
+
 ## 7. Clientes
 Clientes es la cola principal de personas atendidas. Desde aquí se puede buscar por nombre, teléfono, ciudad o cuidador, filtrar por urgencia, revisión, sin respuesta, medicación, check-ins o sin asignar, y abrir el perfil del cliente.
 La página tiene tres entradas de creación: Add client para crear uno a uno, Import clients para CSV y API intake para usuarios que llegan desde onboarding externo. Estas acciones son para clientes, no para miembros del equipo.
@@ -73,6 +85,9 @@ La página tiene tres entradas de creación: Add client para crear uno a uno, Im
 2. Usar Import clients cuando se cargan varios clientes con CSV.
 3. Usar API intake cuando los datos ya existen en el backend de onboarding.
 4. Abrir una fila para revisar el perfil y la cobertura de cuidado.
+
+![Lista de clientes con búsqueda, filtros y cobertura de cuidado.](../current/screenshots-from-english/screenshot-05.png)
+*Lista de clientes con búsqueda, filtros y cobertura de cuidado.*
 
 ## 8. Crear o importar clientes
 El formulario de cliente debe recoger datos operativos de cuidado en secciones claras: persona y contacto, perfil médico mínimo, medicación, consentimiento, contacto de emergencia y rutinas de seguimiento.
@@ -84,6 +99,9 @@ El CSV debe respetar las mismas reglas de mínima información necesaria y nunca
 - Solo se pide información médica útil para coordinación.
 - Sensores quedan fuera hasta que el backend esté listo.
 
+![Formulario de alta de cliente con datos de contacto y perfil de cuidado.](../current/screenshots-from-english/screenshot-06.png)
+*Formulario de alta de cliente con datos de contacto y perfil de cuidado.*
+
 ## 9. Perfil del cliente
 El perfil del cliente es la vista de trabajo principal para una persona atendida. Debe mostrar nombre, ciudad, estado, teléfono, idioma, dirección, consentimiento, último contacto y cobertura de cuidado sin textos de relleno como Unknown cuando exista información real.
 La tarjeta de medicación y check-ins debe mostrar medicamentos, horarios, frecuencia y botones de edición si el usuario tiene permisos. Ver adherencia abre el calendario semanal de medicación por cliente.
@@ -94,10 +112,19 @@ Las acciones Call now, Send WhatsApp y Contact care provider deben informar que 
 - Cobertura: contacto de emergencia y personal Cruz Roja principal.
 - Actividad: eventos reales ordenados por fecha.
 
+![Perfil del cliente con datos clave, estado, acciones y tarjetas de cuidado.](../current/screenshots-from-english/screenshot-07.png)
+*Perfil del cliente con datos clave, estado, acciones y tarjetas de cuidado.*
+
+![Tarjeta de medicación, check-ins y Brain Coach del cliente.](../current/screenshots-from-english/screenshot-08.png)
+*Tarjeta de medicación, check-ins y Brain Coach del cliente.*
+
 ## 10. Contactos de emergencia
 Los contactos de emergencia son personas de apoyo no profesionales: familiares, vecinos, cuidadores informales u otros contactos personales. Se capturan durante onboarding, llamadas entrantes o el formulario de cliente.
 La página Contactos de emergencia debe listar solo estos contactos personales. No debe mezclar personal Cruz Roja. La tabla debe incluir nombre, relación o rol, teléfono, fuente, clientes vinculados y número de asignaciones.
 Un cliente puede tener varios contactos de emergencia y un contacto puede estar vinculado a varios clientes. La vista de perfil debe evitar repetir el mismo contacto como resumen y como detalle de forma confusa.
+
+![Directorio de contactos de emergencia capturados durante onboarding o intake.](../current/screenshots-from-english/screenshot-09.png)
+*Directorio de contactos de emergencia capturados durante onboarding o intake.*
 
 ## 11. Personal Cruz Roja
 El personal Cruz Roja representa profesionales o equipo operativo. Debe gestionarse separado de los contactos de emergencia. La asignación de personal debe pedir un rol profesional mediante desplegable, no una relación familiar.
@@ -105,6 +132,9 @@ Un cliente puede tener personal profesional asignado. El sistema debe diferencia
 - Ejemplos de rol: coordinador de campo, operador principal, apoyo de medicación, trabajador social, supervisor.
 - No usar Daughter, neighbor o caregiver como rol de personal profesional.
 - Si no hay personal disponible, la UI debe indicar que falta crear registros de personal para la organización activa.
+
+![Asignación de personal profesional Cruz Roja separada de contactos personales.](../current/screenshots-from-english/screenshot-10.png)
+*Asignación de personal profesional Cruz Roja separada de contactos personales.*
 
 ## 12. Check-ins
 Check-ins es solo para llamadas de seguimiento o check-up calls. Brain Coach no debe aparecer en esta página. Cada fila debe mostrar cliente, teléfono, tipo, estado, último check-in, frecuencia, hora preferida y acciones.
@@ -118,10 +148,16 @@ Los admins y el personal Cruz Roja principal pueden editar horarios cuando hay c
 | Escalated | Se activó protocolo de emergencia o revisión crítica. |
 | Cancelled | La rutina o llamada fue cancelada correctamente. |
 
+![Vista de check-ins con frecuencia, hora preferida y último estado registrado.](../current/screenshots-from-english/screenshot-11.png)
+*Vista de check-ins con frecuencia, hora preferida y último estado registrado.*
+
 ## 13. Brain Coach
 Brain Coach tiene una página separada de sesiones. La tabla muestra clientes con rutina cognitiva activa o inactiva, teléfono, frecuencia, hora preferida y acciones.
 El icono de reporte debe abrir la página de reporte de actividad cognitiva, no el perfil general. El reporte muestra promedio, sesiones completadas, total de preguntas, racha y detalle por periodo de 7, 30 o 90 días.
 La actividad del perfil debe mostrar la última sesión registrada, no solo que la rutina está activa. Si no hay sesiones, debe mostrar un estado claro como sin historial todavía.
+
+![Sesiones Brain Coach y acceso al reporte de actividad cognitiva.](../current/screenshots-from-english/screenshot-12.png)
+*Sesiones Brain Coach y acceso al reporte de actividad cognitiva.*
 
 ## 14. Medicación y adherencia
 Medicación permite revisar señales relacionadas con medicamentos y abrir la adherencia semanal por cliente. La página de adherencia muestra medicamentos por fila y días por columna.
@@ -132,6 +168,9 @@ Los estados del calendario son tomado, perdido, sin confirmar y próximo. Las do
 - Los contactos de emergencia no editan medicación.
 - No incluir información médica extensa si no es necesaria para coordinación.
 
+![Calendario semanal de adherencia por medicamento y estado de dosis.](../current/screenshots-from-english/screenshot-13.png)
+*Calendario semanal de adherencia por medicamento y estado de dosis.*
+
 ## 15. Riesgo
 Riesgo prioriza trabajo operativo. La página debe mostrar tarjetas de Urgente, Revisión, Sin respuesta, Medicación y Sin asignar. Cada tarjeta debe incluir una ayuda con explicación de cómo se calcula el número.
 La cola debe actualizarse según señales reales: check-ins perdidos, medicación sin confirmar, falta de cobertura, escalaciones y eventos recientes. Si no hay casos, debe explicar qué señales generarían entradas.
@@ -140,6 +179,9 @@ La cola debe actualizarse según señales reales: check-ins perdidos, medicació
 - Sin respuesta: no se obtuvo confirmación en rutinas o campañas.
 - Medicación: señales de adherencia o confirmación pendiente.
 - Sin asignar: falta responsable o cobertura.
+
+![Cola de riesgo con tarjetas explicables y filtros operativos.](../current/screenshots-from-english/screenshot-14.png)
+*Cola de riesgo con tarjetas explicables y filtros operativos.*
 
 ## 16. Sensores
 Sensores reemplaza la etiqueta Alerts. Por ahora puede existir como sección preparada para dispositivos y señales futuras. Si el backend de sensores no existe, la UI debe explicar claramente que todavía no hay datos conectados.
@@ -155,6 +197,9 @@ La opción de IA ayuda al admin a escribir unas palabras sobre el objetivo y gen
 4. Previsualizar destinatarios elegibles y omitidos.
 5. Guardar borrador, programar llamadas o poner en cola.
 
+![Campañas de llamadas VYVA con plantillas, estados y acciones de cola.](../current/screenshots-from-english/screenshot-15.png)
+*Campañas de llamadas VYVA con plantillas, estados y acciones de cola.*
+
 ## 18. Segmentación inteligente de campañas
 La segmentación debe ser práctica y entendible para administradores. En lugar de un texto libre llamado target summary, la consola debe ofrecer reglas claras: geografía, riesgo, condición de salud, proveedor asignado, consentimiento y teléfono.
 Consentimiento y teléfono deben estar activados por defecto como salvaguardas. La previsualización debe mostrar cuántos clientes son elegibles y cuántos se omiten, con razones como sin teléfono, sin consentimiento, fuera del área, sin condición seleccionada o proveedor no coincidente.
@@ -164,21 +209,36 @@ Consentimiento y teléfono deben estar activados por defecto como salvaguardas. 
 - Cobertura: todos, sin asignar o asignados a un proveedor concreto.
 - Salvaguardas: teléfono y consentimiento.
 
+![Constructor de audiencia por geografía, riesgo, condiciones y cobertura.](../current/screenshots-from-english/screenshot-16.png)
+*Constructor de audiencia por geografía, riesgo, condiciones y cobertura.*
+
 ## 19. Team access
 Team access sirve para crear cuentas de personal con acceso a la consola. No crea clientes. El texto debe decir Add team member y explicar que es para staff console access only.
 Los admins de organización pueden crear miembros del equipo dentro de su organización. Los superadmins pueden crear administradores por organización. La creación o promoción de superadmins queda fuera de la UI.
+
+![Gestión de acceso para miembros del equipo, separada de clientes.](../current/screenshots-from-english/screenshot-17.png)
+*Gestión de acceso para miembros del equipo, separada de clientes.*
 
 ## 20. Configuración e idioma
 Configuración muestra la organización activa, país, idioma por defecto y zona horaria. Los admins pueden cambiar valores permitidos según rol. El idioma de la consola puede ser inglés, alemán o español.
 La página debe tener una forma clara de volver a la consola. Los cambios de organización o idioma deben actualizar la UI sin dejar datos mezclados de otra organización.
 
+![Configuración de organización activa, idioma y zona horaria.](../current/screenshots-from-english/screenshot-18.png)
+*Configuración de organización activa, idioma y zona horaria.*
+
 ## 21. Informes
 Informes resume actividad útil para coordinación. Puede incluir campañas, check-ins, medicación, servicios, estado de población y tendencias por organización.
 Todos los informes deben respetar la organización activa. Si el superadmin cambia de Zamora a Leipzig, los datos deben cambiar también.
 
+![Informes operativos para revisar actividad y métricas por organización.](../current/screenshots-from-english/screenshot-19.png)
+*Informes operativos para revisar actividad y métricas por organización.*
+
 ## 22. Actividad del cliente
 La actividad del cliente debe registrar eventos reales, no solo configuraciones activas. Por ejemplo, debe mostrar último check-in realizado o perdido, última sesión Brain Coach registrada, último evento de medicación, consentimiento registrado, asignación de cuidado y cambios relevantes.
 No es útil mostrar únicamente 'Brain Coach sessions active' o 'Medication plan has 2 items' como actividad. Eso describe configuración, no actividad. La línea temporal debe priorizar acciones y eventos.
+
+![Línea de tiempo con acciones reales: onboarding, llamadas, medicación y sesiones.](../current/screenshots-from-english/screenshot-20.png)
+*Línea de tiempo con acciones reales: onboarding, llamadas, medicación y sesiones.*
 
 ## 23. Comunicaciones y pasarelas
 Hasta que existan conectores de voz, WhatsApp o proveedor de llamadas, los botones de comunicación deben decir que se requiere una conexión de pasarela. Esto evita que el operador crea que se llamó, se escribió o se contactó a alguien cuando no ocurrió.

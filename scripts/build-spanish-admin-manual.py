@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from zipfile import ZipFile
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
@@ -17,6 +18,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import Image as PdfImage
 from reportlab.platypus import PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
@@ -31,10 +33,12 @@ VERSION_DIR = ROOT / "docs" / "admin-manual" / "versions" / VERSION
 SOURCE_DIR = ROOT / "docs" / "admin-manual" / "source"
 PUBLIC_DIR = ROOT / "public" / "manuals"
 ARCHIVE_DIR = PUBLIC_DIR / "archive"
+SCREENSHOT_DIR = CURRENT_DIR / "screenshots-from-english"
+ENGLISH_MANUAL = ROOT / "VYVA_Admin_Console_User_Manual.docx"
 
 
 def ensure_dirs() -> None:
-    for directory in [CURRENT_DIR, VERSION_DIR, SOURCE_DIR, PUBLIC_DIR, ARCHIVE_DIR]:
+    for directory in [CURRENT_DIR, VERSION_DIR, SOURCE_DIR, PUBLIC_DIR, ARCHIVE_DIR, SCREENSHOT_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
 
 
@@ -355,6 +359,46 @@ QUICK_REFERENCE = [
 ]
 
 
+SCREENSHOTS = [
+    {"section": "2. Inicio de sesión", "file": "screenshot-01.png", "caption": "Pantalla de inicio de sesión con acceso por enlace mágico."},
+    {"section": "2. Inicio de sesión", "file": "screenshot-02.png", "caption": "Correo de acceso seguro con botón para abrir la consola VYVA."},
+    {"section": "5. Navegación general", "file": "screenshot-03.png", "caption": "Barra lateral con las áreas principales de la consola."},
+    {"section": "6. Panel Today", "file": "screenshot-04.png", "caption": "Panel Today con métricas operativas, filtros y mapa superior."},
+    {"section": "7. Clientes", "file": "screenshot-05.png", "caption": "Lista de clientes con búsqueda, filtros y cobertura de cuidado."},
+    {"section": "8. Crear o importar clientes", "file": "screenshot-06.png", "caption": "Formulario de alta de cliente con datos de contacto y perfil de cuidado."},
+    {"section": "9. Perfil del cliente", "file": "screenshot-07.png", "caption": "Perfil del cliente con datos clave, estado, acciones y tarjetas de cuidado."},
+    {"section": "9. Perfil del cliente", "file": "screenshot-08.png", "caption": "Tarjeta de medicación, check-ins y Brain Coach del cliente."},
+    {"section": "10. Contactos de emergencia", "file": "screenshot-09.png", "caption": "Directorio de contactos de emergencia capturados durante onboarding o intake."},
+    {"section": "11. Personal Cruz Roja", "file": "screenshot-10.png", "caption": "Asignación de personal profesional Cruz Roja separada de contactos personales."},
+    {"section": "12. Check-ins", "file": "screenshot-11.png", "caption": "Vista de check-ins con frecuencia, hora preferida y último estado registrado."},
+    {"section": "13. Brain Coach", "file": "screenshot-12.png", "caption": "Sesiones Brain Coach y acceso al reporte de actividad cognitiva."},
+    {"section": "14. Medicación y adherencia", "file": "screenshot-13.png", "caption": "Calendario semanal de adherencia por medicamento y estado de dosis."},
+    {"section": "15. Riesgo", "file": "screenshot-14.png", "caption": "Cola de riesgo con tarjetas explicables y filtros operativos."},
+    {"section": "17. Campañas de llamadas VYVA", "file": "screenshot-15.png", "caption": "Campañas de llamadas VYVA con plantillas, estados y acciones de cola."},
+    {"section": "18. Segmentación inteligente de campañas", "file": "screenshot-16.png", "caption": "Constructor de audiencia por geografía, riesgo, condiciones y cobertura."},
+    {"section": "19. Team access", "file": "screenshot-17.png", "caption": "Gestión de acceso para miembros del equipo, separada de clientes."},
+    {"section": "20. Configuración e idioma", "file": "screenshot-18.png", "caption": "Configuración de organización activa, idioma y zona horaria."},
+    {"section": "21. Informes", "file": "screenshot-19.png", "caption": "Informes operativos para revisar actividad y métricas por organización."},
+    {"section": "22. Actividad del cliente", "file": "screenshot-20.png", "caption": "Línea de tiempo con acciones reales: onboarding, llamadas, medicación y sesiones."},
+]
+
+
+def screenshots_for(section_title: str) -> list[dict[str, str]]:
+    return [screenshot for screenshot in SCREENSHOTS if screenshot["section"] == section_title]
+
+
+def extract_screenshots() -> None:
+    if any(SCREENSHOT_DIR.glob("screenshot-*.png")):
+        return
+    if not ENGLISH_MANUAL.exists():
+        return
+    with ZipFile(ENGLISH_MANUAL) as archive:
+        media = [name for name in archive.namelist() if name.startswith("word/media/")]
+        for index, name in enumerate(media, start=1):
+            extension = Path(name).suffix or ".png"
+            (SCREENSHOT_DIR / f"screenshot-{index:02d}{extension}").write_bytes(archive.read(name))
+
+
 def set_cell_shading(cell, fill: str) -> None:
     tc_pr = cell._tc.get_or_add_tcPr()
     shd = OxmlElement("w:shd")
@@ -371,6 +415,23 @@ def set_cell_text(cell, text: str, *, bold: bool = False, color: str = "111827")
     run.font.size = Pt(9)
     run.font.color.rgb = RGBColor.from_string(color)
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+
+
+def add_docx_screenshot(doc: Document, screenshot: dict[str, str]) -> None:
+    image_path = SCREENSHOT_DIR / screenshot["file"]
+    if not image_path.exists():
+        return
+    image_paragraph = doc.add_paragraph()
+    image_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    image_paragraph.add_run().add_picture(str(image_path), width=Inches(6.35))
+
+    caption = doc.add_paragraph()
+    caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run = caption.add_run(screenshot["caption"])
+    run.italic = True
+    run.font.name = "Segoe UI"
+    run.font.size = Pt(8)
+    run.font.color.rgb = RGBColor.from_string("6B7280")
 
 
 def build_docx(path: Path) -> None:
@@ -472,6 +533,8 @@ def build_docx(path: Path) -> None:
                     cell = table.cell(i, j)
                     set_cell_text(cell, value, bold=i == 0, color="FFFFFF" if i == 0 else "111827")
                     set_cell_shading(cell, "6D4AFF" if i == 0 else ("F9FAFB" if i % 2 == 0 else "FFFFFF"))
+        for screenshot in screenshots_for(section["title"]):
+            add_docx_screenshot(doc, screenshot)
         doc.add_paragraph()
 
     for section in doc.sections:
@@ -577,7 +640,30 @@ def pdf_styles():
             alignment=TA_CENTER,
         )
     )
+    styles.add(
+        ParagraphStyle(
+            name="CaptionES",
+            parent=styles["BodyText"],
+            fontName="SegoeUI",
+            fontSize=8.2,
+            leading=11,
+            textColor=colors.HexColor("#6B7280"),
+            alignment=TA_CENTER,
+            spaceAfter=9,
+        )
+    )
     return styles
+
+
+def pdf_screenshot_flowable(image_path: Path) -> PdfImage:
+    image = PdfImage(str(image_path))
+    max_width = 6.15 * inch
+    max_height = 3.75 * inch
+    scale = min(max_width / image.imageWidth, max_height / image.imageHeight)
+    image.drawWidth = image.imageWidth * scale
+    image.drawHeight = image.imageHeight * scale
+    image.hAlign = "CENTER"
+    return image
 
 
 def draw_footer(canvas, doc) -> None:
@@ -691,6 +777,12 @@ def build_pdf(path: Path) -> None:
                 )
             )
             story.append(table)
+        for screenshot in screenshots_for(section["title"]):
+            image_path = SCREENSHOT_DIR / screenshot["file"]
+            if image_path.exists():
+                story.append(Spacer(1, 0.05 * inch))
+                story.append(pdf_screenshot_flowable(image_path))
+                story.append(Paragraph(screenshot["caption"], styles["CaptionES"]))
         story.append(Spacer(1, 0.06 * inch))
 
     doc = SimpleDocTemplate(
@@ -724,6 +816,10 @@ def write_markdown(path: Path) -> None:
             lines.append("| " + " | ".join(["---"] * len(rows[0])) + " |")
             for row in rows[1:]:
                 lines.append("| " + " | ".join(row) + " |")
+        for screenshot in screenshots_for(section["title"]):
+            lines.append("")
+            lines.append(f"![{screenshot['caption']}](../current/screenshots-from-english/{screenshot['file']})")
+            lines.append(f"*{screenshot['caption']}*")
         lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -750,6 +846,7 @@ def update_manifest() -> None:
 
 def main() -> None:
     ensure_dirs()
+    extract_screenshots()
     docx_root = ROOT / f"{OUT_NAME}.docx"
     pdf_root = ROOT / f"{OUT_NAME}.pdf"
     build_docx(docx_root)
