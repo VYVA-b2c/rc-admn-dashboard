@@ -49,11 +49,9 @@ function channelKey(channel: OperationalChannel) {
 async function fetchPrepareCallProfile(id: string): Promise<OperationalProfileResponse> {
   if (isDemoUserId(id)) return getDemoProfileById(id);
 
-  const orgName = encodeURIComponent("Red Cross");
-
   try {
     const response = await apiFetch<OperationalProfileResponse>(
-      `/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(id)}&organization_name=${orgName}`,
+      `/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(id)}`,
     );
 
     if (authBypassEnabled && !response?.user) return getDemoProfileById(id);
