@@ -457,6 +457,56 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
   };
 }
 
+function mergeDashboardPayloads(primary, local) {
+  const primaryUsers = Array.isArray(primary?.gisUsers) ? primary.gisUsers : [];
+  const localUsers = Array.isArray(local?.gisUsers) ? local.gisUsers : [];
+  const seenUserKeys = new Set();
+  const addUserKeys = (user) => {
+    const id = nullIfBlank(user?.id);
+    const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
+    if (id) seenUserKeys.add(`id:${id}`);
+    if (externalUserId) seenUserKeys.add(`external:${externalUserId}`);
+  };
+  primaryUsers.forEach(addUserKeys);
+
+  const mergedUsers = [...primaryUsers];
+  for (const user of localUsers) {
+    const id = nullIfBlank(user?.id);
+    const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
+    if ((id && seenUserKeys.has(`id:${id}`)) || (externalUserId && seenUserKeys.has(`external:${externalUserId}`))) continue;
+    mergedUsers.push(user);
+    addUserKeys(user);
+  }
+
+  const activeAlerts = [
+    ...(Array.isArray(primary?.activeAlerts) ? primary.activeAlerts : []),
+    ...(Array.isArray(local?.activeAlerts) ? local.activeAlerts : []),
+  ];
+  const cityDistribution = Array.from(
+    mergedUsers.reduce((cityCounts, user) => {
+      const city = String(firstValue(user?.city, user?.userCity, user?.user_city) || "").trim() || "Unknown";
+      cityCounts.set(city, (cityCounts.get(city) || 0) + 1);
+      return cityCounts;
+    }, new Map()),
+    ([city, count]) => ({ city, count }),
+  );
+
+  return {
+    ...primary,
+    totalUsers: mergedUsers.length,
+    checkinsEnabled: mergedUsers.filter((user) => Boolean(user.checkinEnabled ?? user.checkin_enabled)).length,
+    checkinsCompletedWeekly: mergedUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0),
+    checkinsExpectedWeekly: mergedUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0),
+    activeAlertCount: activeAlerts.length,
+    criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
+    totalSensors: mergedUsers.reduce((sum, user) => sum + Number(user.sensorCount ?? user.sensor_count ?? 0), 0),
+    caregiversLinked: mergedUsers.reduce((sum, user) => sum + Number(user.careProviderCount ?? user.care_provider_count ?? 0), 0),
+    gisUsers: mergedUsers,
+    activeAlerts,
+    cityDistribution,
+  };
+}
+
 function normalizeExternalProfilePayload(data) {
   if (!data || typeof data !== "object") return data;
   const normalizeRecords = (records) =>
@@ -4036,6 +4086,8 @@ function dashboardUser(row) {
 
   return {
     id: String(row.id),
+    externalUserId: row.external_user_id || null,
+    externalSource: row.external_source || "local",
     first_name: row.first_name,
     last_name: row.last_name,
     city: row.city,
@@ -4138,6 +4190,8 @@ async function loadDashboardUsers(context) {
     )
     SELECT
       u.id::text,
+      u.external_user_id,
+      u.external_source,
       u.first_name,
       u.last_name,
       u.phone,
@@ -8627,7 +8681,9 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
           : [];
         assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
       }
-      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context));
+      const upstreamDashboard = normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context);
+      const localDashboard = context ? await loadDashboardUsers(context) : null;
+      res.json(localDashboard ? mergeDashboardPayloads(upstreamDashboard, localDashboard) : upstreamDashboard);
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
