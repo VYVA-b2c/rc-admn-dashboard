@@ -1,10 +1,31 @@
 {
   "title": "VYVA Admin Console User Manual",
-  "version": "2026-06-18.2",
-  "lastUpdated": "2026-06-18",
+  "version": "2026-06-20",
+  "lastUpdated": "2026-06-20",
   "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual.pdf",
-  "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-18.2.pdf",
+  "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-20.pdf",
   "language": "en",
   "audience": "admin",
-  "releaseNote": "Adds Check-in adherence and latest check-in status label guidance."
+  "releaseNote": "Refreshes the manual for email-only login, organization-aware access, Clients, Brain Coach reports, Emergency Contacts, Check-ins, Medication adherence, Risk, Sensors, and VYVA Call Campaigns.",
+  "languages": {
+    "en": {
+      "title": "VYVA Admin Console User Manual",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_2026-06-20.pdf"
+    },
+    "es": {
+      "title": "Manual de usuario - Consola VYVA x Cruz Roja",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_ES_2026-06-20.pdf"
+    },
+    "de": {
+      "title": "Benutzerhandbuch - VYVA x Red Cross Konsole",
+      "latestPdf": "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+      "archivePdf": "/manuals/archive/VYVA_Admin_Console_User_Manual_DE_2026-06-20.pdf"
+    }
+  },
+  "latestSpanishPdf": "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  "spanishManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  "latestGermanPdf": "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+  "germanManualUrl": "https://rcadmin.vyva.life/manuals/VYVA_Admin_Console_User_Manual_DE.pdf"
 }

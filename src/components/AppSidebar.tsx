@@ -76,7 +76,7 @@ const navGroups: { labelKey: string; items: NavItem[] }[] = [
   },
 ];
 
-function BrandMark({ collapsed }: { collapsed: boolean }) {
+function BrandMark({ collapsed, organizationName }: { collapsed: boolean; organizationName?: string | null }) {
   const { t } = useLanguage();
 
   return (
@@ -87,8 +87,8 @@ function BrandMark({ collapsed }: { collapsed: boolean }) {
       {!collapsed && (
         <div className="min-w-0">
           <div className="text-base font-bold leading-tight text-foreground">VYVA</div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-            {t("sidebar.console")}
+          <div className="truncate text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            {organizationName ? `${organizationName} · ${t("sidebar.console")}` : t("sidebar.console")}
           </div>
         </div>
       )}
@@ -149,6 +149,7 @@ export function AppSidebar() {
   const { t } = useLanguage();
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
+  const organizationName = currentUser?.organization?.name;
   const accountEmail = currentUser?.email || user?.email;
   const isProjectPlatformAdmin = isProjectPlatformAdminEmail(accountEmail);
   const isPlatformAdmin = Boolean(currentUser?.isPlatformAdmin || isProjectPlatformAdmin);
@@ -162,7 +163,7 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" className="border-sidebar-border bg-white text-foreground">
       <SidebarHeader className="border-b border-sidebar-border p-4">
-        <BrandMark collapsed={collapsed} />
+        <BrandMark collapsed={collapsed} organizationName={organizationName} />
       </SidebarHeader>
 
       <SidebarContent className="bg-white px-3 py-4">

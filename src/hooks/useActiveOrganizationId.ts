@@ -3,9 +3,10 @@ import { ACTIVE_ORGANIZATION_STORAGE_KEY } from "@/lib/apiClient";
 
 export function useActiveOrganizationId() {
   const { data } = useCurrentUserContext();
-  const contextOrganizationId = data?.user?.organization?.id;
-  if (contextOrganizationId) return contextOrganizationId;
+  const selectedOrganizationId = typeof window === "undefined"
+    ? ""
+    : window.localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY) || "";
+  if (selectedOrganizationId) return selectedOrganizationId;
 
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY) || "";
+  return data?.user?.organization?.id || "";
 }

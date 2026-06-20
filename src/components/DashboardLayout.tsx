@@ -74,6 +74,7 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
   const { data: currentContext } = useCurrentUserContext();
   const currentUser = currentContext?.user;
   const organizationName = currentUser?.organization?.name || t("layout.organization");
+  const productLabel = organizationName ? `VYVA x ${organizationName}` : t("layout.product");
   const organizationId = currentUser?.organization?.id || "";
   const displayName = formatDisplayName(currentUser?.fullName, currentUser?.email || user?.email);
   const organizationsQuery = useQuery({
@@ -106,8 +107,8 @@ export function DashboardLayout({ children }: { children: ReactNode }) {
             <SidebarTrigger className="h-9 w-9 rounded-xl text-muted-foreground" />
 
             <div className="min-w-0 max-[420px]:hidden">
-              <p className="text-sm font-bold text-foreground">{t("layout.product")}</p>
-              <p className="hidden truncate text-xs text-muted-foreground sm:block">{organizationName}</p>
+              <p className="truncate text-sm font-bold text-foreground">{productLabel}</p>
+              <p className="hidden truncate text-xs text-muted-foreground sm:block">{t("sidebar.console")}</p>
             </div>
 
             <div className="ml-auto flex items-center gap-3">

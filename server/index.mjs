@@ -54,11 +54,29 @@ const publicAppUrl =
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || publicManualPath;
 const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
-const userManualUrlOverride =
+const userManualUrlOverrideRaw =
   process.env.USER_MANUAL_URL ||
   process.env.VYVA_USER_MANUAL_URL ||
   process.env.VITE_USER_MANUAL_URL ||
-  "https://redcross.vyva.life/manuals/VYVA_Admin_Console_User_Manual.pdf";
+  null;
+const userManualUrlOverrides = {
+  en: userManualUrlOverrideRaw,
+  es:
+    process.env.USER_MANUAL_URL_ES ||
+    process.env.VYVA_USER_MANUAL_URL_ES ||
+    process.env.VITE_USER_MANUAL_URL_ES ||
+    null,
+  de:
+    process.env.USER_MANUAL_URL_DE ||
+    process.env.VYVA_USER_MANUAL_URL_DE ||
+    process.env.VITE_USER_MANUAL_URL_DE ||
+    null,
+};
+const userManualPaths = {
+  en: publicManualPath,
+  es: "/manuals/VYVA_Admin_Console_User_Manual_ES.pdf",
+  de: "/manuals/VYVA_Admin_Console_User_Manual_DE.pdf",
+};
 const teamInviteEmailFrom =
   String(
     process.env.TEAM_INVITE_EMAIL_FROM ||
@@ -268,8 +286,38 @@ function mergeExternalCareProviderSummary(user, summary) {
   };
 }
 
-const spanishCityHints = new Set(["barcelona", "madrid", "malaga", "málaga", "marbella", "sevilla", "tarifa", "valencia", "zamora"]);
-const germanCityHints = new Set(["berlin", "chemnitz", "dresden", "erfurt", "halle", "jena", "leipzig", "zwickau"]);
+function normalizedBranchKey(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return null;
+  if (text.includes("zamora")) return "zamora";
+  if (text.includes("leipzig")) return "leipzig";
+  return null;
+}
+
+function branchKeyFromOrganization(organization) {
+  return normalizedBranchKey(firstValue(organization?.slug, organization?.name));
+}
+
+function inferBranchKeyFromExternalUser(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  return normalizedBranchKey(
+    firstValue(
+      user.organization_slug,
+      user.organizationSlug,
+      user.organization_name,
+      user.organizationName,
+      user.branch_slug,
+      user.branchSlug,
+      user.branch,
+      user.org,
+      nestedUser.organization_slug,
+      nestedUser.organizationSlug,
+      nestedUser.organization_name,
+      nestedUser.organizationName,
+    ),
+  );
+}
 
 function normalizedCountryKey(value) {
   const text = String(value || "").trim().toLowerCase();
@@ -282,7 +330,7 @@ function normalizedCountryKey(value) {
 function inferCountryKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  const explicit = normalizedCountryKey(
+  return normalizedCountryKey(
     firstValue(
       user.country,
       user.country_code,
@@ -294,34 +342,19 @@ function inferCountryKeyFromExternalUser(user) {
       nestedUser.countryCode,
     ),
   );
-  if (explicit) return explicit;
-
-  const phone = String(firstValue(user.phone, user.userPhone, user.user_phone, nestedUser.phone, nestedUser.phone_number) || "").replace(/\s+/g, "");
-  if (phone.startsWith("+34") || phone.startsWith("0034")) return "spain";
-  if (phone.startsWith("+49") || phone.startsWith("0049")) return "germany";
-
-  const city = String(firstValue(user.city, user.userCity, user.user_city, nestedUser.city) || "").trim().toLowerCase();
-  if (spanishCityHints.has(city)) return "spain";
-  if (germanCityHints.has(city)) return "germany";
-
-  const coords = Array.isArray(user.coords) ? user.coords : Array.isArray(nestedUser.coords) ? nestedUser.coords : null;
-  const latitude = coords ? Number(coords[0]) : Number(firstValue(user.latitude, user.lat, nestedUser.latitude, nestedUser.lat));
-  const longitude = coords ? Number(coords[1]) : Number(firstValue(user.longitude, user.lng, user.lon, nestedUser.longitude, nestedUser.lng, nestedUser.lon));
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    if (latitude >= 35 && latitude <= 44.5 && longitude >= -10.5 && longitude <= 5) return "spain";
-    if (latitude >= 47 && latitude <= 55.5 && longitude >= 5 && longitude <= 16) return "germany";
-  }
-
-  return null;
 }
 
 function externalUserMatchesOrganization(user, organization) {
   if (!organization) return true;
+  const organizationBranch = branchKeyFromOrganization(organization);
+  if (organizationBranch) {
+    return inferBranchKeyFromExternalUser(user) === organizationBranch;
+  }
+
   const organizationCountry = normalizedCountryKey(organization.country);
   if (!organizationCountry) return true;
   const userCountry = inferCountryKeyFromExternalUser(user);
-  if (!userCountry) return true;
-  return userCountry === organizationCountry;
+  return Boolean(userCountry && userCountry === organizationCountry);
 }
 
 function filterExternalUsersForOrganization(users, context) {
@@ -385,7 +418,7 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     ? data.activeAlerts
       .filter((alert) => {
         const alertUserId = String(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id) || "");
-        return !alertUserId || !retainedUserIds.size || retainedUserIds.has(alertUserId);
+        return Boolean(alertUserId && retainedUserIds.has(alertUserId));
       })
       .map((alert) => ({
         ...alert,
@@ -394,9 +427,20 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
       }))
     : [];
   const activeCheckins = gisUsers.filter((user) => Boolean(user.checkinEnabled ?? user.checkin_enabled)).length;
+  const computedTotalSensors = gisUsers.reduce((sum, user) => sum + Number(user.sensorCount ?? user.sensor_count ?? 0), 0);
+  const computedCaregiversLinked = gisUsers.reduce((sum, user) => sum + Number(user.careProviderCount ?? user.care_provider_count ?? 0), 0);
   const computedWeeklyExpected =
     gisUsers.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0) || activeCheckins * 7;
   const computedWeeklyCompleted = gisUsers.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0);
+  const computedCityDistribution = Array.from(
+    gisUsers.reduce((cityCounts, user) => {
+      const city = String(firstValue(user?.city, user?.userCity, user?.user_city) || "").trim();
+      if (!city) return cityCounts;
+      cityCounts.set(city, (cityCounts.get(city) || 0) + 1);
+      return cityCounts;
+    }, new Map()),
+    ([city, count]) => ({ city, count }),
+  );
 
   return {
     totalUsers: gisUsers.length,
@@ -405,13 +449,11 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
     checkinsExpectedWeekly: Number(data?.checkinsExpectedWeekly ?? computedWeeklyExpected),
     activeAlertCount: activeAlerts.length,
     criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
-    totalSensors: Number(data?.totalSensors ?? 0),
-    caregiversLinked: Number(data?.caregiversLinked ?? 0),
+    totalSensors: computedTotalSensors,
+    caregiversLinked: computedCaregiversLinked,
     gisUsers,
     activeAlerts,
-    cityDistribution: Array.isArray(data?.cityDistribution)
-      ? data.cityDistribution.filter((item) => externalUserMatchesOrganization({ city: item?.city ?? item?.name }, context?.organization))
-      : [],
+    cityDistribution: computedCityDistribution,
   };
 }
 
@@ -1767,16 +1809,17 @@ function normalizeLivingContextValue(value) {
   return null;
 }
 
-async function fetchExternalUserProfileForShadow(externalUserId) {
+async function fetchExternalUserProfileForShadow(externalUserId, context = null) {
   const userInfo = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
-    query: {
+    query: scopedVyvaBackendQuery({
       user_id: externalUserId,
-      organization_name: "Red Cross",
-    },
+    }, context),
   });
   if (userInfo?.ok) return normalizeExternalProfilePayload(userInfo.data);
 
-  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
   const match = Array.isArray(dashboard?.data?.gisUsers)
     ? dashboard.data.gisUsers.find((user) => String(user?.id) === String(externalUserId))
     : null;
@@ -1901,7 +1944,7 @@ async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context
 
   const existingShadowId = await loadLocalUserIdForExternalUser(userId, context, client);
   if (existingShadowId) {
-    const externalData = await fetchExternalUserProfileForShadow(userId).catch(() => null);
+    const externalData = await fetchExternalUserProfileForShadow(userId, context).catch(() => null);
     const onboardingCaregivers = externalCaregiversForShadow(externalData);
     if (onboardingCaregivers.length) {
       await replaceCaregiversWithClient(client, existingShadowId, onboardingCaregivers, organizationId);
@@ -1909,7 +1952,7 @@ async function ensureLocalUserForAssignmentWithClient(client, rawUserId, context
     return { value: existingShadowId };
   }
 
-  const externalData = await fetchExternalUserProfileForShadow(userId);
+  const externalData = await fetchExternalUserProfileForShadow(userId, context);
   if (!externalData?.user) return { notFound: true };
 
   const shadowUser = normalizedExternalShadowUser(userId, externalData, context.organization);
@@ -2011,6 +2054,29 @@ async function requestVyvaBackend(pathname, { method = "GET", query: queryParams
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function scopedVyvaBackendQuery(queryParams, context) {
+  const scoped = { ...(queryParams || {}) };
+  const organization = context?.organization;
+  if (!organization) return scoped;
+
+  if (organization.name && !scoped.organization_name && !scoped.organizationName) {
+    scoped.organization_name = organization.name;
+  }
+  if (organization.id && !scoped.organization_id && !scoped.organizationId) {
+    scoped.organization_id = organization.id;
+  }
+  if (organization.slug && !scoped.organization_slug && !scoped.organizationSlug) {
+    scoped.organization_slug = organization.slug;
+  }
+  return scoped;
+}
+
+function scopedVyvaBackendBody(body, context) {
+  if (body === undefined) return undefined;
+  if (!body || typeof body !== "object" || Array.isArray(body)) return body;
+  return scopedVyvaBackendQuery(body, context);
 }
 
 function handleVyvaBackendResponse(res, upstream, successStatus) {
@@ -2367,12 +2433,13 @@ const consoleMagicLinkCache = new Map();
 const consoleMagicLinkInFlight = new Map();
 const consoleMagicLinkCacheMs = 55_000;
 
-function consoleMagicLinkKey({ email, redirectPath, language, origin }) {
+function consoleMagicLinkKey({ email, redirectPath, language, origin, organizationName }) {
   return JSON.stringify([
     normalizedEmail(email),
     loginRedirectPath(redirectPath),
     loginEmailLanguage(language),
     origin || "",
+    organizationName || "",
   ]);
 }
 
@@ -2401,20 +2468,27 @@ function inviteRoleLabel(role, language) {
 }
 
 function teamInviteGuideUrl(origin) {
-  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverride || teamInviteGuidePath, origin));
+  return normalizePublicGuideUrl(absoluteAppUrl(teamInviteGuideUrlOverride || userManualUrlOverrideRaw || teamInviteGuidePath, origin));
 }
 
 function teamInviteRedirectUrl(origin) {
   return absoluteAppUrl(teamInviteRedirectPath, origin);
 }
 
-function userManualUrl(origin) {
-  return normalizePublicGuideUrl(absoluteAppUrl(userManualUrlOverride, origin));
+function userManualUrl(origin, language = "en") {
+  const normalizedLanguage = loginEmailLanguage(language);
+  const manualPathOrUrl =
+    userManualUrlOverrides[normalizedLanguage] ||
+    (normalizedLanguage === "en" ? userManualUrlOverrideRaw : null) ||
+    userManualPaths[normalizedLanguage] ||
+    userManualPaths.en;
+  return normalizePublicGuideUrl(absoluteAppUrl(manualPathOrUrl, origin));
 }
 
 function teamInviteMetadata({ context, role, organization, origin }) {
   const language = inviteEmailLanguage(organization);
   const guideUrl = teamInviteGuideUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const redirectUrl = teamInviteRedirectUrl(origin);
   return {
     metadata: {
@@ -2427,7 +2501,7 @@ function teamInviteMetadata({ context, role, organization, origin }) {
       organization_id: organization?.id || null,
       organization_name: organization?.name || null,
       guide_url: guideUrl,
-      manual_url: guideUrl,
+      manual_url: manualUrl,
     },
     guideUrl,
     language,
@@ -2471,9 +2545,9 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-function renderVyvaEmailHeader(language = "en") {
+function renderVyvaEmailHeader(language = "en", organizationName = null) {
   const redCrossLabel =
-    language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross";
+    organizationName || (language === "de" ? "Rotes Kreuz" : language === "es" ? "Cruz Roja" : "Red Cross");
   const poweredByLabel = "Powered by VYVA";
 
   return `
@@ -2500,7 +2574,6 @@ function renderVyvaEmailHeader(language = "en") {
                           <td align="right" style="vertical-align:middle;">
                             <div style="display:inline-block;text-align:right;">
                               <div style="font-size:11px;font-weight:800;letter-spacing:0.16em;text-transform:uppercase;color:#8a91a6;">${escapeHtml(poweredByLabel)}</div>
-                              <div style="padding-top:5px;font-size:21px;font-weight:900;letter-spacing:0.01em;color:#6c4df6;line-height:1;">VYVA</div>
                             </div>
                           </td>
                         </tr>
@@ -2518,6 +2591,7 @@ function renderVyvaEmailHeader(language = "en") {
 function inviteEmailCopy(language, values) {
   const organizationName = values.organizationName || null;
   const roleLabel = values.roleLabel || "team member";
+  const organizationFooter = organizationName ? `VYVA x ${organizationName} operations console` : null;
 
   if (language === "de") {
     return {
@@ -2532,7 +2606,7 @@ function inviteEmailCopy(language, values) {
       securityTitle: "Sicherheitshinweis",
       securityText: "Wenn Sie diese E-Mail nicht erwartet haben, koennen Sie sie ignorieren. Ohne Zugriff auf dieses Postfach kann sich niemand anmelden.",
       fallback: "Button funktioniert nicht? Kopieren Sie diesen Link in Ihren Browser:",
-      footer: "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
+      footer: organizationFooter || "Automatische Einladungs-E-Mail fuer autorisierte VYVA Konsolennutzer.",
     };
   }
 
@@ -2549,7 +2623,7 @@ function inviteEmailCopy(language, values) {
       securityTitle: "Nota de seguridad",
       securityText: "Si no esperabas este correo, puedes ignorarlo. Nadie iniciara sesion sin acceso a esta bandeja de entrada.",
       fallback: "Si el boton no funciona, copia este enlace en tu navegador:",
-      footer: "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
+      footer: organizationFooter || "Correo automatico de invitacion para usuarios autorizados de la consola VYVA.",
     };
   }
 
@@ -2565,7 +2639,7 @@ function inviteEmailCopy(language, values) {
     securityTitle: "Security note",
     securityText: "If you were not expecting this email, you can ignore it. No one will be signed in without access to this inbox.",
     fallback: "Button not working? Copy and paste this link into your browser:",
-    footer: "Automated invitation email for authorized VYVA console users.",
+    footer: organizationFooter || "Automated invitation email for authorized VYVA console users.",
   };
 }
 
@@ -2621,7 +2695,7 @@ function renderTeamInviteEmail({ actionLink, invite }) {
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #dde3f0;border-radius:20px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.12);">
-            ${renderVyvaEmailHeader(language)}
+            ${renderVyvaEmailHeader(language, metadata.organization_name)}
             <tr>
               <td style="padding:34px 32px 8px;">
                 <p style="display:inline-block;margin:0 0 14px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
@@ -2718,8 +2792,9 @@ function consoleMagicLinkCopy(language) {
   };
 }
 
-function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl }) {
+function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl, organizationName = null }) {
   const copy = consoleMagicLinkCopy(language);
+  const footerText = organizationName ? `VYVA x ${organizationName} operations console` : copy.footer;
   const safeActionLink = escapeHtml(actionLink);
   const safeManualUrl = manualUrl ? escapeHtml(manualUrl) : null;
   const plainLines = [
@@ -2738,7 +2813,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
               <td style="padding:0 38px 28px;">
                 <p style="margin:0;font-size:14px;line-height:1.6;color:#6b7280;">
                   ${escapeHtml(copy.manualText)}
-                  <a href="${safeManualUrl}" style="color:#6c4df6;text-decoration:none;font-weight:700;">${escapeHtml(copy.manualButton)}</a>
+                  <a href="${safeManualUrl}" style="display:inline-block;margin-top:10px;background:#6c4df6;color:#ffffff;text-decoration:none;font-size:14px;font-weight:800;line-height:1;border-radius:12px;padding:13px 18px;box-shadow:0 8px 18px rgba(108,77,246,0.22);">${escapeHtml(copy.manualButton)}</a>
                 </p>
               </td>
             </tr>`
@@ -2759,7 +2834,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
       <tr>
         <td align="center">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border:1px solid #dde3f0;border-radius:22px;overflow:hidden;box-shadow:0 18px 44px rgba(38,45,72,0.10);">
-            ${renderVyvaEmailHeader(language)}
+            ${renderVyvaEmailHeader(language, organizationName)}
             <tr>
               <td style="padding:38px 38px 10px;">
                 <p style="display:inline-block;margin:0 0 16px;padding:7px 12px;border-radius:999px;background:#f0ecff;color:#6c4df6;font-size:12px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">${escapeHtml(copy.eyebrow)}</p>
@@ -2791,7 +2866,7 @@ function renderConsoleMagicLinkEmail({ actionLink, language = "en", manualUrl })
               </td>
             </tr>
           </table>
-          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">${escapeHtml(copy.footer)}</p>
+          <p style="max-width:560px;margin:18px auto 0;font-size:12px;line-height:1.6;color:#8a91a6;text-align:center;">${escapeHtml(footerText)}</p>
         </td>
       </tr>
     </table>
@@ -2806,6 +2881,24 @@ function parseEmailIdentity(value) {
   if (!match) return { email: text };
   const name = match[1].trim().replace(/^"|"$/g, "");
   return { email: match[2].trim(), name: name || undefined };
+}
+
+function formatEmailIdentity({ email, name }) {
+  const address = String(email || "").trim();
+  if (!address) return "";
+  const displayName = String(name || "").trim();
+  if (!displayName) return address;
+  const safeName = displayName.replace(/"/g, "'");
+  return `"${safeName}" <${address}>`;
+}
+
+function brandedEmailFrom(organizationName = null) {
+  const identity = parseEmailIdentity(teamInviteEmailFrom);
+  if (!organizationName || !identity.email) return teamInviteEmailFrom;
+  return formatEmailIdentity({
+    email: identity.email,
+    name: `VYVA x ${organizationName}`,
+  });
 }
 
 async function sendEmailProviderRequest({ url, headers, body, provider }) {
@@ -2836,12 +2929,13 @@ async function sendEmailProviderRequest({ url, headers, body, provider }) {
   return parsed;
 }
 
-async function sendRenderedTeamInviteEmail({ to, rendered }) {
+async function sendRenderedTeamInviteEmail({ to, rendered, organizationName = null }) {
   const configError = inviteEmailConfigurationError();
   if (configError) return { sent: false, error: configError, provider: null };
 
   const providers = inviteEmailProviders();
   const failures = [];
+  const fromAddress = brandedEmailFrom(organizationName);
 
   for (const provider of providers) {
     try {
@@ -2851,7 +2945,7 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
         url: "https://api.resend.com/emails",
         headers: { Authorization: `Bearer ${resendApiKey}` },
         body: {
-          from: teamInviteEmailFrom,
+          from: fromAddress,
           to: [to],
           subject: rendered.subject,
           html: rendered.html,
@@ -2865,7 +2959,7 @@ async function sendRenderedTeamInviteEmail({ to, rendered }) {
         url: "https://api.postmarkapp.com/email",
         headers: { "X-Postmark-Server-Token": postmarkServerToken },
         body: {
-          From: teamInviteEmailFrom,
+          From: fromAddress,
           To: to,
           Subject: rendered.subject,
           HtmlBody: rendered.html,
@@ -3163,6 +3257,7 @@ async function consoleLoginAccess(email) {
       SELECT
         p.user_id,
         p.is_platform_admin,
+        COALESCE(MAX(profile_org.name), MAX(role_org.name)) AS organization_name,
         COALESCE(MAX(profile_org.default_language), MAX(role_org.default_language)) AS default_language,
         COUNT(r.user_id) FILTER (WHERE r.role IS NOT NULL) AS role_count
       FROM public.profiles p
@@ -3182,6 +3277,7 @@ async function consoleLoginAccess(email) {
     allowed,
     userId: row?.user_id || null,
     isPlatformAdmin: isConfiguredPlatformAdmin || Boolean(row?.is_platform_admin),
+    organizationName: row?.organization_name || null,
     language: loginEmailLanguage(row?.default_language || (isConfiguredPlatformAdmin ? "en" : null)),
   };
 }
@@ -3230,7 +3326,7 @@ async function contextFromConsoleSessionToken(token) {
   return { ...context, authToken: token };
 }
 
-async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
+async function sendConsoleMagicLink({ email, redirectPath, language, origin, organizationName = null }) {
   const loginToken = createConsoleLoginToken({ email, redirectPath });
   if (!loginToken) {
     return {
@@ -3253,16 +3349,18 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
   actionUrl.searchParams.set("console_token", loginToken);
   if (nextPath !== "/") actionUrl.searchParams.set("next", nextPath);
 
-  const manualUrl = userManualUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const rendered = renderConsoleMagicLinkEmail({
     actionLink: actionUrl.toString(),
     language,
     manualUrl,
+    organizationName,
   });
-  const custom = await sendRenderedTeamInviteEmail({ to: email, rendered });
+  const custom = await sendRenderedTeamInviteEmail({ to: email, rendered, organizationName });
   if (custom.sent) return custom;
+  if (inviteEmailProvider()) return custom;
 
-  const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin });
+  const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin, organizationName });
   if (hosted.sent) return hosted;
 
   return {
@@ -3273,12 +3371,12 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin }) {
   };
 }
 
-async function sendHostedConsoleMagicLink({ email, redirectPath, language, origin }) {
+async function sendHostedConsoleMagicLink({ email, redirectPath, language, origin, organizationName = null }) {
   const supabase = supabaseHostedMagicLinkClient();
   if (!supabase) return { sent: false, error: "Hosted magic-link email is not configured", provider: "supabase" };
 
   const redirectUrl = absoluteAppUrl(loginRedirectPath(redirectPath), origin);
-  const manualUrl = userManualUrl(origin);
+  const manualUrl = userManualUrl(origin, language);
   const { error } = await supabase.auth.signInWithOtp({
     email,
     options: {
@@ -3288,6 +3386,7 @@ async function sendHostedConsoleMagicLink({ email, redirectPath, language, origi
         language,
         email_language: language,
         login_source: "vyva_console",
+        organization_name: organizationName,
         manual_url: manualUrl,
       },
     },
@@ -3399,7 +3498,6 @@ async function resolveOrganizationFromRegistration(registration) {
     registration.org,
   ));
   const name = nullIfBlank(firstValue(registration.organization_name, registration.organizationName));
-  const country = nullIfBlank(registration.country)?.toLowerCase();
   const hasExplicitOrganization = Boolean(id || slug || name);
 
   if (id) {
@@ -3411,15 +3509,10 @@ async function resolveOrganizationFromRegistration(registration) {
     return null;
   }
 
-  const inferredSlug =
-    slug ||
-    (["es", "esp"].includes(country || "") || country?.includes("spain") || country?.includes("espa") ? "red-cross-zamora" : null) ||
-    (["de", "deu"].includes(country || "") || country?.includes("germany") || country?.includes("deutsch") ? "red-cross-leipzig" : null) ||
-    inferOrganizationSlugFromPhone(registration.phone);
-  if (inferredSlug) {
+  if (slug) {
     const result = await query(
       "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE slug = $1 AND active = true LIMIT 1",
-      [inferredSlug],
+      [slug],
     );
     if (result.rows[0]) return result.rows[0];
     if (hasExplicitOrganization) return null;
@@ -3434,8 +3527,34 @@ async function resolveOrganizationFromRegistration(registration) {
     return null;
   }
 
-  const activeOrgs = await query("SELECT COUNT(*)::int AS count FROM public.organizations WHERE active = true");
-  if (Number(activeOrgs.rows[0]?.count || 0) > 1) return null;
+  const addressBranchKey = normalizedBranchKey(firstValue(
+    registration.city,
+    registration.town,
+    registration.locality,
+    registration.address,
+    registration.street,
+  ));
+  const activeOrganizations = await query(
+    "SELECT id::text, slug, name, country, default_language, timezone, active FROM public.organizations WHERE active = true",
+  );
+  if (addressBranchKey) {
+    const matches = activeOrganizations.rows.filter((organization) => branchKeyFromOrganization(organization) === addressBranchKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  const countryKey = normalizedCountryKey(registration.country);
+  if (countryKey) {
+    const matches = activeOrganizations.rows.filter((organization) => normalizedCountryKey(organization.country) === countryKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  const phoneCountryKey = countryKeyFromPhone(registration.phone);
+  if (phoneCountryKey) {
+    const matches = activeOrganizations.rows.filter((organization) => normalizedCountryKey(organization.country) === phoneCountryKey);
+    if (matches.length === 1) return matches[0];
+  }
+
+  if (activeOrganizations.rows.length > 1) return null;
 
   return defaultOrganization();
 }
@@ -3846,6 +3965,7 @@ async function createTeamMember(payload, context, options = {}) {
     inviteEmail = await sendRenderedTeamInviteEmail({
       to: member.value.email,
       rendered,
+      organizationName: invite.metadata.organization_name,
     }).catch((error) => ({
       sent: false,
       error: error?.message || "Invite email could not be sent",
@@ -5383,13 +5503,12 @@ function latestScheduledSessionContactFromPayload(payload, userId) {
   return latestScheduledContact(candidates);
 }
 
-async function loadLatestScheduledSessionContact(userId) {
+async function loadLatestScheduledSessionContact(userId, context = null) {
   const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
-    query: {
+    query: scopedVyvaBackendQuery({
       user_id: userId,
       service_type: "all",
-      organization_name: "Red Cross",
-    },
+    }, context),
   });
   if (!upstream?.ok) return null;
   return latestScheduledSessionContactFromPayload(upstream.data, userId);
@@ -5898,7 +6017,7 @@ async function overlayRoutineServicePayload(payload, serviceType, context) {
   );
   const missingContactIds = uniqueUserIds.filter((userId) => !listContactMap.has(userId));
   const fallbackContacts = await Promise.all(
-    missingContactIds.map(async (userId) => [userId, await loadLatestScheduledSessionContact(userId)]),
+    missingContactIds.map(async (userId) => [userId, await loadLatestScheduledSessionContact(userId, context)]),
   );
   for (const [userId, contact] of fallbackContacts) {
     if (contact?.at) listContactMap.set(userId, contact);
@@ -6590,7 +6709,9 @@ async function loadCareProviders(filters = {}, context) {
   let rows = await queryCareProviderRows();
 
   if ((type === null || type === "caregiver") && !rows.some((row) => row.provider_type === "caregiver")) {
-    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+      query: scopedVyvaBackendQuery({}, context),
+    });
     const upstreamUsers = [
       upstream?.data?.gisUsers,
       upstream?.data?.users,
@@ -7953,11 +8074,11 @@ function phoneDigits(value) {
   return nullIfBlank(value)?.replace(/\D/g, "") || null;
 }
 
-function inferOrganizationSlugFromPhone(value) {
+function countryKeyFromPhone(value) {
   const digits = phoneDigits(value);
   if (!digits) return null;
-  if (digits.startsWith("34") || digits.startsWith("0034")) return "red-cross-zamora";
-  if (digits.startsWith("49") || digits.startsWith("0049")) return "red-cross-leipzig";
+  if (digits.startsWith("34")) return "spain";
+  if (digits.startsWith("49")) return "germany";
   return null;
 }
 
@@ -8238,7 +8359,7 @@ async function ingestPhoneRegistration(payload) {
   const normalized = normalizePhoneRegistrationPayload(payload);
   if (normalized.error) return normalized;
   const organization = await resolveOrganizationFromRegistration(normalized.value);
-  if (!organization) return { error: "organization is required; send organization_slug, organization_id, country, or a +34/+49 phone number" };
+  if (!organization) return { error: "organization is required; send organization_slug, organization_id, or organization_name" };
   normalized.value.organization_id = organization.id;
   normalized.value.country = normalized.value.country || organization.country || "Germany";
   normalized.value.timezone = normalized.value.timezone || organization.timezone || "Europe/Berlin";
@@ -8305,6 +8426,7 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
     email,
     redirectPath: req.body?.redirectPath,
     language: loginAccess.language,
+    organizationName: loginAccess.organizationName,
     origin: requestOrigin(req),
   });
 
@@ -8489,21 +8611,23 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
 
 app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
   try {
-    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
       let assignmentSummaries = new Map();
-      if (pool) {
-        try {
-          req.context = await resolveRequestContext(req);
-          const externalIds = Array.isArray(upstream.data?.gisUsers)
-            ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
-            : [];
-          assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, req.context);
-        } catch (error) {
-          if (error.status && error.status !== 401) throw error;
-        }
+      if (context) {
+        const externalIds = Array.isArray(upstream.data?.gisUsers)
+          ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
+          : [];
+        assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
       }
-      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, req.context));
+      res.json(normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context));
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
@@ -8514,7 +8638,6 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
       dbUnavailable(res);
       return;
     }
-    req.context = await resolveRequestContext(req);
     res.json(await loadDashboardUsers(req.context));
   } catch (error) {
     next(error);
@@ -8522,7 +8645,10 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
 });
 
 app.post("/api/v1/user-dashboard/users", asyncRoute(async (req, res) => {
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", { method: "POST", body: req.body });
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    method: "POST",
+    body: scopedVyvaBackendBody(req.body, req.context),
+  });
   if (upstream?.ok) {
     res.status(upstream.status || 201).json(upstream.data);
     return;
@@ -8547,30 +8673,29 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(400).json({ error: "user_id is required" });
       return;
     }
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/user-info", {
-      query: {
+      query: scopedVyvaBackendQuery({
         ...req.query,
         user_id: userId,
-        organization_name: "Red Cross",
-      },
+      }, context),
     });
     if (upstream?.ok) {
       let careProviders = [];
       let localServices = { checkins: null, brainCoach: null };
       let carePlanAccess = null;
-      const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
-      if (pool) {
-        try {
-          req.context = await resolveRequestContext(req);
-          careProviders = await loadExternalUserCareProviders(userId, req.context);
-          localServices = await loadExternalUserLocalServices(userId, req.context);
-          carePlanAccess = await loadExternalUserCarePlanAccess(userId, req.context);
-        } catch (error) {
-          if (error.status && error.status !== 401) throw error;
-        }
+      const scheduledContact = await loadLatestScheduledSessionContact(userId, context).catch(() => null);
+      if (context) {
+        careProviders = await loadExternalUserCareProviders(userId, context);
+        localServices = await loadExternalUserLocalServices(userId, context);
+        carePlanAccess = await loadExternalUserCarePlanAccess(userId, context);
       }
       const normalizedProfile = normalizeExternalProfilePayload(upstream.data);
-      if (req.context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, req.context.organization)) {
+      if (context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, context.organization)) {
         res.status(404).json({ error: "User not found" });
         return;
       }
@@ -8585,13 +8710,12 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(upstream?.status || 404).json(upstream?.data || { error: "User not found" });
       return;
     }
-    req.context = await resolveRequestContext(req);
     const data = await loadUserInfo(userId, req.context);
     if (!data) {
       res.status(404).json({ error: "User not found" });
       return;
     }
-    const scheduledContact = await loadLatestScheduledSessionContact(userId).catch(() => null);
+    const scheduledContact = await loadLatestScheduledSessionContact(userId, req.context).catch(() => null);
     res.json(applyScheduledSessionContact(data, latestScheduledContact(
       scheduledContact,
       latestScheduledContactFromServices({
@@ -8766,7 +8890,7 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
 async function updateUserRoute(req, res) {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}`, {
     method: req.method,
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (upstream?.ok) {
     res.json(upstream.data);
@@ -8796,7 +8920,7 @@ app.put("/api/v1/user-dashboard/users/:id", asyncRoute(updateUserRoute));
 app.post("/api/v1/user-dashboard/users/:id/notes", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/users/${encodeURIComponent(req.params.id)}/notes`, {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (upstream?.ok) {
     res.status(upstream.status || 201).json(upstream.data);
@@ -8865,7 +8989,7 @@ app.post("/api/v1/user-dashboard/medications", asyncRoute(async (req, res) => {
   }
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/medications", {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 201)) return;
 
@@ -8878,7 +9002,7 @@ app.put("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, res
   }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8891,6 +9015,7 @@ app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, 
   }
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/medications/${encodeURIComponent(req.params.med_id)}`, {
     method: "DELETE",
+    query: scopedVyvaBackendQuery({}, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 204)) return;
 
@@ -8900,7 +9025,7 @@ app.delete("/api/v1/user-dashboard/medications/:med_id", asyncRoute(async (req, 
 app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend("/api/v1/user-dashboard/caregivers", {
     method: "POST",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 201)) return;
 
@@ -8910,7 +9035,7 @@ app.post("/api/v1/user-dashboard/caregivers", asyncRoute(async (req, res) => {
 app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8920,6 +9045,7 @@ app.put("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req
 app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/caregivers/${encodeURIComponent(req.params.caregiver_id)}`, {
     method: "DELETE",
+    query: scopedVyvaBackendQuery({}, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream, 204)) return;
 
@@ -8929,7 +9055,7 @@ app.delete("/api/v1/user-dashboard/caregivers/:caregiver_id", asyncRoute(async (
 app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/health/${encodeURIComponent(req.params.user_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8939,7 +9065,7 @@ app.put("/api/v1/user-dashboard/health/:user_id", asyncRoute(async (req, res) =>
 app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/checkins/${encodeURIComponent(req.params.checkin_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8949,7 +9075,7 @@ app.put("/api/v1/user-dashboard/checkins/:checkin_id", asyncRoute(async (req, re
 app.put("/api/v1/user-dashboard/brain-coach/:user_id", asyncRoute(async (req, res) => {
   const upstream = await requestVyvaBackend(`/api/v1/user-dashboard/brain-coach/${encodeURIComponent(req.params.user_id)}`, {
     method: "PUT",
-    body: req.body,
+    body: scopedVyvaBackendBody(req.body, req.context),
   });
   if (handleVyvaBackendResponse(res, upstream)) return;
 
@@ -8982,7 +9108,13 @@ async function phoneRegistrationRoute(req, res) {
     return;
   }
 
-  const result = await ingestPhoneRegistration(req.body);
+  const payload = objectValue(req.body);
+  const organizationHints = {
+    organization_id: nullIfBlank(firstValue(payload.organization_id, payload.organizationId, req.get("x-organization-id"), req.query.organization_id, req.query.organizationId)),
+    organization_slug: nullIfBlank(firstValue(payload.organization_slug, payload.organizationSlug, req.get("x-organization-slug"), req.query.organization_slug, req.query.organizationSlug)),
+    organization_name: nullIfBlank(firstValue(payload.organization_name, payload.organizationName, req.get("x-organization-name"), req.query.organization_name, req.query.organizationName)),
+  };
+  const result = await ingestPhoneRegistration({ ...payload, ...Object.fromEntries(Object.entries(organizationHints).filter(([, value]) => value)) });
   if (result.error) {
     res.status(400).json({ error: result.error });
     return;
@@ -9703,14 +9835,15 @@ app.post("/api/insights/suggestions/:id/dismiss", asyncRoute(async (req, res) =>
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
     const mode = String(req.query.service_type || "").toLowerCase() === "brain_coach" ? "brain_coach" : "standard";
-    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
       res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(scopedPayload, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
       return;
@@ -9723,7 +9856,6 @@ app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
       dbUnavailable(res);
       return;
     }
-    req.context = await resolveRequestContext(req);
     res.json({ checkins: await loadCheckins(req.context) });
   } catch (error) {
     next(error);
@@ -9809,13 +9941,17 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
       res.status(400).json({ error: "user_id, date_start, and date_end are required" });
       return;
     }
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
 
     const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
-      query: {
+      query: scopedVyvaBackendQuery({
         user_id: userId,
         service_type: "all",
-        organization_name: "Red Cross",
-      },
+      }, context),
     });
     if (upstream?.ok) {
       const payload = filterUpstreamCheckins(upstream.data, "standard");
@@ -9837,7 +9973,6 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     if (!(await userBelongsToOrganization(userId, req.context))) {
       res.status(404).json({ error: "User not found" });
       return;
@@ -9858,14 +9993,15 @@ app.post("/api/v1/checkins/weekly-adherence", async (req, res, next) => {
 
 app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
   try {
-    const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+    const upstream = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (upstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
       res.json(await overlayRoutineServicePayload(scopedPayload, "brain_coach", context));
       return;
@@ -9875,14 +10011,10 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       return;
     }
 
-    const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+    const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+      query: scopedVyvaBackendQuery(req.query, context),
+    });
     if (checkinsUpstream?.ok) {
-      let context = null;
-      try {
-        context = await resolveRequestContext(req);
-      } catch {
-        context = null;
-      }
       const scopedPayload = filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context);
       res.json(await overlayRoutineServicePayload({ sessions: mapUpstreamBrainCoachSessions(scopedPayload) }, "brain_coach", context));
       return;
@@ -9892,7 +10024,6 @@ app.get("/api/v1/brain-coach-dashboard/sessions", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     res.json({ sessions: await loadBrainCoachSessions(req.context) });
   } catch (error) {
     next(error);
@@ -10022,11 +10153,11 @@ function normalizeCaregiverBrainCoachReport({ stats, trend, history }, fallbackU
   };
 }
 
-async function loadCaregiverBrainCoachReport(userId, query = {}, fallbackUser = null) {
+async function loadCaregiverBrainCoachReport(userId, query = {}, fallbackUser = null, context = null) {
   const encodedUserId = encodeURIComponent(String(userId));
   const days = Number(query.days ?? 7) || 7;
-  const reportQuery = { days };
-  const historyQuery = { days, limit: query.limit ?? 50, offset: query.offset ?? 0 };
+  const reportQuery = scopedVyvaBackendQuery({ days }, context);
+  const historyQuery = scopedVyvaBackendQuery({ days, limit: query.limit ?? 50, offset: query.offset ?? 0 }, context);
   const [stats, trend, history] = await Promise.all([
     requestVyvaBackend(`/api/v1/brain-coach/brain-coach-info/${encodedUserId}`, { query: reportQuery }),
     requestVyvaBackend(`/api/v1/brain-coach/cognitive-trend/${encodedUserId}`, { query: reportQuery }),
@@ -10059,7 +10190,9 @@ async function externalUserIdMatchesActiveOrganization(userId, context) {
   );
   if (localMatch[0]) return true;
 
-  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users");
+  const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
   if (!upstream?.ok) return true;
   const users = Array.isArray(upstream.data?.gisUsers) ? upstream.data.gisUsers : [];
   const user = users.find((item) => String(item?.id ?? "") === externalId);
@@ -10092,7 +10225,7 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     ];
 
     for (const path of candidatePaths) {
-      const upstream = await requestVyvaBackend(path, { query: req.query });
+      const upstream = await requestVyvaBackend(path, { query: scopedVyvaBackendQuery(req.query, context) });
       if (upstream?.ok) {
         const normalized = normalizeBrainCoachReportPayload(upstream.data, userId);
         if (normalized) {
@@ -10104,7 +10237,9 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
 
     let sessions = [];
     try {
-      const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", { query: req.query });
+      const upstreamSessions = await requestVyvaBackend("/api/v1/brain-coach-dashboard/sessions", {
+        query: scopedVyvaBackendQuery(req.query, context),
+      });
       if (upstreamSessions?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(upstreamSessions.data, context));
     } catch {
       sessions = [];
@@ -10112,7 +10247,9 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
 
     if (!sessions.length) {
       try {
-        const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", { query: req.query });
+        const checkinsUpstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+          query: scopedVyvaBackendQuery(req.query, context),
+        });
         if (checkinsUpstream?.ok) sessions = mapUpstreamBrainCoachSessions(filterExternalRoutinePayloadForOrganization(checkinsUpstream.data, context));
       } catch {
         sessions = [];
@@ -10124,7 +10261,7 @@ app.get("/api/v1/brain-coach-dashboard/users/:user_id/report", async (req, res, 
     }
 
     const session = sessions.find((item) => String(item.user_id) === userId);
-    const caregiverReport = await loadCaregiverBrainCoachReport(userId, req.query, session);
+    const caregiverReport = await loadCaregiverBrainCoachReport(userId, req.query, session, context);
     if (caregiverReport && ((caregiverReport.sessions?.length ?? 0) > 0 || (caregiverReport.summary?.sessionsCompleted ?? 0) > 0)) {
       res.json(caregiverReport);
       return;
@@ -10162,9 +10299,15 @@ app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
       return;
     }
 
+    let context = null;
+    if (pool) {
+      context = await resolveRequestContext(req);
+      req.context = context;
+    }
+
     const upstream = await requestVyvaBackend("/api/v1/medications/weekly-schedule", {
       method: "POST",
-      body: req.body,
+      body: scopedVyvaBackendBody(req.body, context),
     });
     if (upstream?.ok) {
       res.json(upstream.data);
@@ -10179,7 +10322,6 @@ app.post("/api/v1/medications/weekly-schedule", async (req, res, next) => {
       return;
     }
 
-    req.context = await resolveRequestContext(req);
     if (!(await userBelongsToOrganization(userId, req.context))) {
       res.status(404).json({ error: "User not found" });
       return;

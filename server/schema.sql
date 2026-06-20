@@ -42,29 +42,9 @@ ON CONFLICT (slug) DO UPDATE SET
 CREATE OR REPLACE FUNCTION public.resolve_vyva_user_organization_id(user_country TEXT, user_phone TEXT)
 RETURNS UUID AS $$
 DECLARE
-  normalized_country TEXT := lower(COALESCE(user_country, ''));
-  phone_digits TEXT := regexp_replace(COALESCE(user_phone, ''), '[^0-9]', '', 'g');
   target_slug TEXT := 'red-cross-leipzig';
   target_organization_id UUID;
 BEGIN
-  IF
-    normalized_country IN ('es', 'esp')
-    OR normalized_country LIKE '%spain%'
-    OR normalized_country LIKE '%espa%'
-    OR phone_digits LIKE '34%'
-    OR phone_digits LIKE '0034%'
-  THEN
-    target_slug := 'red-cross-zamora';
-  ELSIF
-    normalized_country IN ('de', 'deu')
-    OR normalized_country LIKE '%germany%'
-    OR normalized_country LIKE '%deutsch%'
-    OR phone_digits LIKE '49%'
-    OR phone_digits LIKE '0049%'
-  THEN
-    target_slug := 'red-cross-leipzig';
-  END IF;
-
   SELECT id INTO target_organization_id
   FROM public.organizations
   WHERE slug = target_slug AND active = true
@@ -626,21 +606,6 @@ UPDATE public.vyva_users
 SET organization_id = public.resolve_vyva_user_organization_id(country, phone)
 WHERE organization_id IS NULL;
 
-UPDATE public.vyva_users
-SET organization_id = public.resolve_vyva_user_organization_id(country, phone)
-WHERE organization_id IS DISTINCT FROM public.resolve_vyva_user_organization_id(country, phone)
-  AND (
-    lower(COALESCE(country, '')) IN ('es', 'esp', 'de', 'deu')
-    OR lower(COALESCE(country, '')) LIKE '%spain%'
-    OR lower(COALESCE(country, '')) LIKE '%espa%'
-    OR lower(COALESCE(country, '')) LIKE '%germany%'
-    OR lower(COALESCE(country, '')) LIKE '%deutsch%'
-    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '34%'
-    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '0034%'
-    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '49%'
-    OR regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') LIKE '0049%'
-  );
-
 WITH default_org AS (
   SELECT id FROM public.organizations WHERE slug = 'red-cross-leipzig' LIMIT 1
 )
@@ -919,7 +884,7 @@ CREATE TRIGGER update_vyva_users_updated_at BEFORE UPDATE ON public.vyva_users F
 
 DROP TRIGGER IF EXISTS set_vyva_user_organization_id ON public.vyva_users;
 CREATE TRIGGER set_vyva_user_organization_id
-BEFORE INSERT OR UPDATE OF country, phone, organization_id ON public.vyva_users
+BEFORE INSERT OR UPDATE OF organization_id ON public.vyva_users
 FOR EACH ROW EXECUTE FUNCTION public.set_vyva_user_organization_id();
 
 DROP TRIGGER IF EXISTS update_vyva_user_consent_updated_at ON public.vyva_user_consent;
