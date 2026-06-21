@@ -138,6 +138,30 @@ function argValue(name) {
   return process.argv[index + 1];
 }
 
+function safeUrl(value) {
+  try {
+    return value ? new URL(value) : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveVyvaBackendApiUrl(configuredUrl, appUrl) {
+  const fallback = defaultVyvaBackendApiUrl;
+  const configured = safeUrl(configuredUrl) || safeUrl(fallback);
+  const app = safeUrl(appUrl);
+  if (!configured) return fallback;
+
+  const configuredHost = configured.hostname.toLowerCase();
+  const appHost = app?.hostname?.toLowerCase() || "";
+  const dashboardHosts = new Set(["redcross.vyva.life", "rcadmin.vyva.life"]);
+  if ((appHost && configuredHost === appHost) || dashboardHosts.has(configuredHost)) {
+    return fallback;
+  }
+
+  return configured.origin.replace(/\/$/, "");
+}
+
 const isProduction =
   process.argv.includes("--production") ||
   process.env.NODE_ENV === "production" ||
@@ -151,7 +175,8 @@ const pgDatabase = process.env.PGDATABASE || process.env.POSTGRES_DATABASE || pr
 const pgUser = process.env.PGUSER || process.env.POSTGRES_USER;
 const pgPassword = process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD;
 const pgPort = process.env.PGPORT || process.env.POSTGRES_PORT;
-const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
+const defaultVyvaBackendApiUrl = "https://api.vyva.io";
+const configuredVyvaBackendApiUrl = process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || defaultVyvaBackendApiUrl;
 const externalUserSource = "api.vyva.io";
 const phoneOnboardingUserSource = "phone-onboarding";
 const vyvaBackendApiDisabled = process.env.VYVA_BACKEND_API_DISABLED === "true";
@@ -172,6 +197,7 @@ const publicAppUrl =
   process.env.VITE_APP_URL ||
   process.env.VITE_PUBLIC_APP_URL ||
   null;
+const vyvaBackendApiUrl = resolveVyvaBackendApiUrl(configuredVyvaBackendApiUrl, publicAppUrl);
 const teamInviteGuideUrlOverride = process.env.TEAM_INVITE_GUIDE_URL || process.env.VITE_TEAM_INVITE_GUIDE_URL || null;
 const teamInviteGuidePath = process.env.TEAM_INVITE_GUIDE_PATH || publicManualPath;
 const teamInviteRedirectPath = process.env.TEAM_INVITE_REDIRECT_PATH || "/";
@@ -471,12 +497,55 @@ function branchKeyFromOrganization(organization) {
   return normalizedBranchKey(firstValue(organization?.slug, organization?.name));
 }
 
+function stringOrganizationValue(value) {
+  return typeof value === "string" ? value : null;
+}
+
+function externalOrganizationValues(user) {
+  if (!user || typeof user !== "object") return [];
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
+  return [
+    stringOrganizationValue(user.organization),
+    stringOrganizationValue(user.organisation),
+    user.organization_slug,
+    user.organizationSlug,
+    user.organization_name,
+    user.organizationName,
+    user.org_slug,
+    user.orgSlug,
+    user.org_name,
+    user.orgName,
+    stringOrganizationValue(nestedUser.organization),
+    stringOrganizationValue(nestedUser.organisation),
+    nestedUser.organization_slug,
+    nestedUser.organizationSlug,
+    nestedUser.organization_name,
+    nestedUser.organizationName,
+    nestedUser.org_slug,
+    nestedUser.orgSlug,
+    nestedUser.org_name,
+    nestedUser.orgName,
+    nestedOrganization.slug,
+    nestedOrganization.name,
+  ].filter((value) => value !== undefined && value !== null && value !== "");
+}
+
+function externalUserHasGenericRedCrossOrganization(user) {
+  return externalOrganizationValues(user).some((value) => {
+    const text = String(value).toLowerCase();
+    return text.includes("red cross") && !text.includes("leipzig") && !text.includes("zamora");
+  });
+}
+
 function inferBranchKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
   const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
   const explicitBranch = normalizedBranchKey(
     firstValue(
+      stringOrganizationValue(user.organization),
+      stringOrganizationValue(user.organisation),
       user.organization_slug,
       user.organizationSlug,
       user.organization_name,
@@ -497,6 +566,8 @@ function inferBranchKeyFromExternalUser(user) {
       nestedUser.orgSlug,
       nestedUser.org_name,
       nestedUser.orgName,
+      stringOrganizationValue(nestedUser.organization),
+      stringOrganizationValue(nestedUser.organisation),
       nestedOrganization.slug,
       nestedOrganization.name,
     ),
@@ -555,6 +626,7 @@ function externalUserExplicitlyMatchesOrganization(user, organization) {
 
   const organizationBranch = branchKeyFromOrganization(organization);
   const userBranch = inferBranchKeyFromExternalUser(user);
+  if (organizationBranch && externalUserHasGenericRedCrossOrganization(user)) return true;
   return Boolean(organizationBranch && userBranch && userBranch === organizationBranch);
 }
 
@@ -5214,8 +5286,12 @@ function scopedVyvaBackendQuery(queryParams, context) {
   const organization = context?.organization;
   if (!organization) return scoped;
 
-  if (organization.name && !scoped.organization_name && !scoped.organizationName) {
+  if (!organization.slug && organization.name && !scoped.organization_name && !scoped.organizationName) {
     scoped.organization_name = organization.name;
+  }
+  if (organization.slug) {
+    delete scoped.organization_name;
+    delete scoped.organizationName;
   }
   delete scoped.organization_id;
   delete scoped.organizationId;
