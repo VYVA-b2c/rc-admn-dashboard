@@ -474,6 +474,7 @@ function branchKeyFromOrganization(organization) {
 function inferBranchKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
   const explicitBranch = normalizedBranchKey(
     firstValue(
       user.organization_slug,
@@ -484,13 +485,77 @@ function inferBranchKeyFromExternalUser(user) {
       user.branchSlug,
       user.branch,
       user.org,
+      user.org_slug,
+      user.orgSlug,
+      user.org_name,
+      user.orgName,
       nestedUser.organization_slug,
       nestedUser.organizationSlug,
       nestedUser.organization_name,
       nestedUser.organizationName,
+      nestedUser.org_slug,
+      nestedUser.orgSlug,
+      nestedUser.org_name,
+      nestedUser.orgName,
+      nestedOrganization.slug,
+      nestedOrganization.name,
     ),
   );
   return explicitBranch || branchKeyFromPhone(phoneFromUserLike(user));
+}
+
+function externalUserHasExplicitOrganization(user) {
+  if (!user || typeof user !== "object") return false;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
+  return Boolean(
+    firstValue(
+      user.organization_slug,
+      user.organizationSlug,
+      user.organization_name,
+      user.organizationName,
+      user.org_slug,
+      user.orgSlug,
+      user.org_name,
+      user.orgName,
+      nestedUser.organization_slug,
+      nestedUser.organizationSlug,
+      nestedUser.organization_name,
+      nestedUser.organizationName,
+      nestedUser.org_slug,
+      nestedUser.orgSlug,
+      nestedUser.org_name,
+      nestedUser.orgName,
+      nestedOrganization.slug,
+      nestedOrganization.name,
+    ),
+  );
+}
+
+function externalUserExplicitlyMatchesOrganization(user, organization) {
+  if (!user || typeof user !== "object" || !organization) return false;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
+  const organizationIds = new Set(
+    [
+      user.organization_id,
+      user.organizationId,
+      user.org_id,
+      user.orgId,
+      nestedUser.organization_id,
+      nestedUser.organizationId,
+      nestedUser.org_id,
+      nestedUser.orgId,
+      nestedOrganization.id,
+    ]
+      .map((value) => nullIfBlank(value == null ? value : String(value)))
+      .filter(Boolean),
+  );
+  if (organization.id && organizationIds.has(String(organization.id))) return true;
+
+  const organizationBranch = branchKeyFromOrganization(organization);
+  const userBranch = inferBranchKeyFromExternalUser(user);
+  return Boolean(organizationBranch && userBranch && userBranch === organizationBranch);
 }
 
 function normalizedCountryKey(value) {
@@ -504,6 +569,7 @@ function normalizedCountryKey(value) {
 function inferCountryKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  const nestedOrganization = user.organization ?? user.organisation ?? nestedUser.organization ?? nestedUser.organisation ?? {};
   const explicitCountry = normalizedCountryKey(
     firstValue(
       user.country,
@@ -514,6 +580,11 @@ function inferCountryKeyFromExternalUser(user) {
       nestedUser.country,
       nestedUser.country_code,
       nestedUser.countryCode,
+      nestedUser.organization_country,
+      nestedUser.organizationCountry,
+      nestedOrganization.country,
+      nestedOrganization.country_code,
+      nestedOrganization.countryCode,
     ),
   );
   return explicitCountry || countryKeyFromPhone(phoneFromUserLike(user));
@@ -521,6 +592,9 @@ function inferCountryKeyFromExternalUser(user) {
 
 function externalUserMatchesOrganization(user, organization) {
   if (!organization) return true;
+  if (externalUserExplicitlyMatchesOrganization(user, organization)) return true;
+  if (externalUserHasExplicitOrganization(user)) return false;
+
   const organizationBranch = branchKeyFromOrganization(organization);
   if (organizationBranch) {
     const userBranch = inferBranchKeyFromExternalUser(user);
