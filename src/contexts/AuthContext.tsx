@@ -18,6 +18,8 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
+const AUTH_RESTORE_TIMEOUT_MS = 6000;
+const AUTH_CALLBACK_RETRY_DELAY_MS = 250;
 
 function safeRedirectPath(path = "/") {
   if (!path.startsWith("/") || path.startsWith("//")) return "/";
@@ -53,6 +55,19 @@ async function clearLocalSession() {
   }
 }
 
+async function withAuthTimeout<T>(promise: Promise<T>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Auth restore timed out")), AUTH_RESTORE_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) window.clearTimeout(timeoutId);
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
@@ -76,7 +91,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const validateSession = async (candidate: Session | null) => {
       if (!candidate?.access_token) return null;
-      const { data, error } = await supabase.auth.getUser(candidate.access_token);
+      const { data, error } = await withAuthTimeout(supabase.auth.getUser(candidate.access_token)).catch(() => ({
+        data: { user: null },
+        error: new Error("Auth user validation timed out"),
+      }));
       if (error || !data.user) return null;
       return {
         ...candidate,
@@ -88,12 +106,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const backendSession = getBackendSession();
       if (!backendSession?.access_token) return false;
 
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), AUTH_RESTORE_TIMEOUT_MS);
       const response = await fetch(`${BASE_URL}/api/v1/me`, {
         headers: {
           Authorization: `Bearer ${backendSession.access_token}`,
           "ngrok-skip-browser-warning": "true",
         },
-      }).catch(() => null);
+        signal: controller.signal,
+      }).catch(() => null).finally(() => {
+        window.clearTimeout(timeoutId);
+      });
 
       if (!response?.ok) {
         clearBackendSession();
@@ -132,7 +155,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const attempts = pendingCallback ? 8 : 1;
 
       for (let attempt = 0; attempt < attempts; attempt += 1) {
-        const { data: { session: s }, error } = await supabase.auth.getSession();
+        const sessionResult = await withAuthTimeout(supabase.auth.getSession()).catch(() => null);
+        if (!sessionResult) {
+          await finalizeSignedOutState();
+          return;
+        }
+
+        const { data: { session: s }, error } = sessionResult;
 
         if (error) {
           await finalizeSignedOutState();
@@ -147,8 +176,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return;
           }
 
-          const { data: refreshed } = await supabase.auth.refreshSession();
-          const refreshedSession = await validateSession(refreshed.session ?? null);
+          const refreshResult = await withAuthTimeout(supabase.auth.refreshSession()).catch(() => null);
+          const refreshed = refreshResult?.data;
+          const refreshedSession = await validateSession(refreshed?.session ?? null);
           if (refreshedSession) {
             applySession(refreshedSession);
             setLoading(false);
@@ -157,7 +187,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         if (!pendingCallback) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        await new Promise((resolve) => window.setTimeout(resolve, AUTH_CALLBACK_RETRY_DELAY_MS));
       }
 
       await finalizeSignedOutState();
