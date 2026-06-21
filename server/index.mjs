@@ -5217,9 +5217,8 @@ function scopedVyvaBackendQuery(queryParams, context) {
   if (organization.name && !scoped.organization_name && !scoped.organizationName) {
     scoped.organization_name = organization.name;
   }
-  if (organization.id && !scoped.organization_id && !scoped.organizationId) {
-    scoped.organization_id = organization.id;
-  }
+  delete scoped.organization_id;
+  delete scoped.organizationId;
   if (organization.slug && !scoped.organization_slug && !scoped.organizationSlug) {
     scoped.organization_slug = organization.slug;
   }
