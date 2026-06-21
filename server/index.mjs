@@ -707,6 +707,61 @@ function mergeDashboardPayloads(primary, local) {
   };
 }
 
+function externalDashboardUserIds(data, context) {
+  return new Set(
+    filterExternalUsersForOrganization(data?.gisUsers, context)
+      .map((user) => nullIfBlank(firstValue(user?.id, user?.externalUserId, user?.external_user_id)))
+      .filter(Boolean),
+  );
+}
+
+function filterDashboardPayloadUsers(payload, predicate) {
+  const users = Array.isArray(payload?.gisUsers) ? payload.gisUsers.filter(predicate) : [];
+  const retainedIds = new Set(users.map((user) => nullIfBlank(user?.id)).filter(Boolean));
+  const retainedExternalIds = new Set(
+    users.map((user) => nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id))).filter(Boolean),
+  );
+  const activeAlerts = Array.isArray(payload?.activeAlerts)
+    ? payload.activeAlerts.filter((alert) => {
+        const alertUserId = nullIfBlank(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id));
+        return Boolean(alertUserId && (retainedIds.has(alertUserId) || retainedExternalIds.has(alertUserId)));
+      })
+    : [];
+  const cityDistribution = Array.from(
+    users.reduce((cityCounts, user) => {
+      const city = String(firstValue(user?.city, user?.userCity, user?.user_city) || "").trim() || "Unknown";
+      cityCounts.set(city, (cityCounts.get(city) || 0) + 1);
+      return cityCounts;
+    }, new Map()),
+    ([city, count]) => ({ city, count }),
+  );
+
+  return {
+    ...payload,
+    totalUsers: users.length,
+    checkinsEnabled: users.filter((user) => Boolean(user.checkinEnabled ?? user.checkin_enabled)).length,
+    checkinsCompletedWeekly: users.reduce((sum, user) => sum + weeklyCheckinCompletedForUser(user), 0),
+    checkinsExpectedWeekly: users.reduce((sum, user) => sum + weeklyCheckinExpectedForUser(user), 0),
+    activeAlertCount: activeAlerts.length,
+    criticalAlertCount: activeAlerts.filter((alert) => alert.severity === "critical").length,
+    totalSensors: users.reduce((sum, user) => sum + Number(user.sensorCount ?? user.sensor_count ?? 0), 0),
+    caregiversLinked: users.reduce((sum, user) => sum + Number(user.careProviderCount ?? user.care_provider_count ?? 0), 0),
+    gisUsers: users,
+    activeAlerts,
+    cityDistribution,
+  };
+}
+
+function removeStaleExternalShadowUsers(localDashboard, upstreamData, context) {
+  const upstreamIds = externalDashboardUserIds(upstreamData, context);
+  return filterDashboardPayloadUsers(localDashboard, (user) => {
+    const source = nullIfBlank(firstValue(user?.externalSource, user?.external_source));
+    const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
+    if (source !== externalUserSource || !externalUserId) return true;
+    return upstreamIds.has(externalUserId);
+  });
+}
+
 function normalizeExternalProfilePayload(data) {
   if (!data || typeof data !== "object") return data;
   const normalizeRecords = (records) =>
@@ -11688,7 +11743,11 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
       req.context = context;
     }
     if (context) {
-      res.json(await loadDashboardUsers(context));
+      const localDashboard = await loadDashboardUsers(context);
+      const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+        query: scopedVyvaBackendQuery(req.query, context),
+      });
+      res.json(upstream?.ok ? removeStaleExternalShadowUsers(localDashboard, upstream.data, context) : localDashboard);
       return;
     }
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
