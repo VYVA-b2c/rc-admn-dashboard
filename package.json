@@ -13,6 +13,9 @@
     "preview": "npm run build && npm run start",
     "start": "node server/index.mjs --production",
     "test": "vitest run",
+    "test:health-plan-benchmarks": "vitest run src/lib/healthPlanGoldenCaseEvaluation.test.ts src/lib/healthPlanBenchmarkReplay.test.ts",
+    "health-plan:benchmark-replay": "node scripts/run-health-plan-benchmark-replay.mjs",
+    "health-plan:benchmark-replay:strict": "node scripts/run-health-plan-benchmark-replay.mjs --strict",
     "test:watch": "vitest"
   },
   "dependencies": {

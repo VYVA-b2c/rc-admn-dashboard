@@ -12,12 +12,25 @@ type ApiFetchOptions = RequestInit & {
   timeoutMs?: number;
 };
 
-async function responseErrorMessage(res: Response) {
+export class ApiError extends Error {
+  status: number;
+  data: unknown;
+
+  constructor(message: string, status: number, data: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
+async function responseErrorPayload(res: Response) {
   const contentType = res.headers.get("content-type") ?? "";
   const body = contentType.includes("application/json") ? await res.json().catch(() => null) : null;
-  return typeof body?.error === "string" || typeof body?.message === "string"
+  const message = typeof body?.error === "string" || typeof body?.message === "string"
     ? body.error || body.message
     : `API error ${res.status}: ${res.statusText}`;
+  return { body, message };
 }
 
 async function parseApiResponse<T>(res: Response): Promise<T> {
@@ -84,7 +97,7 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
       signal: signal ?? controller.signal,
     });
     if (!res.ok) {
-      const message = await responseErrorMessage(res);
+      const { body, message } = await responseErrorPayload(res);
       if (backendSessionToken && isSessionAuthError(res.status, message)) {
         clearBackendSession();
         notifySessionExpired();
@@ -101,19 +114,19 @@ export async function apiFetch<T = unknown>(path: string, options: ApiFetchOptio
             signal: signal ?? controller.signal,
           });
           if (retryRes.ok) return parseApiResponse<T>(retryRes);
-          const retryMessage = await responseErrorMessage(retryRes);
+          const { body: retryBody, message: retryMessage } = await responseErrorPayload(retryRes);
           if (isSessionAuthError(retryRes.status, retryMessage)) {
             await clearExpiredSupabaseSession();
             notifySessionExpired();
             throw new Error("Your session expired. Please sign in again.");
           }
-          throw new Error(retryMessage);
+          throw new ApiError(retryMessage, retryRes.status, retryBody);
         }
         await clearExpiredSupabaseSession();
         notifySessionExpired();
         throw new Error("Your session expired. Please sign in again.");
       }
-      throw new Error(message);
+      throw new ApiError(message, res.status, body);
     }
     return parseApiResponse<T>(res);
   } catch (error) {
