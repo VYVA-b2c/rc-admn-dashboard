@@ -168,18 +168,33 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_health_plans (
   language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'de', 'es')),
   status TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current')),
   review_status TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft', 'reviewed')),
+  escalation_grade TEXT NOT NULL DEFAULT 'routine' CHECK (escalation_grade IN ('routine', 'heightened', 'urgent')),
+  review_required BOOLEAN NOT NULL DEFAULT false,
+  review_window TEXT NOT NULL DEFAULT 'ongoing' CHECK (review_window IN ('today', 'this_week', 'ongoing')),
+  review_summary TEXT,
+  review_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   summary_text TEXT,
+  summary_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   goals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   daily_support_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   monitoring_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   escalation_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   caregiver_guidance_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   source_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  data_quality_gaps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  completed_improvement_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  feedback_entries_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  inferred_feedback_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendation_learning_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  quality_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   generator_provider TEXT,
   generator_model TEXT,
   generator_version TEXT,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   generated_by_user_id TEXT,
+  review_note TEXT,
+  review_checklist_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  recommendation_review_decisions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   reviewed_at TIMESTAMPTZ,
   reviewed_by_user_id TEXT,
   reviewed_by_email TEXT,
@@ -202,18 +217,33 @@ CREATE TABLE IF NOT EXISTS public.vyva_user_health_plan_revisions (
   language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'de', 'es')),
   status TEXT NOT NULL DEFAULT 'current' CHECK (status IN ('current')),
   review_status TEXT NOT NULL DEFAULT 'draft' CHECK (review_status IN ('draft', 'reviewed')),
+  escalation_grade TEXT NOT NULL DEFAULT 'routine' CHECK (escalation_grade IN ('routine', 'heightened', 'urgent')),
+  review_required BOOLEAN NOT NULL DEFAULT false,
+  review_window TEXT NOT NULL DEFAULT 'ongoing' CHECK (review_window IN ('today', 'this_week', 'ongoing')),
+  review_summary TEXT,
+  review_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   summary_text TEXT,
+  summary_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   goals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   daily_support_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   monitoring_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   escalation_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   caregiver_guidance_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   source_signals_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  data_quality_gaps_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  completed_improvement_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  feedback_entries_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  inferred_feedback_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  recommendation_learning_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  quality_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   generator_provider TEXT,
   generator_model TEXT,
   generator_version TEXT,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   generated_by_user_id TEXT,
+  review_note TEXT,
+  review_checklist_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  recommendation_review_decisions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   reviewed_at TIMESTAMPTZ,
   reviewed_by_user_id TEXT,
   reviewed_by_email TEXT,
@@ -226,6 +256,96 @@ CREATE INDEX IF NOT EXISTS idx_vyva_user_health_plan_revisions_plan_id
 
 CREATE INDEX IF NOT EXISTS idx_vyva_user_health_plan_revisions_user_id
   ON public.vyva_user_health_plan_revisions (vyva_user_id, version_number DESC);
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS data_quality_gaps_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS summary_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS completed_improvement_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS inferred_feedback_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS recommendation_learning_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS feedback_entries_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS escalation_grade TEXT NOT NULL DEFAULT 'routine';
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_required BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_window TEXT NOT NULL DEFAULT 'ongoing';
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_summary TEXT;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_note TEXT;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS review_checklist_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS recommendation_review_decisions_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plans
+  ADD COLUMN IF NOT EXISTS quality_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS data_quality_gaps_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS summary_signal_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS completed_improvement_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS inferred_feedback_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS recommendation_learning_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS feedback_entries_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS escalation_grade TEXT NOT NULL DEFAULT 'routine';
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_required BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_window TEXT NOT NULL DEFAULT 'ongoing';
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_summary TEXT;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_reasons_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_note TEXT;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS review_checklist_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS recommendation_review_decisions_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE public.vyva_user_health_plan_revisions
+  ADD COLUMN IF NOT EXISTS quality_snapshot_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS public.vyva_user_checkins (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

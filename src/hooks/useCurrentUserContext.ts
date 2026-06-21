@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { ACTIVE_ORGANIZATION_STORAGE_KEY } from "@/lib/apiClient";
 import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import { isProjectPlatformAdminEmail } from "@/lib/projectAdmin";
@@ -26,13 +27,18 @@ export type CurrentUserContext = {
   userId: string | null;
 };
 
-const previewUserContext: CurrentUserContext = {
-  email: null,
-  fullName: "Preview Admin",
-  isAdmin: true,
-  isPlatformAdmin: true,
-  organization: {
-    id: null,
+const previewOrganizations: OrganizationContext[] = [
+  {
+    id: "red-cross-zamora",
+    slug: "red-cross-zamora",
+    name: "Red Cross Zamora",
+    country: "Spain",
+    defaultLanguage: "es",
+    timezone: "Europe/Madrid",
+    active: true,
+  },
+  {
+    id: "red-cross-leipzig",
     slug: "red-cross-leipzig",
     name: "Red Cross Leipzig",
     country: "Germany",
@@ -40,10 +46,27 @@ const previewUserContext: CurrentUserContext = {
     timezone: "Europe/Berlin",
     active: true,
   },
-  role: "admin",
-  roles: ["admin"],
-  userId: "preview",
-};
+];
+
+function previewOrganizationFromStorage(): OrganizationContext {
+  if (typeof window === "undefined") return previewOrganizations[1];
+  const activeOrganizationId = String(window.localStorage.getItem(ACTIVE_ORGANIZATION_STORAGE_KEY) || "").toLowerCase();
+  if (activeOrganizationId.includes("zamora")) return previewOrganizations[0];
+  return previewOrganizations[1];
+}
+
+function buildPreviewUserContext(): CurrentUserContext {
+  return {
+    email: null,
+    fullName: "Preview Admin",
+    isAdmin: true,
+    isPlatformAdmin: true,
+    organization: previewOrganizationFromStorage(),
+    role: "admin",
+    roles: ["admin"],
+    userId: "preview",
+  };
+}
 
 function projectPlatformAdminContext(email?: string | null, userId?: string | null): CurrentUserContext {
   return {
@@ -81,7 +104,7 @@ export function useCurrentUserContext() {
     enabled: authBypassEnabled || Boolean(user?.id),
     retry: false,
     placeholderData: authBypassEnabled
-      ? { user: previewUserContext }
+      ? { user: buildPreviewUserContext() }
       : fallbackProjectAdmin
         ? { user: fallbackProjectAdmin }
         : undefined,
@@ -95,7 +118,7 @@ export function useCurrentUserContext() {
         };
         return { user: applyProjectAdminFallback(responseUser) };
       } catch (error) {
-        if (authBypassEnabled) return { user: previewUserContext };
+        if (authBypassEnabled) return { user: buildPreviewUserContext() };
         if (fallbackProjectAdmin) return { user: fallbackProjectAdmin };
         throw error;
       }

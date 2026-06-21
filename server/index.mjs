@@ -5,6 +5,121 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { buildHealthPlanSignalTriage } from "../src/lib/healthPlanSignalTriage.js";
+import { enrichHealthPlanSections } from "../src/lib/healthPlanRecommendationMetadata.js";
+import { findHealthPlanRecommendationCarryForwardIssues } from "../src/lib/healthPlanCarryForwardRules.js";
+import { buildHealthPlanClinicalCautions, findHealthPlanClinicalCautionIssues } from "../src/lib/healthPlanClinicalCautions.js";
+import { buildHealthPlanConfidenceProfile } from "../src/lib/healthPlanConfidenceProfile.js";
+import { buildHealthPlanRefreshStrategy, expandHealthPlanRefreshSections } from "../src/lib/healthPlanRefreshStrategy.js";
+import { annotateHealthPlanHistory, buildHealthPlanRevisionChange } from "../src/lib/healthPlanRevisionDiff.js";
+import { buildHealthPlanDataQualityGaps } from "../src/lib/healthPlanDataQualityGaps.js";
+import { buildHealthPlanFollowThroughSummary } from "../src/lib/healthPlanFollowThrough.js";
+import { buildHealthPlanFreshnessSnapshot } from "../src/lib/healthPlanFreshness.js";
+import { buildHealthPlanInferredFeedbackEntries } from "../src/lib/healthPlanInferredFeedback.js";
+import { buildHealthPlanOperationalActivitySummary, normalizeHealthPlanOperationalEvents } from "../src/lib/healthPlanOperationalEvents.js";
+import { buildHealthPlanSectionDrift } from "../src/lib/healthPlanSectionDrift.js";
+import { findHealthPlanCoverageIssues } from "../src/lib/healthPlanCoverageRules.js";
+import {
+  buildHealthPlanEscalationGrade,
+  buildHealthPlanEscalationGradeBrief,
+  buildHealthPlanReviewGovernance,
+  findHealthPlanEscalationGradeIssues,
+} from "../src/lib/healthPlanEscalationGrade.js";
+import {
+  applyHealthPlanReviewChecklistAudit,
+  isHealthPlanReviewChecklistComplete,
+  missingHealthPlanReviewChecklistItems,
+  normalizeHealthPlanReviewChecklist,
+} from "../src/lib/healthPlanReviewChecklist.js";
+import { findHealthPlanSafetyIssues } from "../src/lib/healthPlanSafetyReview.js";
+import {
+  buildHealthPlanEvidenceConflicts,
+  buildHealthPlanEvidenceHierarchy,
+  buildHealthPlanEvidenceHierarchyBrief,
+} from "../src/lib/healthPlanEvidenceHierarchy.js";
+import {
+  buildHealthPlanInterventionMemory,
+  buildHealthPlanInterventionMemoryBrief,
+} from "../src/lib/healthPlanInterventionMemory.js";
+import {
+  buildHealthPlanOutcomeScores,
+  buildHealthPlanOutcomeScoreBrief,
+  buildHealthPlanRecommendationOutcomeMemory,
+  buildHealthPlanSignalPreferenceWeights,
+} from "../src/lib/healthPlanOutcomeScores.js";
+import { buildHealthPlanRecommendationSurvivorship } from "../src/lib/healthPlanRecommendationSurvivorship.js";
+import { buildHealthPlanRecommendationHistory } from "../src/lib/healthPlanRecommendationHistory.js";
+import { buildHealthPlanRecommendationRevisionMemory } from "../src/lib/healthPlanRecommendationRevisionMemory.js";
+import { buildHealthPlanOutcomePatternMemory } from "../src/lib/healthPlanOutcomePatternMemory.js";
+import { buildHealthPlanQualityMemory } from "../src/lib/healthPlanQualityMemory.js";
+import { buildHealthPlanQualitySnapshot, normalizeHealthPlanQualitySnapshot } from "../src/lib/healthPlanQualitySnapshot.js";
+import { buildHealthPlanDraftAcceptance } from "../src/lib/healthPlanDraftAcceptance.js";
+import { buildHealthPlanCandidateSelectionSnapshot, selectBestHealthPlanCandidate } from "../src/lib/healthPlanCandidateSelection.js";
+import { buildHealthPlanEvidencePack } from "../src/lib/healthPlanEvidencePack.js";
+import {
+  buildHealthPlanBenchmarkAssessment,
+  buildHealthPlanBenchmarkGuidance,
+  shouldRejectHealthPlanBenchmarkAssessment,
+} from "../src/lib/healthPlanBenchmarkAssessment.js";
+import { buildHealthPlanBenchmarkReplayFromHistory } from "../src/lib/healthPlanBenchmarkReplayHistory.js";
+import {
+  annotateHealthPlanSectionsWithEditorialTrace,
+  buildHealthPlanEditorialTrace,
+  hasHighPriorityManualOverrideWithoutReason,
+  shouldRejectHealthPlanEditorialTrace,
+} from "../src/lib/healthPlanEditorialTrace.js";
+import { findHealthPlanEvidenceCoverageIssues } from "../src/lib/healthPlanEvidenceCoverage.js";
+import { buildHealthPlanGenerationQuality, shouldRejectHealthPlanGenerationQuality } from "../src/lib/healthPlanGenerationQuality.js";
+import { buildHealthPlanRecommendationEffectiveness, findHealthPlanRecommendationEffectivenessIssues } from "../src/lib/healthPlanRecommendationEffectiveness.js";
+import {
+  applyHealthPlanRecommendationGroundingCalibration,
+  buildHealthPlanRecommendationCalibrationSummary,
+  buildHealthPlanRecommendationGrounding,
+  shouldRejectHealthPlanRecommendationGrounding,
+} from "../src/lib/healthPlanRecommendationGrounding.js";
+import {
+  buildHealthPlanCalibrationRepairBrief,
+  buildHealthPlanCalibrationRepairMessage,
+  shouldAttemptHealthPlanCalibrationRepair,
+} from "../src/lib/healthPlanRecommendationCalibrationPolicy.js";
+import { buildHealthPlanRecommendationCoverage, shouldRejectHealthPlanRecommendationCoverage } from "../src/lib/healthPlanRecommendationCoverage.js";
+import { buildHealthPlanRecommendationEvidenceDiversity } from "../src/lib/healthPlanRecommendationEvidenceDiversity.js";
+import {
+  buildHealthPlanRecommendationReviewSummary,
+  normalizeHealthPlanRecommendationReviewDecisions,
+} from "../src/lib/healthPlanRecommendationReview.js";
+import { buildHealthPlanRecommendationSourceRanking, findHealthPlanRecommendationSourceRankingIssues } from "../src/lib/healthPlanRecommendationSourceRanking.js";
+import { buildHealthPlanRecommendationChallenges, shouldRejectHealthPlanRecommendationChallenges } from "../src/lib/healthPlanRecommendationChallenges.js";
+import { buildHealthPlanRecommendationRepairBrief } from "../src/lib/healthPlanRecommendationRepair.js";
+import { buildHealthPlanReadiness, shouldBlockHealthPlanReadiness } from "../src/lib/healthPlanReadiness.js";
+import { buildHealthPlanClientResponseMemory } from "../src/lib/healthPlanClientResponseMemory.js";
+import { buildHealthPlanCohortGuidance } from "../src/lib/healthPlanCohortGuidance.js";
+import { buildHealthPlanLiveEvidenceSignals, buildHealthPlanLiveEvidenceSummary } from "../src/lib/healthPlanLiveEvidenceSummary.js";
+import { buildHealthPlanLongitudinalMemory } from "../src/lib/healthPlanLongitudinalMemory.js";
+import { buildHealthPlanOperationalCompleteness, shouldRejectHealthPlanOperationalCompleteness } from "../src/lib/healthPlanOperationalCompleteness.js";
+import { buildHealthPlanActionImpact } from "../src/lib/healthPlanActionImpact.js";
+import { buildHealthPlanRecommendationImpact } from "../src/lib/healthPlanRecommendationImpact.js";
+import {
+  buildHealthPlanCriticalResponseBrief,
+  findHealthPlanCriticalResponseIssues,
+} from "../src/lib/healthPlanCriticalResponse.js";
+import {
+  buildHealthPlanResponseAdjudicationBrief,
+  findHealthPlanResponseAdjudicationIssues,
+} from "../src/lib/healthPlanResponseAdjudication.js";
+import { buildHealthPlanReviewPriorities } from "../src/lib/healthPlanReviewPriorities.js";
+import { buildHealthPlanReviewReadiness } from "../src/lib/healthPlanReviewReadiness.js";
+import { buildHealthPlanGenerationBrief } from "../src/lib/healthPlanGenerationBrief.js";
+import { attachHealthPlanEvidenceReceipts } from "../src/lib/healthPlanEvidenceReceipts.js";
+import {
+  findHealthPlanGenerationBriefIssues,
+  shouldRejectHealthPlanGenerationBriefIssues,
+} from "../src/lib/healthPlanGenerationBriefCompliance.js";
+import {
+  buildCompletedHealthPlanImprovementBrief,
+  buildHealthPlanImprovementActions,
+  buildHealthPlanImprovementBrief,
+} from "../src/lib/healthPlanImprovementActions.js";
 
 const { Pool } = pg;
 
@@ -123,6 +238,7 @@ const openAiBaseUrl = String(process.env.OPENAI_BASE_URL || "https://api.openai.
 const healthPlanOpenAiModel =
   String(process.env.HEALTH_PLAN_OPENAI_MODEL || process.env.OPENAI_MODEL || "gpt-4o-mini").trim() || "gpt-4o-mini";
 const healthPlanGeneratorVersion = "health-plan-v1";
+const healthPlanDirectCandidateCountOverride = Number.parseInt(process.env.HEALTH_PLAN_DIRECT_CANDIDATE_COUNT || "", 10);
 const consoleSessionSecret =
   String(process.env.SESSION_SECRET || process.env.AUTH_SESSION_SECRET || process.env.CONSOLE_SESSION_SECRET || "").trim() ||
   (!isProduction ? "dev-vyva-console-session-secret" : null);
@@ -320,6 +436,36 @@ function normalizedBranchKey(value) {
   return null;
 }
 
+function branchKeyFromPhone(value) {
+  const country = countryKeyFromPhone(value);
+  if (country === "germany") return "leipzig";
+  if (country === "spain") return "zamora";
+  return null;
+}
+
+function phoneFromUserLike(user) {
+  if (!user || typeof user !== "object") return null;
+  const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
+  return firstValue(
+    user.phone,
+    user.userPhone,
+    user.user_phone,
+    user.phone_number,
+    user.phoneNumber,
+    user.mobile,
+    user.mobile_phone,
+    user.mobilePhone,
+    nestedUser.phone,
+    nestedUser.userPhone,
+    nestedUser.user_phone,
+    nestedUser.phone_number,
+    nestedUser.phoneNumber,
+    nestedUser.mobile,
+    nestedUser.mobile_phone,
+    nestedUser.mobilePhone,
+  );
+}
+
 function branchKeyFromOrganization(organization) {
   return normalizedBranchKey(firstValue(organization?.slug, organization?.name));
 }
@@ -327,7 +473,7 @@ function branchKeyFromOrganization(organization) {
 function inferBranchKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  return normalizedBranchKey(
+  const explicitBranch = normalizedBranchKey(
     firstValue(
       user.organization_slug,
       user.organizationSlug,
@@ -343,6 +489,7 @@ function inferBranchKeyFromExternalUser(user) {
       nestedUser.organizationName,
     ),
   );
+  return explicitBranch || branchKeyFromPhone(phoneFromUserLike(user));
 }
 
 function normalizedCountryKey(value) {
@@ -356,7 +503,7 @@ function normalizedCountryKey(value) {
 function inferCountryKeyFromExternalUser(user) {
   if (!user || typeof user !== "object") return null;
   const nestedUser = user.user ?? user.vyva_users ?? user.client ?? {};
-  return normalizedCountryKey(
+  const explicitCountry = normalizedCountryKey(
     firstValue(
       user.country,
       user.country_code,
@@ -368,13 +515,19 @@ function inferCountryKeyFromExternalUser(user) {
       nestedUser.countryCode,
     ),
   );
+  return explicitCountry || countryKeyFromPhone(phoneFromUserLike(user));
 }
 
 function externalUserMatchesOrganization(user, organization) {
   if (!organization) return true;
   const organizationBranch = branchKeyFromOrganization(organization);
   if (organizationBranch) {
-    return inferBranchKeyFromExternalUser(user) === organizationBranch;
+    const userBranch = inferBranchKeyFromExternalUser(user);
+    if (userBranch) return userBranch === organizationBranch;
+
+    const organizationCountry = normalizedCountryKey(organization.country);
+    const userCountry = inferCountryKeyFromExternalUser(user);
+    return Boolean(organizationCountry && userCountry && userCountry === organizationCountry);
   }
 
   const organizationCountry = normalizedCountryKey(organization.country);
@@ -560,6 +713,7 @@ function normalizeExternalProfilePayload(data) {
       : data.health,
     medications: normalizeRecords(data.medications),
     healthPlan: data.healthPlan || data.health_plan ? normalizeHealthPlanRow(data.healthPlan || data.health_plan) : null,
+    healthPlanFeedback: data.healthPlanFeedback || data.health_plan_feedback || null,
     caregivers: normalizeRecords(data.caregivers),
     careProviders: normalizeRecords(data.careProviders),
     sensors: normalizeRecords(data.sensors),
@@ -671,6 +825,145 @@ async function loadLatestMedicationActivity(userId, client = { query }) {
   return rows[0] || null;
 }
 
+async function loadRecentMedicationActivityHistory(userId, client = { query }, limit = 12) {
+  return optionalRows(
+    `
+      SELECT
+        l.id::text,
+        l.medication_id::text,
+        m.medication_name,
+        l.status,
+        l.reported_at,
+        l.scheduled_date::text,
+        l.scheduled_time,
+        COALESCE(l.reported_at, l.created_at) AS occurred_at
+      FROM public.vyva_medication_logs l
+      LEFT JOIN public.vyva_user_medications m ON m.id = l.medication_id
+      WHERE l.vyva_user_id = $1
+      ORDER BY COALESCE(l.reported_at, l.created_at) DESC, l.scheduled_date DESC, l.scheduled_time DESC NULLS LAST
+      LIMIT $2
+    `,
+    [userId, limit],
+    client,
+  );
+}
+
+async function loadRecentCampaignCallJobsForUser(userId, context, client = { query }, limit = 12) {
+  return optionalRows(
+    `
+      SELECT
+        j.id::text,
+        j.status,
+        j.skip_reason,
+        j.attempt_count,
+        j.scheduled_at,
+        j.created_at,
+        j.updated_at,
+        c.name AS campaign_name,
+        c.template_key
+      FROM public.campaign_call_jobs j
+      JOIN public.campaigns c ON c.id = j.campaign_id
+      WHERE j.vyva_user_id = $1
+        AND j.organization_id = $2
+      ORDER BY COALESCE(j.updated_at, j.created_at, j.scheduled_at) DESC
+      LIMIT $3
+    `,
+    [userId, scopeOrganizationId(context), limit],
+    client,
+  );
+}
+
+function buildRecentOperationalEvents({
+  checkins = null,
+  brainCoach = null,
+  medicationActivity = null,
+  medicationHistory = [],
+  campaignJobs = [],
+} = {}) {
+  const events = [];
+  const checkinAt = normalizeTimestampValue(firstValue(checkins?.last_checkin_at, checkins?.lastCheckinAt, checkins?.last_session_at, checkins?.lastSessionAt));
+  if (checkinAt) {
+    events.push({
+      id: `checkins:${checkins?.id || checkinAt}`,
+      source: "checkins",
+      status: firstValue(checkins?.last_outcome, checkins?.lastOutcome, checkins?.last_checkin_status, checkins?.lastCheckinStatus),
+      occurred_at: checkinAt,
+      label: "Check-in",
+      note: "Latest scheduled check-in result.",
+      signal_ids: ["service-checkins"],
+    });
+  }
+
+  const brainAt = normalizeTimestampValue(firstValue(brainCoach?.last_session_at, brainCoach?.lastSessionAt, brainCoach?.last_reported_at, brainCoach?.lastReportedAt));
+  if (brainAt) {
+    events.push({
+      id: `brain:${brainCoach?.id || brainAt}`,
+      source: "brain_coach",
+      status: firstValue(brainCoach?.last_outcome, brainCoach?.lastOutcome),
+      occurred_at: brainAt,
+      label: "Brain Coach",
+      note: "Latest Brain Coach session result.",
+      signal_ids: ["service-brain-coach"],
+    });
+  }
+
+  for (const item of Array.isArray(medicationHistory) ? medicationHistory : []) {
+    const occurredAt = normalizeTimestampValue(firstValue(item?.occurred_at, item?.reported_at));
+    if (!occurredAt) continue;
+    const medicationName = nullIfBlank(item?.medication_name);
+    events.push({
+      id: `medication:${item.id || occurredAt}`,
+      source: "medication",
+      status: item?.status,
+      occurred_at: occurredAt,
+      label: medicationName ? `Medication: ${medicationName}` : "Medication reminder",
+      note: medicationName
+        ? `Medication activity recorded for ${medicationName}.`
+        : "Medication activity recorded.",
+      signal_ids: ["medication-plan"],
+    });
+  }
+
+  if (!Array.isArray(medicationHistory) || medicationHistory.length === 0) {
+    const occurredAt = normalizeTimestampValue(firstValue(medicationActivity?.occurred_at, medicationActivity?.reported_at));
+    if (occurredAt) {
+      const medicationName = nullIfBlank(medicationActivity?.medication_name);
+      events.push({
+        id: `medication-latest:${medicationActivity?.id || occurredAt}`,
+        source: "medication",
+        status: medicationActivity?.status,
+        occurred_at: occurredAt,
+        label: medicationName ? `Medication: ${medicationName}` : "Medication reminder",
+        note: medicationName
+          ? `Latest medication activity recorded for ${medicationName}.`
+          : "Latest medication activity recorded.",
+        signal_ids: ["medication-plan"],
+      });
+    }
+  }
+
+  for (const job of Array.isArray(campaignJobs) ? campaignJobs : []) {
+    const occurredAt = normalizeTimestampValue(firstValue(job?.updated_at, job?.scheduled_at, job?.created_at));
+    if (!occurredAt) continue;
+    const campaignName = nullIfBlank(job?.campaign_name);
+    const status = nullIfBlank(job?.status);
+    const skipReason = nullIfBlank(job?.skip_reason);
+    events.push({
+      id: `campaign:${job.id || occurredAt}`,
+      source: "campaign_call",
+      status,
+      occurred_at: occurredAt,
+      label: campaignName ? `Campaign call: ${campaignName}` : "Campaign outreach",
+      note: skipReason
+        ? `Campaign outreach ended with ${status || "an unresolved"} status because of ${skipReason.replaceAll("_", " ")}.`
+        : `Campaign outreach ended with ${status || "an unknown"} status.`,
+      signal_ids: ["service-checkins", "alert-active"],
+    });
+  }
+
+  return normalizeHealthPlanOperationalEvents(events);
+}
+
 function normalizeHealthPlanSectionItems(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -682,10 +975,38 @@ function normalizeHealthPlanSectionItems(value) {
       const sourceSignalIds = Array.isArray(record?.source_signal_ids)
         ? record.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean)
         : [];
+      const priority = nullIfBlank(record?.priority)?.toLowerCase();
+      const confidence = nullIfBlank(record?.confidence)?.toLowerCase();
+      const timing = nullIfBlank(record?.timing)?.toLowerCase();
+      const verificationRequired = typeof record?.verification_required === "boolean" ? record.verification_required : null;
+      const completionSignal = nullIfBlank(record?.completion_signal);
+      const ownerRole = nullIfBlank(record?.owner_role)?.toLowerCase();
+      const fallbackOwnerRole = nullIfBlank(record?.fallback_owner_role)?.toLowerCase();
+      const originType = nullIfBlank(record?.origin_type)?.toLowerCase();
+      const originalGeneratedText = nullIfBlank(record?.original_generated_text);
+      const originalGeneratedAt = normalizeTimestampValue(record?.original_generated_at);
+      const lastModifiedAt = normalizeTimestampValue(record?.last_modified_at);
+      const lastModifiedByUserId = nullIfBlank(record?.last_modified_by_user_id);
+      const lastModifiedByEmail = normalizedEmail(record?.last_modified_by_email);
+      const editReason = nullIfBlank(record?.edit_reason);
       return {
         id,
         text,
         ...(sourceSignalIds.length ? { source_signal_ids: sourceSignalIds } : {}),
+        ...(["high", "medium", "low"].includes(priority) ? { priority } : {}),
+        ...(["high", "medium", "low"].includes(confidence) ? { confidence } : {}),
+        ...(["today", "this_week", "ongoing"].includes(timing) ? { timing } : {}),
+        ...(typeof verificationRequired === "boolean" ? { verification_required: verificationRequired } : {}),
+        ...(completionSignal ? { completion_signal: completionSignal } : {}),
+        ...(["assigned_staff", "caregiver", "on_call_coordinator", "care_team"].includes(ownerRole) ? { owner_role: ownerRole } : {}),
+        ...(["assigned_staff", "caregiver", "on_call_coordinator", "care_team"].includes(fallbackOwnerRole) ? { fallback_owner_role: fallbackOwnerRole } : {}),
+        ...(["ai_generated", "human_added", "human_edited"].includes(originType) ? { origin_type: originType } : {}),
+        ...(originalGeneratedText ? { original_generated_text: originalGeneratedText } : {}),
+        ...(originalGeneratedAt ? { original_generated_at: originalGeneratedAt } : {}),
+        ...(lastModifiedAt ? { last_modified_at: lastModifiedAt } : {}),
+        ...(lastModifiedByUserId ? { last_modified_by_user_id: lastModifiedByUserId } : {}),
+        ...(lastModifiedByEmail ? { last_modified_by_email: lastModifiedByEmail } : {}),
+        ...(editReason ? { edit_reason: editReason } : {}),
       };
     })
     .filter(Boolean);
@@ -735,14 +1056,183 @@ function normalizeHealthPlanSourceSignals(value) {
     .filter(Boolean);
 }
 
+function normalizeHealthPlanDataQualityGaps(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      const record = objectValue(item);
+      const label = nullIfBlank(firstValue(record?.label, record?.title, record?.text, record?.value));
+      if (!label) return null;
+      const id = nullIfBlank(record?.id) || `gap-${index + 1}`;
+      const detail = nullIfBlank(firstValue(record?.detail, record?.description, record?.summary));
+      const staffAction = nullIfBlank(firstValue(record?.staff_action, record?.staffAction, record?.action));
+      const kind = nullIfBlank(firstValue(record?.kind, record?.type));
+      const severity = normalizeHealthPlanSignalStrength(firstValue(record?.severity, record?.strength), "medium");
+      return {
+        id,
+        label,
+        ...(detail ? { detail } : {}),
+        ...(kind === "stale" || kind === "missing" ? { kind } : {}),
+        severity,
+        ...(staffAction ? { staff_action: staffAction } : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
 function normalizeHealthPlanActionType(value, fallback = "edited") {
   const normalized = nullIfBlank(value);
   if (["generated", "regenerated", "edited", "reviewed"].includes(normalized)) return normalized;
   return fallback;
 }
 
+function normalizeHealthPlanSignalIds(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => nullIfBlank(item)).filter(Boolean);
+}
+
+function normalizeCompletedHealthPlanImprovementActions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const record = objectValue(item);
+      const actionId = nullIfBlank(firstValue(record?.action_id, record?.actionId, record?.id));
+      const title = nullIfBlank(record?.title);
+      if (!actionId || !title) return null;
+      return {
+        action_id: actionId,
+        title,
+        ...(nullIfBlank(record?.section_key) ? { section_key: nullIfBlank(record?.section_key) } : {}),
+        ...(normalizeTimestampValue(record?.completed_at) ? { completed_at: normalizeTimestampValue(record?.completed_at) } : {}),
+        ...(nullIfBlank(record?.completed_by_user_id) ? { completed_by_user_id: nullIfBlank(record?.completed_by_user_id) } : {}),
+        ...(normalizedEmail(record?.completed_by_email) ? { completed_by_email: normalizedEmail(record?.completed_by_email) } : {}),
+        ...(nullIfBlank(record?.note) ? { note: nullIfBlank(record?.note) } : {}),
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeHealthPlanFeedbackEntries(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      const record = objectValue(item);
+      const sectionKey = nullIfBlank(firstValue(record?.section_key, record?.sectionKey));
+      const outcome = nullIfBlank(record?.outcome);
+      if (!sectionKey || !["helped", "mixed", "did_not_help", "needs_follow_up"].includes(outcome)) return null;
+      const itemId = nullIfBlank(firstValue(record?.item_id, record?.itemId));
+      const feedbackId = nullIfBlank(record?.id) || [sectionKey, itemId || "section", index + 1].join(":");
+      const recommendedNextAction = nullIfBlank(firstValue(record?.recommended_next_action, record?.recommendedNextAction));
+      const confidenceLevel = nullIfBlank(firstValue(record?.confidence_level, record?.confidenceLevel));
+      return {
+        id: feedbackId,
+        section_key: sectionKey,
+        ...(itemId ? { item_id: itemId } : {}),
+        outcome,
+        ...(["preserve", "verify", "rework", "retire"].includes(recommendedNextAction || "") ? { recommended_next_action: recommendedNextAction } : {}),
+        ...(["high", "medium", "low"].includes(confidenceLevel || "") ? { confidence_level: confidenceLevel } : {}),
+        ...(nullIfBlank(record?.source) ? { source: nullIfBlank(record?.source) } : {}),
+        ...(nullIfBlank(record?.note) ? { note: nullIfBlank(record?.note) } : {}),
+        ...(normalizeTimestampValue(record?.recorded_at) ? { recorded_at: normalizeTimestampValue(record?.recorded_at) } : {}),
+        ...(nullIfBlank(record?.recorded_by_user_id) ? { recorded_by_user_id: nullIfBlank(record?.recorded_by_user_id) } : {}),
+        ...(normalizedEmail(record?.recorded_by_email) ? { recorded_by_email: normalizedEmail(record?.recorded_by_email) } : {}),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftTime = left.recorded_at ? new Date(left.recorded_at).getTime() : 0;
+      const rightTime = right.recorded_at ? new Date(right.recorded_at).getTime() : 0;
+      return rightTime - leftTime;
+    });
+}
+
+function normalizeHealthPlanRecommendationLearning(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const itemId = nullIfBlank(firstValue(item?.item_id, item?.itemId));
+      const sectionKey = nullIfBlank(firstValue(item?.section_key, item?.sectionKey));
+      const sectionLabel = nullIfBlank(firstValue(item?.section_label, item?.sectionLabel));
+      const textValue = nullIfBlank(item?.text);
+      if (!itemId || !sectionKey || !textValue) return null;
+      return {
+        item_id: itemId,
+        section_key: sectionKey,
+        ...(sectionLabel ? { section_label: sectionLabel } : {}),
+        text: textValue,
+        ...(nullIfBlank(item?.status) ? { status: nullIfBlank(item?.status) } : {}),
+        ...(Number.isFinite(Number(item?.score)) ? { score: Math.round(Number(item.score)) } : {}),
+        ...(nullIfBlank(item?.latest_outcome) ? { latest_outcome: nullIfBlank(item?.latest_outcome) } : {}),
+        ...(nullIfBlank(item?.inherited_section_outcome) ? { inherited_section_outcome: nullIfBlank(item?.inherited_section_outcome) } : {}),
+        ...(nullIfBlank(item?.latest_note) ? { latest_note: nullIfBlank(item?.latest_note) } : {}),
+        ...(nullIfBlank(item?.latest_source) ? { latest_source: nullIfBlank(item?.latest_source) } : {}),
+        ...(nullIfBlank(item?.latest_recommended_next_action) ? { latest_recommended_next_action: nullIfBlank(item?.latest_recommended_next_action) } : {}),
+        ...(nullIfBlank(item?.latest_confidence_level) ? { latest_confidence_level: nullIfBlank(item?.latest_confidence_level) } : {}),
+        ...(nullIfBlank(item?.freshness_status) ? { freshness_status: nullIfBlank(item?.freshness_status) } : {}),
+        ...(Number.isFinite(Number(item?.feedback_count)) ? { feedback_count: Number(item.feedback_count) } : {}),
+        ...(Number.isFinite(Number(item?.helped_count)) ? { helped_count: Number(item.helped_count) } : {}),
+        ...(Number.isFinite(Number(item?.mixed_count)) ? { mixed_count: Number(item.mixed_count) } : {}),
+        ...(Number.isFinite(Number(item?.did_not_help_count)) ? { did_not_help_count: Number(item.did_not_help_count) } : {}),
+        ...(Number.isFinite(Number(item?.needs_follow_up_count)) ? { needs_follow_up_count: Number(item.needs_follow_up_count) } : {}),
+        ...(Number.isFinite(Number(item?.operational_positive_count)) ? { operational_positive_count: Number(item.operational_positive_count) } : {}),
+        ...(Number.isFinite(Number(item?.operational_caution_count)) ? { operational_caution_count: Number(item.operational_caution_count) } : {}),
+        ...(nullIfBlank(item?.operational_pattern) ? { operational_pattern: nullIfBlank(item?.operational_pattern) } : {}),
+        ...(Array.isArray(item?.operational_source_labels) ? { operational_source_labels: item.operational_source_labels.map((label) => nullIfBlank(label)).filter(Boolean) } : {}),
+        ...(nullIfBlank(item?.operational_reason) ? { operational_reason: nullIfBlank(item?.operational_reason) } : {}),
+        ...(normalizeTimestampValue(item?.last_operational_at) ? { last_operational_at: normalizeTimestampValue(item?.last_operational_at) } : {}),
+        ...(nullIfBlank(item?.trajectory) ? { trajectory: nullIfBlank(item?.trajectory) } : {}),
+        ...(nullIfBlank(item?.reuse_priority) ? { reuse_priority: nullIfBlank(item?.reuse_priority) } : {}),
+        ...(nullIfBlank(item?.contradiction_status) ? { contradiction_status: nullIfBlank(item?.contradiction_status) } : {}),
+        ...(nullIfBlank(item?.contradiction_reason) ? { contradiction_reason: nullIfBlank(item?.contradiction_reason) } : {}),
+        ...(Array.isArray(item?.source_signal_ids) ? { source_signal_ids: item.source_signal_ids.map((signalId) => nullIfBlank(signalId)).filter(Boolean) } : {}),
+        ...(nullIfBlank(item?.reason) ? { reason: nullIfBlank(item?.reason) } : {}),
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function inferHealthPlanSummarySignalIds(value, sourceSignals = [], signalTriage = {}, sections = {}) {
+  const normalized = normalizeHealthPlanSignalIds(value);
+  if (normalized.length) return normalized;
+  const validIds = new Set((Array.isArray(sourceSignals) ? sourceSignals : []).map((signal) => nullIfBlank(signal?.id)).filter(Boolean));
+  const sectionRefs = [
+    ...(Array.isArray(sections?.monitoring_json) ? sections.monitoring_json : []),
+    ...(Array.isArray(sections?.escalation_json) ? sections.escalation_json : []),
+    ...(Array.isArray(sections?.goals_json) ? sections.goals_json : []),
+    ...(Array.isArray(sections?.daily_support_json) ? sections.daily_support_json : []),
+  ].flatMap((item) => Array.isArray(item?.source_signal_ids) ? item.source_signal_ids : []);
+  return [...new Set([
+    ...normalizeHealthPlanSignalIds(signalTriage?.action_signal_ids),
+    ...normalizeHealthPlanSignalIds(sectionRefs),
+  ])].filter((id) => validIds.has(id)).slice(0, 4);
+}
+
 function normalizeHealthPlanRow(row) {
   if (!row) return null;
+  const sourceSignals = normalizeHealthPlanSourceSignals(row.source_signals_json);
+  const signalTriage = buildHealthPlanSignalTriage(sourceSignals);
+  const qualitySnapshot = normalizeHealthPlanQualitySnapshot(row.quality_snapshot_json);
+  const dataQualityGaps = normalizeHealthPlanDataQualityGaps(
+    row.data_quality_gaps_json || buildHealthPlanDataQualityGaps({ sourceSignals }),
+  );
+  const completedImprovementActions = normalizeCompletedHealthPlanImprovementActions(row.completed_improvement_actions_json);
+  const feedbackEntries = normalizeHealthPlanFeedbackEntries(row.feedback_entries_json);
+  const inferredFeedback = normalizeHealthPlanFeedbackEntries(row.inferred_feedback_json);
+  const recommendationLearning = normalizeHealthPlanRecommendationLearning(row.recommendation_learning_json);
+  const enrichedSections = enrichHealthPlanSections({
+    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
+    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
+    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
+    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
+  }, { sourceSignals, signalTriage });
+  const sectionsWithEvidenceReceipts = attachHealthPlanEvidenceReceipts(enrichedSections, {
+    sourceSignals,
+    signalTriage,
+    qualitySnapshot,
+  });
+  const summarySignalIds = inferHealthPlanSummarySignalIds(row.summary_signal_ids_json, sourceSignals, signalTriage, enrichedSections);
   return {
     id: String(row.id),
     vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
@@ -755,13 +1245,28 @@ function normalizeHealthPlanRow(row) {
     language: normalizeLanguage(row.language, "de"),
     status: nullIfBlank(row.status) || "current",
     review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
+    escalation_grade: ["routine", "heightened", "urgent"].includes(nullIfBlank(row.escalation_grade)) ? row.escalation_grade : "routine",
+    review_required: Boolean(row.review_required),
+    review_window: ["today", "this_week", "ongoing"].includes(nullIfBlank(row.review_window)) ? row.review_window : "ongoing",
+    review_summary: nullIfBlank(row.review_summary),
+    review_reasons_json: Array.isArray(row.review_reasons_json) ? row.review_reasons_json : [],
+    review_note: nullIfBlank(row.review_note),
+    review_checklist_json: normalizeHealthPlanReviewChecklist(row.review_checklist_json),
+    recommendation_review_decisions_json: normalizeHealthPlanRecommendationReviewDecisions(row.recommendation_review_decisions_json),
     summary_text: nullIfBlank(row.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
-    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
-    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
-    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
-    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+    summary_signal_ids: summarySignalIds,
+    goals_json: sectionsWithEvidenceReceipts.goals_json,
+    daily_support_json: sectionsWithEvidenceReceipts.daily_support_json,
+    monitoring_json: sectionsWithEvidenceReceipts.monitoring_json,
+    escalation_json: sectionsWithEvidenceReceipts.escalation_json,
+    caregiver_guidance_json: sectionsWithEvidenceReceipts.caregiver_guidance_json,
+    source_signals_json: sourceSignals,
+    data_quality_gaps_json: dataQualityGaps,
+    completed_improvement_actions_json: completedImprovementActions,
+    feedback_entries_json: feedbackEntries,
+    inferred_feedback_json: inferredFeedback,
+    recommendation_learning_json: recommendationLearning,
+    quality_snapshot_json: qualitySnapshot,
     generator_provider: nullIfBlank(row.generator_provider),
     generator_model: nullIfBlank(row.generator_model),
     generator_version: nullIfBlank(row.generator_version),
@@ -776,6 +1281,29 @@ function normalizeHealthPlanRow(row) {
 
 function normalizeHealthPlanRevisionRow(row) {
   if (!row) return null;
+  const sourceSignals = normalizeHealthPlanSourceSignals(row.source_signals_json);
+  const signalTriage = buildHealthPlanSignalTriage(sourceSignals);
+  const qualitySnapshot = normalizeHealthPlanQualitySnapshot(row.quality_snapshot_json);
+  const dataQualityGaps = normalizeHealthPlanDataQualityGaps(
+    row.data_quality_gaps_json || buildHealthPlanDataQualityGaps({ sourceSignals }),
+  );
+  const completedImprovementActions = normalizeCompletedHealthPlanImprovementActions(row.completed_improvement_actions_json);
+  const feedbackEntries = normalizeHealthPlanFeedbackEntries(row.feedback_entries_json);
+  const inferredFeedback = normalizeHealthPlanFeedbackEntries(row.inferred_feedback_json);
+  const recommendationLearning = normalizeHealthPlanRecommendationLearning(row.recommendation_learning_json);
+  const enrichedSections = enrichHealthPlanSections({
+    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
+    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
+    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
+    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
+  }, { sourceSignals, signalTriage });
+  const sectionsWithEvidenceReceipts = attachHealthPlanEvidenceReceipts(enrichedSections, {
+    sourceSignals,
+    signalTriage,
+    qualitySnapshot,
+  });
+  const summarySignalIds = inferHealthPlanSummarySignalIds(row.summary_signal_ids_json, sourceSignals, signalTriage, enrichedSections);
   return {
     id: String(row.id),
     health_plan_id: row.health_plan_id == null ? null : String(row.health_plan_id),
@@ -789,13 +1317,28 @@ function normalizeHealthPlanRevisionRow(row) {
     language: normalizeLanguage(row.language, "de"),
     status: nullIfBlank(row.status) || "current",
     review_status: nullIfBlank(row.review_status) === "reviewed" ? "reviewed" : "draft",
+    escalation_grade: ["routine", "heightened", "urgent"].includes(nullIfBlank(row.escalation_grade)) ? row.escalation_grade : "routine",
+    review_required: Boolean(row.review_required),
+    review_window: ["today", "this_week", "ongoing"].includes(nullIfBlank(row.review_window)) ? row.review_window : "ongoing",
+    review_summary: nullIfBlank(row.review_summary),
+    review_reasons_json: Array.isArray(row.review_reasons_json) ? row.review_reasons_json : [],
+    review_note: nullIfBlank(row.review_note),
+    review_checklist_json: normalizeHealthPlanReviewChecklist(row.review_checklist_json),
+    recommendation_review_decisions_json: normalizeHealthPlanRecommendationReviewDecisions(row.recommendation_review_decisions_json),
     summary_text: nullIfBlank(row.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(row.goals_json),
-    daily_support_json: normalizeHealthPlanSectionItems(row.daily_support_json),
-    monitoring_json: normalizeHealthPlanSectionItems(row.monitoring_json),
-    escalation_json: normalizeHealthPlanSectionItems(row.escalation_json),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(row.caregiver_guidance_json),
-    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+    summary_signal_ids: summarySignalIds,
+    goals_json: sectionsWithEvidenceReceipts.goals_json,
+    daily_support_json: sectionsWithEvidenceReceipts.daily_support_json,
+    monitoring_json: sectionsWithEvidenceReceipts.monitoring_json,
+    escalation_json: sectionsWithEvidenceReceipts.escalation_json,
+    caregiver_guidance_json: sectionsWithEvidenceReceipts.caregiver_guidance_json,
+    source_signals_json: sourceSignals,
+    data_quality_gaps_json: dataQualityGaps,
+    completed_improvement_actions_json: completedImprovementActions,
+    feedback_entries_json: feedbackEntries,
+    inferred_feedback_json: inferredFeedback,
+    recommendation_learning_json: recommendationLearning,
+    quality_snapshot_json: qualitySnapshot,
     generator_provider: nullIfBlank(row.generator_provider),
     generator_model: nullIfBlank(row.generator_model),
     generator_version: nullIfBlank(row.generator_version),
@@ -838,7 +1381,60 @@ async function loadHealthPlanHistory(userId, context, client = { query }) {
       `,
       [userId, scopeOrganizationId(context)],
     );
-    return result.rows.map(normalizeHealthPlanRevisionRow);
+    return annotateHealthPlanHistory(result.rows.map(normalizeHealthPlanRevisionRow));
+  } catch (error) {
+    if (error.code === "42P01") return [];
+    throw error;
+  }
+}
+
+function normalizeHealthPlanPeerCohortRow(row) {
+  if (!row) return null;
+  return {
+    vyva_user_id: row.vyva_user_id == null ? null : String(row.vyva_user_id),
+    language: normalizeLanguage(row.language || row.user_language, "de"),
+    user_language: normalizeLanguage(row.user_language || row.language, "de"),
+    living_context: normalizeLivingContextValue(row.living_context),
+    health_conditions: Array.isArray(row.health_conditions) ? row.health_conditions.filter(Boolean) : [],
+    mobility_needs: Array.isArray(row.mobility_needs) ? row.mobility_needs.filter(Boolean) : [],
+    recommendation_learning_json: normalizeHealthPlanRecommendationLearning(row.recommendation_learning_json),
+    quality_snapshot_json: normalizeHealthPlanQualitySnapshot(row.quality_snapshot_json),
+    source_signals_json: normalizeHealthPlanSourceSignals(row.source_signals_json),
+    reviewed_at: normalizeTimestampValue(row.reviewed_at),
+    generated_at: normalizeTimestampValue(row.generated_at),
+  };
+}
+
+async function loadHealthPlanPeerCohortContext(userId, organizationId, client = { query }) {
+  if (!userId || !organizationId) return [];
+  try {
+    const result = await client.query(
+      `
+        SELECT
+          hp.vyva_user_id::text,
+          hp.language,
+          hp.reviewed_at,
+          hp.generated_at,
+          hp.recommendation_learning_json,
+          hp.quality_snapshot_json,
+          hp.source_signals_json,
+          u.language AS user_language,
+          u.living_context,
+          h.health_conditions,
+          h.mobility_needs
+        FROM public.vyva_user_health_plans hp
+        JOIN public.vyva_users u ON u.id = hp.vyva_user_id
+        LEFT JOIN public.vyva_user_health h ON h.vyva_user_id = hp.vyva_user_id
+        WHERE hp.organization_id = $1
+          AND hp.vyva_user_id <> $2
+        ORDER BY
+          CASE WHEN hp.review_status = 'reviewed' THEN 0 ELSE 1 END,
+          COALESCE(hp.reviewed_at, hp.generated_at, hp.updated_at) DESC
+        LIMIT 24
+      `,
+      [organizationId, userId],
+    );
+    return result.rows.map(normalizeHealthPlanPeerCohortRow).filter(Boolean);
   } catch (error) {
     if (error.code === "42P01") return [];
     throw error;
@@ -931,6 +1527,21 @@ function summarizeServiceStatus(service, label) {
   return { label, detail: details.join(" · ") };
 }
 
+function riskStrengthFromBand(value) {
+  const band = String(value || "").trim().toLowerCase();
+  if (["critical", "high", "urgent"].includes(band)) return "high";
+  if (["moderate", "medium"].includes(band)) return "medium";
+  return "low";
+}
+
+function serviceStrengthFromStatus(service) {
+  if (!service) return "low";
+  const enabled = Boolean(service.enabled);
+  const status = String(firstValue(service.last_outcome, service.lastOutcome, service.status) || "").trim().toLowerCase();
+  if (!enabled || /\bmissed|pending|failed|unconfirmed|disabled|off\b/.test(status)) return "high";
+  return "medium";
+}
+
 function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   const user = profile?.user || {};
   const health = profile?.health || {};
@@ -939,13 +1550,28 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
   const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
   const signalItems = [];
+  const latestMedicationStatus = String(profile?.medicationActivity?.status || "").trim().toLowerCase();
+  const remindersDisabled = medications.filter((med) => med?.reminders_enabled === false).length;
+  const familyConsent = Boolean(profile?.consent?.caretaker_consent ?? profile?.consent?.consent_given);
+  const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+    medications,
+    medicationActivity: profile?.medicationActivity || null,
+    checkins: profile?.checkins || null,
+    brainCoach: profile?.brainCoach || null,
+    sensors,
+    alerts,
+    recentOperationalEvents: profile?.recentOperationalEvents || [],
+  });
 
   if (predictiveContext?.latestScore) {
     const score = Number(predictiveContext.latestScore.composite_score);
     const band = nullIfBlank(predictiveContext.latestScore.risk_band) || "unknown";
     const delta = predictiveContext.latestScore.delta_from_prior == null ? null : Number(predictiveContext.latestScore.delta_from_prior);
     signalItems.push({
+      id: "risk-latest-score",
       label: `Predictive risk score ${Number.isFinite(score) ? score.toFixed(0) : "unknown"} (${band})`,
+      category: "risk",
+      strength: riskStrengthFromBand(band),
       detail: [
         predictiveContext.latestScore.score_date ? `As of ${predictiveContext.latestScore.score_date}` : null,
         delta == null || Number.isNaN(delta)
@@ -959,7 +1585,10 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
     });
   } else {
     signalItems.push({
+      id: "risk-latest-score",
       label: "Predictive insights unavailable",
+      category: "risk",
+      strength: "medium",
       detail: "This plan used live profile, service, medication, caregiver, and sensor data instead.",
     });
   }
@@ -970,14 +1599,20 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
       return `Day ${row.horizon_day}: ${Number.isFinite(score) ? score.toFixed(0) : "unknown"}`;
     }).join(" · ");
     signalItems.push({
+      id: "forecast-near-term",
       label: "Risk forecast",
+      category: "forecast",
+      strength: "medium",
       detail: nextForecast,
     });
   }
 
   if (alerts.length) {
     signalItems.push({
+      id: "alert-active",
       label: `${alerts.length} active alert${alerts.length === 1 ? "" : "s"}`,
+      category: "alert",
+      strength: "high",
       detail: alerts.slice(0, 3).map((alert) => nullIfBlank(alert.message) || nullIfBlank(alert.alert_type)).filter(Boolean).join(" · "),
     });
   }
@@ -990,7 +1625,10 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
       .slice(0, 4)
       .join(", ");
     signalItems.push({
+      id: "medication-plan",
       label: `${medications.length} medication${medications.length === 1 ? "" : "s"} on file`,
+      category: "medication",
+      strength: ["missed", "late", "skipped", "unconfirmed"].includes(latestMedicationStatus) || remindersDisabled ? "high" : "medium",
       detail: [
         disabled ? `${disabled} reminder${disabled === 1 ? "" : "s"} currently off` : null,
         times ? `Saved reminder times ${times}` : null,
@@ -999,32 +1637,75 @@ function assembleHealthPlanSourceSignals(profile, predictiveContext) {
     });
   }
 
-  signalItems.push(summarizeServiceStatus(profile?.checkins, "Check-ins"));
-  signalItems.push(summarizeServiceStatus(profile?.brainCoach, "Brain Coach"));
+  signalItems.push({
+    id: "service-checkins",
+    category: "service",
+    strength: serviceStrengthFromStatus(profile?.checkins),
+    ...summarizeServiceStatus(profile?.checkins, "Check-ins"),
+  });
+  signalItems.push({
+    id: "service-brain-coach",
+    category: "service",
+    strength: serviceStrengthFromStatus(profile?.brainCoach),
+    ...summarizeServiceStatus(profile?.brainCoach, "Brain Coach"),
+  });
 
   if (sensors.length) {
     const offline = sensors.filter((sensor) => String(sensor?.status || "").toLowerCase() !== "online").length;
     signalItems.push({
+      id: "sensor-status",
       label: `${sensors.length} sensor${sensors.length === 1 ? "" : "s"} linked`,
+      category: "sensor",
+      strength: offline ? "high" : "medium",
       detail: offline ? `${offline} offline or not reporting` : "All currently reporting",
     });
   }
+
+  signalItems.push({
+    id: "consent-family-sharing",
+    label: familyConsent ? "Family sharing consent confirmed" : "Family sharing consent not confirmed",
+    category: "care-circle",
+    strength: familyConsent ? "low" : "high",
+    detail: familyConsent
+      ? "Caregiver-facing guidance can stay practical and specific."
+      : "Keep client-specific guidance narrow until the sharing boundary is confirmed.",
+  });
 
   const healthHighlights = [
     ...(Array.isArray(health?.health_conditions) ? health.health_conditions : []),
     ...(Array.isArray(health?.mobility_needs) ? health.mobility_needs : []),
   ].filter(Boolean);
   const livingContext = normalizeLivingContextValue(firstValue(user.living_context, user.livingContext));
-  if (healthHighlights.length || careProviders.length || livingContext) {
+  if (healthHighlights.length || careProviders.length || livingContext || !careProviders.length) {
     signalItems.push({
-      label: "Profile context",
+      id: "care-circle-context",
+      label: "Care circle context",
+      category: "care-circle",
+      strength: careProviders.length ? "medium" : "high",
       detail: [
         livingContext ? `Living context ${livingContext}` : null,
         healthHighlights.slice(0, 4).join(", ") || null,
-        careProviders.length ? `${careProviders.length} care provider assignment${careProviders.length === 1 ? "" : "s"}` : null,
+        careProviders.length
+          ? `${careProviders.length} care provider assignment${careProviders.length === 1 ? "" : "s"}`
+          : "No care provider assignment recorded",
       ].filter(Boolean).join(" · "),
     });
   }
+
+  if (healthHighlights.length || livingContext) {
+    signalItems.push({
+      id: "context-live-profile",
+      label: "Profile context",
+      category: "context",
+      strength: "medium",
+      detail: [
+        livingContext ? `Living context ${livingContext}` : null,
+        healthHighlights.slice(0, 4).join(", ") || null,
+      ].filter(Boolean).join(" Â· "),
+    });
+  }
+
+  signalItems.push(...buildHealthPlanLiveEvidenceSignals(liveEvidenceSummary));
 
   return normalizeHealthPlanSourceSignals(signalItems);
 }
@@ -1041,37 +1722,492 @@ function deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSig
   const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
   const offlineSensors = sensors.some((sensor) => String(sensor?.status || "").toLowerCase() !== "online");
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+    medications: profile?.medications || [],
+    medicationActivity: profile?.medicationActivity || null,
+    checkins: profile?.checkins || null,
+    brainCoach: profile?.brainCoach || null,
+    sensors,
+    alerts: profile?.alerts || [],
+    recentOperationalEvents: profile?.recentOperationalEvents || [],
+  });
 
   if (["critical", "high", "urgent"].includes(riskBand)) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /predictive risk score/i.test(signal?.label)));
+    critical.push("risk-latest-score");
   }
   if (hasActiveAlerts) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /active alert/i.test(signal?.label)));
+    critical.push("alert-active");
   }
   if (["missed", "late", "skipped", "unconfirmed"].includes(latestMedicationStatus)) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /medication/i.test(signal?.label)));
+    critical.push("medication-plan");
   }
   if (offlineSensors) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /sensor/i.test(signal?.label)));
+    critical.push("sensor-status");
   }
   if (!careProviders.length) {
-    critical.push(findHealthPlanSignalId(sourceSignals, (signal) => /profile context/i.test(signal?.label)));
+    critical.push("care-circle-context");
+  }
+  if (liveEvidenceSummary?.contact_pressure?.status === "pressure") {
+    critical.push("service-engagement");
+    critical.push("contact-trend-window");
+  }
+  if (liveEvidenceSummary?.medication_adherence?.status === "pressure") {
+    critical.push("medication-adherence-trend");
+  }
+  if (liveEvidenceSummary?.sensor_reliability?.status === "pressure") {
+    critical.push("sensor-reliability");
   }
 
-  return [...new Set(critical.filter(Boolean))];
+  return [...new Set(critical.filter((signalId) => sourceSignals.some((signal) => signal?.id === signalId)))];
 }
 
-function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language) {
+const healthPlanSectionDefinitions = [
+  { storageKey: "goals_json", outputKey: "goals", promptLabel: "goals" },
+  { storageKey: "daily_support_json", outputKey: "daily_support", promptLabel: "daily support" },
+  { storageKey: "monitoring_json", outputKey: "monitoring", promptLabel: "monitoring" },
+  { storageKey: "escalation_json", outputKey: "escalation", promptLabel: "escalation signs" },
+  { storageKey: "caregiver_guidance_json", outputKey: "caregiver_guidance", promptLabel: "caregiver guidance" },
+];
+
+const healthPlanSectionDefinitionByStorageKey = Object.fromEntries(
+  healthPlanSectionDefinitions.map((definition) => [definition.storageKey, definition]),
+);
+
+function buildHealthPlanGovernanceSnapshot({
+  sourceSignals = [],
+  signalTriage = {},
+  criticalSignalIds = [],
+  dataQualityGaps = [],
+  followThrough = null,
+  sectionDrift = [],
+  feedbackEntries = [],
+} = {}) {
+  const evidenceConflicts = buildHealthPlanEvidenceConflicts({
+    sourceSignals,
+    feedbackEntries,
+    followThrough,
+    sectionDrift,
+  });
+  const escalationGrade = buildHealthPlanEscalationGrade({
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds,
+    followThrough,
+    evidenceConflicts,
+  });
+  const reviewGovernance = buildHealthPlanReviewGovernance({
+    escalationGrade,
+    dataQualityGaps,
+    followThrough,
+    evidenceConflicts,
+  });
+  return {
+    escalationGrade,
+    evidenceConflicts,
+    reviewGovernance,
+  };
+}
+
+function applyHealthPlanConfidenceCalibration(
+  plan,
+  {
+    sourceSignals = [],
+    dataQualityGaps = [],
+    evidenceConflicts = [],
+    followThrough = null,
+    sectionDrift = [],
+  } = {},
+) {
+  const confidenceProfile = buildHealthPlanConfidenceProfile({
+    plan,
+    sourceSignals,
+    dataQualityGaps,
+    evidenceConflicts,
+    followThrough,
+    sectionDrift,
+  });
+  return {
+    plan: confidenceProfile?.plan || plan,
+    confidenceProfile,
+  };
+}
+
+function normalizeHealthPlanTargetSections(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value
+      .map((item) => nullIfBlank(item))
+      .filter((item) => item && healthPlanSectionDefinitionByStorageKey[item]),
+  )];
+}
+
+function assembleHealthPlanPromptInput(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  language,
+  existingPlan = null,
+  existingPlanFeedback = null,
+  existingPlanHistory = [],
+  options = {},
+) {
   const user = profile?.user || {};
   const health = profile?.health || {};
   const medications = Array.isArray(profile?.medications) ? profile.medications : [];
   const sensors = Array.isArray(profile?.sensors) ? profile.sensors : [];
   const alerts = Array.isArray(profile?.alerts) ? profile.alerts : [];
   const careProviders = Array.isArray(profile?.careProviders) ? profile.careProviders : [];
+  const recentOperationalEvents = buildHealthPlanOperationalActivitySummary(profile?.recentOperationalEvents, 10);
+  const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+    medications,
+    medicationActivity: profile?.medicationActivity || null,
+    checkins: profile?.checkins || null,
+    brainCoach: profile?.brainCoach || null,
+    sensors,
+    alerts,
+    recentOperationalEvents: profile?.recentOperationalEvents || [],
+  });
+  const longitudinalMemory = buildHealthPlanLongitudinalMemory({
+    liveEvidenceSummary,
+    history: existingPlanHistory,
+  });
+  const targetSections = normalizeHealthPlanTargetSections(options?.targetSections);
   const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+  const dataQualityGaps = buildHealthPlanDataQualityGaps({ profile, predictiveContext, sourceSignals });
+  const existingPlanSectionDrift = existingPlan
+    ? buildHealthPlanSectionDrift({
+      plan: existingPlan,
+      dataQualityGaps,
+      followThrough: existingPlanFeedback,
+    })
+    : [];
+  const completedImprovementActions = normalizeCompletedHealthPlanImprovementActions(existingPlan?.completed_improvement_actions_json);
+  const explicitFeedbackEntries = normalizeHealthPlanFeedbackEntries(existingPlan?.feedback_entries_json);
+  const inferredOperationalFeedback = existingPlan
+    ? buildHealthPlanInferredFeedbackEntries({
+      plan: existingPlan,
+      profile,
+      predictiveContext,
+      followThrough: existingPlanFeedback,
+    })
+    : [];
+  const feedbackEntries = [...explicitFeedbackEntries, ...inferredOperationalFeedback].sort((left, right) => {
+    const leftTime = left?.recorded_at ? new Date(left.recorded_at).getTime() : 0;
+    const rightTime = right?.recorded_at ? new Date(right.recorded_at).getTime() : 0;
+    return rightTime - leftTime;
+  });
+  const evidenceHierarchy = buildHealthPlanEvidenceHierarchy({
+    sourceSignals,
+    feedbackEntries,
+  });
+  const evidenceConflicts = buildHealthPlanEvidenceConflicts({
+    sourceSignals,
+    feedbackEntries,
+    followThrough: existingPlanFeedback,
+    sectionDrift: existingPlanSectionDrift,
+  });
+  const escalationGrade = buildHealthPlanGovernanceSnapshot({
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds,
+    dataQualityGaps,
+    followThrough: existingPlanFeedback,
+    sectionDrift: existingPlanSectionDrift,
+    feedbackEntries,
+  }).escalationGrade;
+  const improvementActions = buildHealthPlanImprovementActions({
+    dataQualityGaps,
+    followThrough: existingPlanFeedback,
+    sectionDrift: existingPlanSectionDrift,
+    completedActions: completedImprovementActions,
+  });
+  const sectionOutcomes = existingPlan
+    ? buildHealthPlanOutcomeScores({
+      plan: existingPlan,
+      feedbackEntries,
+      followThrough: existingPlanFeedback,
+      sectionDrift: existingPlanSectionDrift,
+    })
+    : [];
+  const recommendationLearning = existingPlan
+    ? buildHealthPlanRecommendationOutcomeMemory({
+      plan: existingPlan,
+      feedbackEntries,
+      followThrough: existingPlanFeedback,
+      sectionDrift: existingPlanSectionDrift,
+      recentOperationalEvents: profile?.recentOperationalEvents,
+      sourceSignals,
+    })
+    : [];
+  const signalPreferenceWeights = existingPlan
+    ? buildHealthPlanSignalPreferenceWeights({
+      plan: existingPlan,
+      feedbackEntries,
+      sourceSignals,
+      followThrough: existingPlanFeedback,
+      sectionDrift: existingPlanSectionDrift,
+      recentOperationalEvents: profile?.recentOperationalEvents,
+    })
+    : [];
+  const recommendationSurvivorship = existingPlan
+    ? buildHealthPlanRecommendationSurvivorship({
+      history: Array.isArray(existingPlanHistory) && existingPlanHistory.length
+        ? existingPlanHistory
+        : [existingPlan],
+    })
+    : null;
+  const recommendationRevisionMemory = existingPlan || (Array.isArray(existingPlanHistory) && existingPlanHistory.length)
+    ? buildHealthPlanRecommendationRevisionMemory({
+      history: Array.isArray(existingPlanHistory) && existingPlanHistory.length
+        ? existingPlanHistory
+        : [existingPlan],
+      recommendationSurvivorship,
+    })
+    : null;
+  const qualityMemory = existingPlan || (Array.isArray(existingPlanHistory) && existingPlanHistory.length)
+    ? buildHealthPlanQualityMemory({
+      existingPlan,
+      history: existingPlanHistory,
+    })
+    : null;
+  const outcomePatternMemory = existingPlan || (Array.isArray(existingPlanHistory) && existingPlanHistory.length)
+    ? buildHealthPlanOutcomePatternMemory({
+      existingPlan,
+      history: existingPlanHistory,
+    })
+    : null;
+  const clientResponseMemory = buildHealthPlanClientResponseMemory({
+    recentOperationalEvents: profile?.recentOperationalEvents,
+    recommendationLearning,
+    sectionOutcomes,
+    sourceSignals,
+  });
+  const evidencePack = buildHealthPlanEvidencePack({
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds,
+    evidenceHierarchy,
+    evidenceConflicts,
+    escalationGrade,
+    dataQualityGaps,
+    followThrough: existingPlanFeedback,
+    qualityMemory,
+  });
+  const benchmarkGuidance = buildHealthPlanBenchmarkGuidance({
+    sourceSignals,
+    evidencePack,
+  });
+  const interventionMemory = existingPlan
+    ? buildHealthPlanInterventionMemory({
+      plan: existingPlan,
+      dataQualityGaps,
+      followThrough: existingPlanFeedback,
+      sectionDrift: existingPlanSectionDrift,
+      completedActions: completedImprovementActions,
+      feedbackEntries,
+    })
+    : [];
+  const confidenceGuardrails = buildHealthPlanConfidenceProfile({
+    sourceSignals,
+    dataQualityGaps,
+    evidenceConflicts,
+    followThrough: existingPlanFeedback,
+    sectionDrift: existingPlanSectionDrift,
+  });
+  const clinicalCautions = buildHealthPlanClinicalCautions({
+    sourceSignals,
+    followThrough: existingPlanFeedback,
+  });
+  const criticalResponseBrief = buildHealthPlanCriticalResponseBrief({
+    sourceSignals,
+    evidencePack,
+    escalationGrade,
+    clinicalCautions,
+    careProviders,
+  });
+  const clinicalCautionIssues = existingPlan
+    ? findHealthPlanClinicalCautionIssues(existingPlan, {
+      sourceSignals,
+      followThrough: existingPlanFeedback,
+      clinicalCautions,
+    })
+    : [];
+  const reviewGovernance = buildHealthPlanReviewGovernance({
+    escalationGrade,
+    dataQualityGaps,
+    followThrough: existingPlanFeedback,
+    evidenceConflicts,
+  });
+  const existingPlanFreshness = existingPlan
+    ? buildHealthPlanFreshnessSnapshot({
+      plan: existingPlan,
+      followThrough: existingPlanFeedback,
+      recentOperationalEvents: profile?.recentOperationalEvents,
+      reviewGovernance,
+      sectionDrift: existingPlanSectionDrift,
+    })
+    : null;
+  const existingPlanRefreshStrategy = existingPlan
+    ? buildHealthPlanRefreshStrategy({
+      freshness: existingPlanFreshness,
+      sectionDrift: existingPlanSectionDrift,
+      clinicalCautions,
+      clinicalCautionIssues,
+      reviewGovernance,
+      followThrough: existingPlanFeedback,
+    })
+    : null;
+  const reviewPriorities = buildHealthPlanReviewPriorities({
+    sourceSignals,
+    escalationGrade,
+    reviewGovernance,
+    confidenceProfile: confidenceGuardrails,
+    evidencePack,
+    sectionOutcomes,
+    qualityMemory,
+    clientResponseMemory,
+    clinicalCautions,
+    freshness: existingPlanFreshness,
+    refreshStrategy: existingPlanRefreshStrategy,
+  });
+  const readiness = buildHealthPlanReadiness({
+    dataQualityGaps,
+    confidenceProfile: confidenceGuardrails,
+    reviewGovernance,
+    liveEvidenceSummary,
+    freshness: existingPlanFreshness,
+    longitudinalMemory,
+  });
+  const operationalCompleteness = existingPlan
+    ? buildHealthPlanOperationalCompleteness({
+      plan: existingPlan,
+      reviewPriorities,
+      escalationGrade,
+      liveEvidenceSummary,
+    })
+    : null;
+  const actionImpact = existingPlan
+    ? buildHealthPlanActionImpact({
+      plan: existingPlan,
+      followThrough: existingPlanFeedback,
+      recentOperationalEvents: profile?.recentOperationalEvents,
+      liveEvidenceSummary,
+      operationalCompleteness,
+    })
+    : null;
+  const recommendationImpact = existingPlan
+    ? buildHealthPlanRecommendationImpact({
+      plan: existingPlan,
+      recentOperationalEvents: profile?.recentOperationalEvents,
+      liveEvidenceSummary,
+      followThrough: existingPlanFeedback,
+      sourceSignals,
+    })
+    : null;
+  const recommendationEffectiveness = buildHealthPlanRecommendationEffectiveness({
+    recommendationLearning,
+    recommendationSurvivorship,
+    recommendationImpact,
+  });
+  const resolvedCohortGuidance = buildHealthPlanCohortGuidance({
+    profile: {
+      language: normalizeLanguage(firstValue(user.language, user.lang), language),
+      living_context: normalizeLivingContextValue(firstValue(user.living_context, user.livingContext)),
+      health_conditions: Array.isArray(health?.health_conditions) ? health.health_conditions.filter(Boolean) : [],
+      mobility_needs: Array.isArray(health?.mobility_needs) ? health.mobility_needs.filter(Boolean) : [],
+    },
+    peerPlans: Array.isArray(options?.peerCohort) ? options.peerCohort : [],
+    clientResponseMemory,
+    recommendationEffectiveness,
+  });
+  const recommendationHistory = existingPlan || (Array.isArray(existingPlanHistory) && existingPlanHistory.length)
+    ? buildHealthPlanRecommendationHistory({
+      history: Array.isArray(existingPlanHistory) && existingPlanHistory.length
+        ? existingPlanHistory
+        : [existingPlan],
+      recommendationImpact,
+      recommendationEffectiveness,
+    })
+    : null;
+  const recommendationRepairBrief = buildHealthPlanRecommendationRepairBrief({
+    recommendationLearning,
+    recommendationEffectiveness,
+    recommendationGrounding: null,
+    recommendationChallenges: null,
+    recommendationSourceRanking: null,
+  });
+  const recommendationEvidenceDiversity = existingPlan
+    ? buildHealthPlanRecommendationEvidenceDiversity({
+      recommendationSourceRanking: buildHealthPlanRecommendationSourceRanking({
+        plan: existingPlan,
+        sourceSignals,
+        evidenceHierarchy,
+        signalPreferenceWeights,
+        recommendationEffectiveness,
+      }),
+    })
+    : null;
+  const recommendationReview = existingPlan
+    ? buildHealthPlanRecommendationReviewSummary({
+      plan: existingPlan,
+      recommendationImpact,
+      recommendationHistory,
+      recommendationEvidenceDiversity,
+      recommendationGrounding: null,
+      recommendationChallenges: null,
+      recommendationReviewDecisions: existingPlan.recommendation_review_decisions_json,
+    })
+    : null;
+  const recommendationChallenges = existingPlan
+    ? buildHealthPlanRecommendationChallenges({
+      plan: existingPlan,
+      sourceSignals,
+      reviewPriorities,
+      liveEvidenceSummary,
+      longitudinalMemory,
+    })
+    : null;
+  const executionBrief = existingPlan
+    ? buildHealthPlanExecutionBrief({
+      plan: existingPlan,
+      reviewPriorities,
+      escalationGrade,
+      liveEvidenceSummary,
+    })
+    : null;
+  const reviewRemediation = existingPlan?.quality_snapshot_json?.review_remediation || null;
+  const existingPlanCalibration = existingPlan?.quality_snapshot_json?.recommendation_calibration
+    ? buildHealthPlanCalibrationRepairBrief(existingPlan.quality_snapshot_json.recommendation_calibration)
+    : null;
+  const generationBrief = buildHealthPlanGenerationBrief({
+    sourceSignals,
+    signalTriage,
+    evidenceHierarchy,
+    evidencePack,
+    reviewPriorities,
+    clinicalCautions,
+    recommendationRepairBrief,
+    clientResponseMemory,
+    recommendationEffectiveness,
+    recommendationChallenges,
+    benchmarkGuidance,
+    executionBrief,
+    reviewRemediation,
+    cohortGuidance: resolvedCohortGuidance,
+    liveEvidenceSummary,
+    longitudinalMemory,
+    refreshStrategy: existingPlanRefreshStrategy,
+    targetSections,
+  });
+  const responseAdjudicationBrief = buildHealthPlanResponseAdjudicationBrief({
+    generationBrief,
+    criticalResponseBrief,
+  });
 
   return {
     language,
+    generation_brief: generationBrief,
     client: {
       first_name: nullIfBlank(firstValue(user.first_name, user.firstName)),
       last_name: nullIfBlank(firstValue(user.last_name, user.lastName)),
@@ -1130,6 +2266,16 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
       alert_type: nullIfBlank(alert?.alert_type),
       created_at: formatTimestampForPlan(alert?.created_at),
     })),
+    recent_operational_events: recentOperationalEvents.map((event) => ({
+      source: event.source,
+      status: nullIfBlank(event.status),
+      occurred_at: formatTimestampForPlan(event.occurred_at),
+      label: nullIfBlank(event.label),
+      note: nullIfBlank(event.note),
+      signal_ids: Array.isArray(event.signal_ids) ? event.signal_ids : [],
+    })),
+    live_evidence_summary: liveEvidenceSummary,
+    longitudinal_memory: longitudinalMemory,
     care_providers: careProviders.map((provider) => ({
       display_name: nullIfBlank(provider?.display_name),
       provider_type: nullIfBlank(provider?.provider_type),
@@ -1139,9 +2285,202 @@ function assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals
     predictive: predictiveContext?.latestScore || predictiveContext?.forecastRows?.length
       ? predictiveContext
       : { unavailable: true },
+    existing_plan: existingPlan
+      ? {
+          generated_at: existingPlan.generated_at || null,
+          reviewed_at: existingPlan.reviewed_at || null,
+          review_status: existingPlan.review_status || null,
+          review_note: existingPlan.review_note || null,
+          review_checklist: normalizeHealthPlanReviewChecklist(existingPlan.review_checklist_json),
+          recommendation_review_decisions: normalizeHealthPlanRecommendationReviewDecisions(existingPlan.recommendation_review_decisions_json),
+          summary_text: existingPlan.summary_text || null,
+          summary_signal_ids: normalizeHealthPlanSignalIds(existingPlan.summary_signal_ids),
+          goals: normalizeHealthPlanSectionItems(existingPlan.goals_json),
+          daily_support: normalizeHealthPlanSectionItems(existingPlan.daily_support_json),
+          monitoring: normalizeHealthPlanSectionItems(existingPlan.monitoring_json),
+          escalation: normalizeHealthPlanSectionItems(existingPlan.escalation_json),
+          caregiver_guidance: normalizeHealthPlanSectionItems(existingPlan.caregiver_guidance_json),
+        }
+      : null,
+    existing_plan_feedback: existingPlanFeedback || null,
+    existing_plan_freshness: existingPlanFreshness,
+    existing_plan_refresh_strategy: existingPlanRefreshStrategy,
+    existing_plan_section_drift: existingPlanSectionDrift,
+    existing_plan_calibration: existingPlanCalibration,
+    escalation_grade: buildHealthPlanEscalationGradeBrief(escalationGrade),
+    review_governance: reviewGovernance,
+    evidence_hierarchy: buildHealthPlanEvidenceHierarchyBrief(evidenceHierarchy),
+    evidence_conflicts: evidenceConflicts.slice(0, 8),
+    explicit_staff_feedback: explicitFeedbackEntries,
+    inferred_operational_feedback: inferredOperationalFeedback,
+    section_outcomes: buildHealthPlanOutcomeScoreBrief(sectionOutcomes),
+    recommendation_learning: recommendationLearning.slice(0, 12).map((item) => ({
+      item_id: item.item_id,
+      section_key: item.section_key,
+      section_label: item.section_label,
+      text: item.text,
+      status: item.status,
+      score: item.score,
+      latest_outcome: item.latest_outcome,
+      inherited_section_outcome: item.inherited_section_outcome,
+      freshness_status: item.freshness_status,
+      feedback_count: item.feedback_count,
+      helped_count: item.helped_count,
+      mixed_count: item.mixed_count,
+      did_not_help_count: item.did_not_help_count,
+      needs_follow_up_count: item.needs_follow_up_count,
+      operational_positive_count: item.operational_positive_count,
+      operational_caution_count: item.operational_caution_count,
+      operational_pattern: item.operational_pattern,
+      operational_source_labels: item.operational_source_labels,
+      operational_reason: item.operational_reason,
+      last_operational_at: item.last_operational_at,
+      trajectory: item.trajectory,
+      reuse_priority: item.reuse_priority,
+      contradiction_status: item.contradiction_status,
+      contradiction_reason: item.contradiction_reason,
+      reason: item.reason,
+      source_signal_ids: item.source_signal_ids,
+    })),
+    recommendation_survivorship: recommendationSurvivorship
+      ? {
+          summary: recommendationSurvivorship.summary,
+          durable: recommendationSurvivorship.durable.slice(0, 6),
+          emerging: recommendationSurvivorship.emerging.slice(0, 6),
+          fragile: recommendationSurvivorship.fragile.slice(0, 6),
+          retired: recommendationSurvivorship.retired.slice(0, 6),
+        }
+      : null,
+    recommendation_revision_memory: recommendationRevisionMemory
+      ? {
+          summary: recommendationRevisionMemory.summary,
+          improved_count: recommendationRevisionMemory.improved_count,
+          preserved_count: recommendationRevisionMemory.preserved_count,
+          unresolved_count: recommendationRevisionMemory.unresolved_count,
+          regressed_count: recommendationRevisionMemory.regressed_count,
+          improved: recommendationRevisionMemory.improved.slice(0, 6),
+          preserved: recommendationRevisionMemory.preserved.slice(0, 6),
+          unresolved: recommendationRevisionMemory.unresolved.slice(0, 6),
+          regressed: recommendationRevisionMemory.regressed.slice(0, 6),
+        }
+      : null,
+    quality_memory: qualityMemory
+      ? {
+          summary: qualityMemory.summary,
+          latest_review_judgment: qualityMemory.latest_review_judgment,
+          current_guardrails: qualityMemory.current_guardrails.slice(0, 5),
+          repeated_refresh_sections: qualityMemory.repeated_refresh_sections.slice(0, 5),
+          recurring_quality_risks: qualityMemory.recurring_quality_risks.slice(0, 6),
+          candidate_selection_memory: qualityMemory.candidate_selection_memory || null,
+          durable_patterns: qualityMemory.durable_patterns.slice(0, 5),
+          fragile_patterns: qualityMemory.fragile_patterns.slice(0, 5),
+        }
+      : null,
+    outcome_pattern_memory: outcomePatternMemory
+      ? {
+          summary: outcomePatternMemory.summary,
+          total_revisions: outcomePatternMemory.total_revisions,
+          stable_response_anchors: outcomePatternMemory.stable_response_anchors.slice(0, 4),
+          fragile_response_anchors: outcomePatternMemory.fragile_response_anchors.slice(0, 4),
+          preserve_patterns: outcomePatternMemory.preserve_patterns.slice(0, 5),
+          watch_patterns: outcomePatternMemory.watch_patterns.slice(0, 5),
+          replace_patterns: outcomePatternMemory.replace_patterns.slice(0, 5),
+          unstable_sections: outcomePatternMemory.unstable_sections.slice(0, 5),
+          stable_domains: outcomePatternMemory.stable_domains.slice(0, 4),
+          fragile_domains: outcomePatternMemory.fragile_domains.slice(0, 4),
+          guardrails: outcomePatternMemory.guardrails.slice(0, 6),
+        }
+      : null,
+    client_response_memory: clientResponseMemory,
+    cohort_guidance: resolvedCohortGuidance,
+    evidence_pack: evidencePack,
+    benchmark_guidance: benchmarkGuidance,
+    signal_preference_weights: signalPreferenceWeights.slice(0, 10),
+    recommendation_effectiveness: recommendationEffectiveness,
+    recommendation_impact: recommendationImpact,
+    recommendation_history: recommendationHistory
+      ? {
+          overall_status: recommendationHistory.overall_status,
+          summary: recommendationHistory.summary,
+          improving_count: recommendationHistory.improving_count,
+          stable_count: recommendationHistory.stable_count,
+          deteriorating_count: recommendationHistory.deteriorating_count,
+          volatile_count: recommendationHistory.volatile_count,
+          repeated_contradiction_count: recommendationHistory.repeated_contradiction_count,
+          high_priority_deteriorating_count: recommendationHistory.high_priority_deteriorating_count,
+          items: recommendationHistory.items.slice(0, 6),
+        }
+      : null,
+    recommendation_evidence_diversity: recommendationEvidenceDiversity
+      ? {
+          overall_status: recommendationEvidenceDiversity.overall_status,
+          summary: recommendationEvidenceDiversity.summary,
+          strong_count: recommendationEvidenceDiversity.strong_count,
+          guarded_count: recommendationEvidenceDiversity.guarded_count,
+          fragile_count: recommendationEvidenceDiversity.fragile_count,
+          high_priority_fragile_count: recommendationEvidenceDiversity.high_priority_fragile_count,
+          issues: recommendationEvidenceDiversity.issues.slice(0, 6),
+          items: recommendationEvidenceDiversity.items.slice(0, 6),
+        }
+      : null,
+    recommendation_review: recommendationReview,
+    recommendation_challenges: recommendationChallenges,
+    execution_brief: executionBrief,
+    review_remediation: reviewRemediation,
+    operational_completeness: operationalCompleteness,
+    action_impact: actionImpact,
+    recommendation_repair_brief: recommendationRepairBrief,
+    critical_response_brief: criticalResponseBrief,
+    response_adjudication_brief: responseAdjudicationBrief,
+    intervention_memory: buildHealthPlanInterventionMemoryBrief(interventionMemory),
+    completed_improvement_actions: buildCompletedHealthPlanImprovementBrief(completedImprovementActions),
+    review_priorities: reviewPriorities,
+    confidence_guardrails: {
+      overall_status: confidenceGuardrails.overall_status,
+      summary: confidenceGuardrails.summary,
+      reasons: confidenceGuardrails.reasons.slice(0, 5),
+      section_confidence: confidenceGuardrails.section_confidence.map((item) => ({
+        section_key: item.section_key,
+        max_confidence: item.max_confidence,
+        reasons: item.reasons.slice(0, 3),
+      })),
+    },
+    clinical_cautions: clinicalCautions,
+    target_sections: targetSections.length
+      ? targetSections.map((sectionKey) => {
+          const definition = healthPlanSectionDefinitionByStorageKey[sectionKey];
+          const driftItem = existingPlanSectionDrift.find((item) => item?.section_key === sectionKey);
+          return {
+            section_key: sectionKey,
+            section_label: definition?.promptLabel || sectionKey,
+            current_items: normalizeHealthPlanSectionItems(existingPlan?.[sectionKey]),
+            drift_status: driftItem?.status || "fresh",
+            drift_reasons: Array.isArray(driftItem?.reasons) ? driftItem.reasons : [],
+          };
+        })
+      : [],
     critical_signal_ids: criticalSignalIds,
+    signal_triage: signalTriage,
+    data_quality_gaps: dataQualityGaps,
+    improvement_actions: buildHealthPlanImprovementBrief(improvementActions),
+    readiness,
     source_signals: sourceSignals,
   };
+}
+
+function assertHealthPlanReadinessForGeneration(promptInput, label = "Health plan generation") {
+  const readiness = promptInput?.readiness || null;
+  if (!shouldBlockHealthPlanReadiness(readiness)) return;
+  const blocker = Array.isArray(readiness?.blocking_reasons) ? readiness.blocking_reasons[0] : null;
+  const action = Array.isArray(readiness?.collection_actions) ? readiness.collection_actions[0] : null;
+  const message = [
+    text(blocker?.label) || text(readiness?.summary) || `${label} is blocked until more evidence is collected.`,
+    text(action?.action) ? `Next step: ${text(action.action)}` : "",
+  ].filter(Boolean).join(" ");
+  throw healthPlanGenerationError(409, message, {
+    code: "health_plan_readiness_blocked",
+    readiness,
+  });
 }
 
 function getAgeFromDateOfBirth(value) {
@@ -1151,6 +2490,77 @@ function getAgeFromDateOfBirth(value) {
   if (Number.isNaN(birth.getTime())) return null;
   return Math.floor((Date.now() - birth.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
 }
+
+function buildStoredInferredFeedbackSnapshot(existingPlan, profile, predictiveContext, followThrough) {
+  if (!existingPlan) return [];
+  return buildHealthPlanInferredFeedbackEntries({
+    plan: existingPlan,
+    profile,
+    predictiveContext,
+    followThrough,
+  });
+}
+
+function assertNoRecommendationCarryForward({
+  existingPlan = null,
+  nextPlan = null,
+  promptInput = null,
+  targetSections = [],
+  label = "health plan generation",
+} = {}) {
+  const issues = findHealthPlanRecommendationCarryForwardIssues({
+    existingPlan,
+    recommendationLearning: promptInput?.recommendation_learning || [],
+    nextPlan,
+    targetSections,
+  });
+  if (!issues.length) return;
+  const first = issues[0];
+  throw httpError(
+    502,
+    `${label} repeated a recommendation that prior evidence marked for replacement in ${first.section_key || "the plan"}: ${first.text || "unchanged recommendation"}`,
+  );
+}
+
+const structuredHealthPlanSectionItemSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["text", "source_signal_ids"],
+  properties: {
+    text: { type: "string" },
+    source_signal_ids: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+    },
+    priority: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    confidence: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+    timing: {
+      type: "string",
+      enum: ["today", "this_week", "ongoing"],
+    },
+    verification_required: {
+      type: "boolean",
+    },
+    completion_signal: {
+      type: "string",
+    },
+    owner_role: {
+      type: "string",
+      enum: ["assigned_staff", "caregiver", "on_call_coordinator", "care_team"],
+    },
+    fallback_owner_role: {
+      type: "string",
+      enum: ["assigned_staff", "caregiver", "on_call_coordinator", "care_team"],
+    },
+  },
+};
 
 const structuredHealthPlanSchema = {
   type: "object",
@@ -1166,104 +2576,80 @@ const structuredHealthPlanSchema = {
     goals: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanSectionItemSchema,
     },
     daily_support: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanSectionItemSchema,
     },
     monitoring: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanSectionItemSchema,
     },
     escalation: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanSectionItemSchema,
     },
     caregiver_guidance: {
       type: "array",
       minItems: 1,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["text", "source_signal_ids"],
-        properties: {
-          text: { type: "string" },
-          source_signal_ids: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string" },
-          },
-        },
-      },
+      items: structuredHealthPlanSectionItemSchema,
     },
   },
 };
+
+function buildStructuredHealthPlanPartialSchema(sectionKeys) {
+  const normalizedKeys = normalizeHealthPlanTargetSections(sectionKeys);
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["summary_text", "summary_signal_ids", ...normalizedKeys.map((sectionKey) => healthPlanSectionDefinitionByStorageKey[sectionKey].outputKey)],
+    properties: {
+      summary_text: { type: "string" },
+      summary_signal_ids: {
+        type: "array",
+        minItems: 1,
+        items: { type: "string" },
+      },
+      ...Object.fromEntries(
+        normalizedKeys.map((sectionKey) => [
+          healthPlanSectionDefinitionByStorageKey[sectionKey].outputKey,
+          {
+            type: "array",
+            minItems: 1,
+            items: structuredHealthPlanSectionItemSchema,
+          },
+        ]),
+      ),
+    },
+  };
+}
 
 function normalizeGeneratedHealthPlan(value) {
   const plan = objectValue(value);
   if (!plan) throw httpError(502, "Health plan generation returned an empty response");
   const summaryText = nullIfBlank(plan.summary_text);
   if (!summaryText) throw httpError(502, "Health plan generation returned an invalid summary");
-  return {
-    summary_text: summaryText,
-    summary_signal_ids: Array.isArray(plan.summary_signal_ids) ? plan.summary_signal_ids.map((item) => nullIfBlank(item)).filter(Boolean) : [],
+  const sourceSignals = normalizeHealthPlanSourceSignals(plan.source_signals_json);
+  const signalTriage = buildHealthPlanSignalTriage(sourceSignals);
+  const enrichedSections = enrichHealthPlanSections({
     goals_json: normalizeHealthPlanSectionItems(plan.goals),
     daily_support_json: normalizeHealthPlanSectionItems(plan.daily_support),
     monitoring_json: normalizeHealthPlanSectionItems(plan.monitoring),
     escalation_json: normalizeHealthPlanSectionItems(plan.escalation),
     caregiver_guidance_json: normalizeHealthPlanSectionItems(plan.caregiver_guidance),
+  }, { sourceSignals, signalTriage });
+  return {
+    summary_text: summaryText,
+    summary_signal_ids: Array.isArray(plan.summary_signal_ids) ? plan.summary_signal_ids.map((item) => nullIfBlank(item)).filter(Boolean) : [],
+    goals_json: enrichedSections.goals_json,
+    daily_support_json: enrichedSections.daily_support_json,
+    monitoring_json: enrichedSections.monitoring_json,
+    escalation_json: enrichedSections.escalation_json,
+    caregiver_guidance_json: enrichedSections.caregiver_guidance_json,
   };
 }
 
@@ -1286,6 +2672,13 @@ function healthPlanTextContainsForbiddenMedicalClaims(text) {
 function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) {
   const sourceSignalIds = new Set(sourceSignals.map((signal) => signal.id));
   const criticalSignalIds = new Set(Array.isArray(promptInput?.critical_signal_ids) ? promptInput.critical_signal_ids : []);
+  const signalTriage = promptInput?.signal_triage || {};
+  const escalationGrade = promptInput?.escalation_grade
+    || buildHealthPlanEscalationGrade({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds: [...criticalSignalIds],
+    });
   const sections = [
     ["goals", generatedPlan.goals_json],
     ["daily_support", generatedPlan.daily_support_json],
@@ -1296,29 +2689,29 @@ function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) 
   const referencedIds = new Set();
 
   const requireValidSignalRefs = (items, sectionName) => {
-    if (!Array.isArray(items) || items.length === 0) throw httpError(502, `Health plan generation returned an empty ${sectionName} section`);
+    if (!Array.isArray(items) || items.length === 0) throw healthPlanGenerationError(502, `Health plan generation returned an empty ${sectionName} section`);
     for (const item of items) {
       if (healthPlanTextContainsForbiddenMedicalClaims(item?.text)) {
-        throw httpError(502, `Health plan generation returned unsafe medical guidance in ${sectionName}`);
+        throw healthPlanGenerationError(502, `Health plan generation returned unsafe medical guidance in ${sectionName}`);
       }
       const refs = Array.isArray(item?.source_signal_ids) ? item.source_signal_ids.filter(Boolean) : [];
-      if (!refs.length) throw httpError(502, `Health plan generation returned a ${sectionName} item without evidence links`);
+      if (!refs.length) throw healthPlanGenerationError(502, `Health plan generation returned a ${sectionName} item without evidence links`);
       for (const ref of refs) {
-        if (!sourceSignalIds.has(ref)) throw httpError(502, `Health plan generation referenced an unknown source signal in ${sectionName}`);
+        if (!sourceSignalIds.has(ref)) throw healthPlanGenerationError(502, `Health plan generation referenced an unknown source signal in ${sectionName}`);
         referencedIds.add(ref);
       }
     }
   };
 
   if (healthPlanTextContainsForbiddenMedicalClaims(generatedPlan.summary_text)) {
-    throw httpError(502, "Health plan generation returned unsafe medical guidance in the summary");
+    throw healthPlanGenerationError(502, "Health plan generation returned unsafe medical guidance in the summary");
   }
 
   if (!Array.isArray(generatedPlan.summary_signal_ids) || generatedPlan.summary_signal_ids.length === 0) {
-    throw httpError(502, "Health plan generation returned a summary without evidence links");
+    throw healthPlanGenerationError(502, "Health plan generation returned a summary without evidence links");
   }
   for (const ref of generatedPlan.summary_signal_ids) {
-    if (!sourceSignalIds.has(ref)) throw httpError(502, "Health plan generation referenced an unknown source signal in the summary");
+    if (!sourceSignalIds.has(ref)) throw healthPlanGenerationError(502, "Health plan generation referenced an unknown source signal in the summary");
     referencedIds.add(ref);
   }
 
@@ -1326,16 +2719,190 @@ function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) 
 
   const escalationRefs = new Set((generatedPlan.escalation_json || []).flatMap((item) => item?.source_signal_ids || []));
   const monitoringRefs = new Set((generatedPlan.monitoring_json || []).flatMap((item) => item?.source_signal_ids || []));
+  const summaryRefs = new Set(Array.isArray(generatedPlan.summary_signal_ids) ? generatedPlan.summary_signal_ids : []);
+  const goalsRefs = new Set((generatedPlan.goals_json || []).flatMap((item) => item?.source_signal_ids || []));
+  const dailyRefs = new Set((generatedPlan.daily_support_json || []).flatMap((item) => item?.source_signal_ids || []));
   for (const criticalId of criticalSignalIds) {
     if (!referencedIds.has(criticalId)) {
-      throw httpError(502, "Health plan generation did not address a critical client signal");
+      throw healthPlanGenerationError(502, "Health plan generation did not address a critical client signal");
     }
   }
   if (criticalSignalIds.size && (!escalationRefs.size || !monitoringRefs.size)) {
-    throw httpError(502, "Health plan generation did not include enough monitoring or escalation support for critical signals");
+    throw healthPlanGenerationError(502, "Health plan generation did not include enough monitoring or escalation support for critical signals");
   }
 
-  return generatedPlan;
+  const actionSignalIds = Array.isArray(signalTriage?.action_signal_ids) ? signalTriage.action_signal_ids.filter((id) => sourceSignalIds.has(id)) : [];
+  if (actionSignalIds.length) {
+    const actionCovered = actionSignalIds.some((id) => summaryRefs.has(id) || monitoringRefs.has(id) || escalationRefs.has(id));
+    if (!actionCovered) {
+      throw healthPlanGenerationError(502, "Health plan generation did not ground the summary or response path in the strongest action-driving signals");
+    }
+  }
+  const stabilizingSignalIds = Array.isArray(signalTriage?.stabilizing_signal_ids) ? signalTriage.stabilizing_signal_ids.filter((id) => sourceSignalIds.has(id)) : [];
+  if (stabilizingSignalIds.length) {
+    const stabilizingCovered = stabilizingSignalIds.some((id) => goalsRefs.has(id) || dailyRefs.has(id));
+    if (!stabilizingCovered) {
+      throw healthPlanGenerationError(502, "Health plan generation did not preserve any grounded stabilizing routines in goals or daily support");
+    }
+  }
+  const confidenceGuardrails = promptInput?.confidence_guardrails || null;
+  const fragileConfidenceSections = Array.isArray(confidenceGuardrails?.section_confidence)
+    ? confidenceGuardrails.section_confidence.filter((item) => item?.max_confidence === "low").map((item) => item.section_key)
+    : [];
+  if (
+    fragileConfidenceSections.includes("monitoring_json")
+    && !String(generatedPlan.summary_text || "").toLowerCase().includes("verif")
+    && !String(generatedPlan.summary_text || "").toLowerCase().includes("confirm")
+    && !String(generatedPlan.summary_text || "").toLowerCase().includes("check")
+  ) {
+    throw healthPlanGenerationError(502, "Health plan generation sounded too certain for a monitoring picture that still needs verification");
+  }
+
+  const coverageIssues = findHealthPlanCoverageIssues(generatedPlan, {
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds: [...criticalSignalIds],
+  });
+  if (coverageIssues.length) {
+    throw healthPlanGenerationError(502, coverageIssues[0].message || "Health plan generation missed required support coverage");
+  }
+  const safetyIssues = findHealthPlanSafetyIssues(generatedPlan, {
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds: [...criticalSignalIds],
+  });
+  if (safetyIssues.length) {
+    throw healthPlanGenerationError(502, safetyIssues[0].message || "Health plan generation returned wording that is not operationally safe enough");
+  }
+  const escalationGradeIssues = findHealthPlanEscalationGradeIssues(generatedPlan, {
+    escalationGrade,
+    sourceSignals,
+  });
+  if (escalationGradeIssues.length) {
+    throw healthPlanGenerationError(502, escalationGradeIssues[0].message || "Health plan generation did not respect the required escalation floor");
+  }
+  const clinicalCautionIssues = findHealthPlanClinicalCautionIssues(generatedPlan, {
+    sourceSignals,
+    followThrough: promptInput?.existing_plan_feedback || null,
+    clinicalCautions: promptInput?.clinical_cautions || null,
+  });
+  if (clinicalCautionIssues.length) {
+    throw healthPlanGenerationError(502, clinicalCautionIssues[0].message || "Health plan generation missed a clinically important caution response");
+  }
+  const criticalResponseIssues = findHealthPlanCriticalResponseIssues(generatedPlan, promptInput?.critical_response_brief || null);
+  if (criticalResponseIssues.length) {
+    throw healthPlanGenerationError(502, criticalResponseIssues[0].message || "Health plan generation diluted a critical response contract");
+  }
+  const responseAdjudicationIssues = findHealthPlanResponseAdjudicationIssues(generatedPlan, promptInput?.response_adjudication_brief || null);
+  if (responseAdjudicationIssues.length) {
+    throw healthPlanGenerationError(502, responseAdjudicationIssues[0].message || "Health plan generation did not prioritize the right response path first");
+  }
+  const evidenceCoverageIssues = findHealthPlanEvidenceCoverageIssues(generatedPlan, promptInput?.evidence_pack || null);
+  if (evidenceCoverageIssues.length) {
+    throw healthPlanGenerationError(502, evidenceCoverageIssues[0].message || "Health plan generation did not cover the ranked evidence pack clearly enough");
+  }
+  let workingPlan = generatedPlan;
+  let recommendationSourceRanking = buildHealthPlanRecommendationSourceRanking({
+    plan: workingPlan,
+    sourceSignals,
+    evidenceHierarchy: promptInput?.evidence_hierarchy || [],
+    signalPreferenceWeights: promptInput?.signal_preference_weights || [],
+    recommendationEffectiveness: promptInput?.recommendation_effectiveness || null,
+    recommendationChallenges: promptInput?.recommendation_challenges || null,
+  });
+  let recommendationGrounding = buildHealthPlanRecommendationGrounding({
+    plan: workingPlan,
+    sourceSignals,
+    evidencePack: promptInput?.evidence_pack || null,
+    reviewPriorities: promptInput?.review_priorities || null,
+    confidenceProfile: promptInput?.confidence_guardrails || null,
+    recommendationSourceRanking,
+  });
+  const groundingCalibration = applyHealthPlanRecommendationGroundingCalibration({
+    plan: workingPlan,
+    grounding: recommendationGrounding,
+  });
+  if (Array.isArray(groundingCalibration?.adjustments) && groundingCalibration.adjustments.length > 0) {
+    workingPlan = groundingCalibration.plan || workingPlan;
+    recommendationSourceRanking = buildHealthPlanRecommendationSourceRanking({
+      plan: workingPlan,
+      sourceSignals,
+      evidenceHierarchy: promptInput?.evidence_hierarchy || [],
+      signalPreferenceWeights: promptInput?.signal_preference_weights || [],
+      recommendationEffectiveness: promptInput?.recommendation_effectiveness || null,
+      recommendationChallenges: promptInput?.recommendation_challenges || null,
+    });
+    recommendationGrounding = buildHealthPlanRecommendationGrounding({
+      plan: workingPlan,
+      sourceSignals,
+      evidencePack: promptInput?.evidence_pack || null,
+      reviewPriorities: promptInput?.review_priorities || null,
+      confidenceProfile: promptInput?.confidence_guardrails || null,
+      recommendationSourceRanking,
+    });
+  }
+  const generationBriefIssues = findHealthPlanGenerationBriefIssues(workingPlan, promptInput?.generation_brief || null);
+  if (shouldRejectHealthPlanGenerationBriefIssues(generationBriefIssues)) {
+    throw healthPlanGenerationError(
+      502,
+      generationBriefIssues[0]?.message || "Health plan generation drifted away from the ranked generation brief",
+    );
+  }
+  const recommendationEffectivenessIssues = findHealthPlanRecommendationEffectivenessIssues(workingPlan, promptInput?.recommendation_effectiveness || null);
+  if (recommendationEffectivenessIssues.length) {
+    throw healthPlanGenerationError(502, recommendationEffectivenessIssues[0].message || "Health plan generation ignored important recommendation-level outcome learning");
+  }
+  const recommendationSourceRankingIssues = findHealthPlanRecommendationSourceRankingIssues(
+    workingPlan,
+    recommendationSourceRanking,
+  );
+  if (recommendationSourceRankingIssues.length) {
+    throw healthPlanGenerationError(502, recommendationSourceRankingIssues[0].message || "Health plan generation leaned too heavily on weakly ranked evidence");
+  }
+  if (shouldRejectHealthPlanRecommendationGrounding(recommendationGrounding)) {
+    throw healthPlanGenerationError(
+      502,
+      recommendationGrounding?.issues?.[0]?.message || "Health plan generation returned a recommendation whose certainty still outruns the evidence",
+    );
+  }
+  const operationalCompleteness = buildHealthPlanOperationalCompleteness({
+    plan: workingPlan,
+    reviewPriorities: promptInput?.review_priorities || null,
+    escalationGrade: promptInput?.escalation_grade || null,
+    liveEvidenceSummary: promptInput?.live_evidence_summary || null,
+  });
+  if (shouldRejectHealthPlanOperationalCompleteness(operationalCompleteness)) {
+    throw healthPlanGenerationError(
+      502,
+      operationalCompleteness?.issues?.[0]?.message || "Health plan generation still left critical execution details too implicit for staff use",
+    );
+  }
+  const benchmarkAssessment = buildHealthPlanBenchmarkAssessment({
+    plan: workingPlan,
+    sourceSignals,
+    evidencePack: promptInput?.evidence_pack || null,
+    reviewPriorities: promptInput?.review_priorities || null,
+    confidenceProfile: promptInput?.confidence_guardrails || null,
+    followThrough: promptInput?.existing_plan_feedback || null,
+  });
+  if (shouldRejectHealthPlanBenchmarkAssessment(benchmarkAssessment)) {
+    const weakestMatch = Array.isArray(benchmarkAssessment?.evaluations)
+      ? benchmarkAssessment.evaluations.find((item) => Number(item?.match_score || 0) >= 70 && item?.overall_status === "fragile")
+        || benchmarkAssessment.evaluations[0]
+      : null;
+    throw healthPlanGenerationError(
+      502,
+      weakestMatch?.top_issue?.message || benchmarkAssessment?.summary || "Health plan generation failed a matched high-risk benchmark archetype",
+    );
+  }
+
+  return {
+    plan: workingPlan,
+    recommendation_calibration: buildHealthPlanRecommendationCalibrationSummary({
+      adjustments: groundingCalibration?.adjustments || [],
+      grounding: recommendationGrounding,
+    }),
+  };
 }
 
 function fallbackPlanText(language, key) {
@@ -1385,6 +2952,7 @@ function fallbackPlanText(language, key) {
 
 function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language) {
   const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profile, predictiveContext, sourceSignals);
+  const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
   const pickIds = (preferredMatchers, fallbackCount = 2) => {
     const matched = preferredMatchers
       .map((matcher) => sourceSignals.find(matcher)?.id)
@@ -1399,31 +2967,43 @@ function buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, lang
   const medicationRefs = pickIds([(signal) => /medication/i.test(signal?.label)]);
   const riskRefs = pickIds([(signal) => /predictive risk score/i.test(signal?.label), (signal) => /risk forecast/i.test(signal?.label)]);
   const alertRefs = pickIds([(signal) => /active alert/i.test(signal?.label), (signal) => /sensor/i.test(signal?.label)]);
-  const careCircleRefs = pickIds([(signal) => /profile context/i.test(signal?.label)]);
-
-  return {
-    summary_text: fallbackPlanText(language, "summaryLead"),
-    summary_signal_ids: ensureRefs([...riskRefs, ...alertRefs]),
+  const serviceRefs = pickIds([(signal) => /check-ins/i.test(signal?.label), (signal) => /brain coach/i.test(signal?.label)]);
+  const consentRefs = pickIds([(signal) => /sharing consent/i.test(signal?.label)]);
+  const careCircleRefs = pickIds([(signal) => /care circle context/i.test(signal?.label), (signal) => /profile context/i.test(signal?.label)]);
+  const actionRefs = ensureRefs(Array.isArray(signalTriage?.action_signal_ids) ? signalTriage.action_signal_ids : [...riskRefs, ...alertRefs]);
+  const verificationRefs = ensureRefs(Array.isArray(signalTriage?.verification_signal_ids) ? signalTriage.verification_signal_ids : [...alertRefs, ...medicationRefs]);
+  const stabilizingRefs = ensureRefs(Array.isArray(signalTriage?.stabilizing_signal_ids) ? signalTriage.stabilizing_signal_ids : [...medicationRefs, ...careCircleRefs]);
+  const enrichedSections = enrichHealthPlanSections({
     goals_json: [
-      { id: "goal-1", text: fallbackPlanText(language, "goalSafety"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "goal-2", text: fallbackPlanText(language, "goalRoutine"), source_signal_ids: ensureRefs([...medicationRefs, ...riskRefs]) },
+      { id: "goal-1", text: fallbackPlanText(language, "goalSafety"), source_signal_ids: actionRefs },
+      { id: "goal-2", text: fallbackPlanText(language, "goalRoutine"), source_signal_ids: ensureRefs([...stabilizingRefs, ...serviceRefs]) },
     ],
     daily_support_json: [
-      { id: "daily-1", text: fallbackPlanText(language, "supportDaily"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "daily-2", text: fallbackPlanText(language, "supportMedication"), source_signal_ids: ensureRefs(medicationRefs) },
+      { id: "daily-1", text: fallbackPlanText(language, "supportDaily"), source_signal_ids: ensureRefs([...stabilizingRefs, ...serviceRefs]) },
+      { id: "daily-2", text: fallbackPlanText(language, "supportMedication"), source_signal_ids: ensureRefs([...medicationRefs, ...stabilizingRefs]) },
     ],
     monitoring_json: [
-      { id: "monitor-1", text: fallbackPlanText(language, "monitoringRisk"), source_signal_ids: ensureRefs([...riskRefs, ...alertRefs]) },
-      { id: "monitor-2", text: fallbackPlanText(language, "monitoringAlerts"), source_signal_ids: ensureRefs(alertRefs) },
+      { id: "monitor-1", text: `${fallbackPlanText(language, "monitoringRisk")} ${signalTriage?.caution_summary_text || ""}`.trim(), source_signal_ids: ensureRefs([...actionRefs, ...verificationRefs]) },
+      { id: "monitor-2", text: fallbackPlanText(language, "monitoringAlerts"), source_signal_ids: ensureRefs([...verificationRefs, ...medicationRefs, ...serviceRefs]) },
     ],
     escalation_json: [
-      { id: "escalation-1", text: fallbackPlanText(language, "escalationUrgent"), source_signal_ids: ensureRefs([...alertRefs, ...riskRefs]) },
-      { id: "escalation-2", text: fallbackPlanText(language, "escalationCircle"), source_signal_ids: ensureRefs([...careCircleRefs, ...riskRefs]) },
+      { id: "escalation-1", text: fallbackPlanText(language, "escalationUrgent"), source_signal_ids: actionRefs },
+      { id: "escalation-2", text: fallbackPlanText(language, "escalationCircle"), source_signal_ids: ensureRefs([...careCircleRefs, ...verificationRefs]) },
     ],
     caregiver_guidance_json: [
-      { id: "caregiver-1", text: fallbackPlanText(language, "caregiverShare"), source_signal_ids: ensureRefs(careCircleRefs) },
-      { id: "caregiver-2", text: fallbackPlanText(language, "caregiverAction"), source_signal_ids: ensureRefs([...careCircleRefs, ...alertRefs]) },
+      { id: "caregiver-1", text: fallbackPlanText(language, "caregiverShare"), source_signal_ids: ensureRefs([...careCircleRefs, ...consentRefs]) },
+      { id: "caregiver-2", text: fallbackPlanText(language, "caregiverAction"), source_signal_ids: ensureRefs([...careCircleRefs, ...alertRefs, ...consentRefs]) },
     ],
+  }, { sourceSignals, signalTriage });
+
+  return {
+    summary_text: `${fallbackPlanText(language, "summaryLead")} ${signalTriage?.focus_summary_text || ""}`.trim(),
+    summary_signal_ids: actionRefs,
+    goals_json: enrichedSections.goals_json,
+    daily_support_json: enrichedSections.daily_support_json,
+    monitoring_json: enrichedSections.monitoring_json,
+    escalation_json: enrichedSections.escalation_json,
+    caregiver_guidance_json: enrichedSections.caregiver_guidance_json,
     generator_provider: "fallback",
     generator_model: "deterministic-template",
     generator_version: `${healthPlanGeneratorVersion}-fallback`,
@@ -1441,27 +3021,13 @@ function readResponseOutputText(body) {
   return fragments.join("\n").trim() || null;
 }
 
-async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language) {
-  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated");
-
-  const promptInput = assembleHealthPlanPromptInput(profile, predictiveContext, sourceSignals, language);
-  const systemPrompt = [
-    "You create personalized client support plans for a Red Cross operations console.",
-    "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
-    `Write all user-facing text in ${languageName(language)}.`,
-    "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
-    "Be specific to the provided profile, but avoid inventing facts.",
-    "Keep each list item concise and actionable.",
-    "Every summary and recommendation must cite one or more source signal ids from the provided source_signals array.",
-    "Critical signal ids must be addressed clearly in monitoring or escalation guidance.",
-    "Return only valid JSON that matches the provided schema.",
-  ].join(" ");
-  const userPrompt = [
-    "Generate a structured personalized health plan from this profile context.",
-    "If predictive data is missing, rely on the live care profile, services, medication, sensors, and alerts.",
-    JSON.stringify(promptInput, null, 2),
-  ].join("\n\n");
-
+async function requestStructuredOpenAiJson({
+  systemPrompt,
+  userPrompt,
+  schemaName,
+  schema,
+  errorLabel,
+} = {}) {
   const response = await fetch(`${openAiBaseUrl}/responses`, {
     method: "POST",
     headers: {
@@ -1477,9 +3043,9 @@ async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSi
       text: {
         format: {
           type: "json_schema",
-          name: "personalized_health_plan",
+          name: schemaName,
           strict: true,
-          schema: structuredHealthPlanSchema,
+          schema,
         },
       },
     }),
@@ -1487,38 +3053,785 @@ async function generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSi
 
   if (!response.ok) {
     const message = await response.text().catch(() => "");
-    throw httpError(502, `Health plan generation failed: ${message || response.statusText}`);
+    throw httpError(502, `${errorLabel} failed: ${message || response.statusText}`);
   }
 
   const body = await response.json();
   const outputText = readResponseOutputText(body);
-  if (!outputText) throw httpError(502, "Health plan generation returned no structured output");
+  if (!outputText) throw httpError(502, `${errorLabel} returned no structured output`);
 
-  let parsed;
   try {
-    parsed = JSON.parse(outputText);
+    return JSON.parse(outputText);
   } catch {
-    throw httpError(502, "Health plan generation returned malformed JSON");
+    throw httpError(502, `${errorLabel} returned malformed JSON`);
   }
-
-  return validateGeneratedHealthPlan({
-    ...normalizeGeneratedHealthPlan(parsed),
-    generator_provider: "openai",
-    generator_model: healthPlanOpenAiModel,
-    generator_version: healthPlanGeneratorVersion,
-  }, sourceSignals, promptInput);
 }
 
-async function generateHealthPlan(profile, predictiveContext, sourceSignals, language) {
-  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+function shouldAttemptHealthPlanRepair(error, failurePrefix) {
+  if (!error) return false;
+  const statusCode = Number(error?.statusCode || error?.status || 0);
+  if (statusCode !== 502) return false;
+  const message = String(error?.message || "");
+  return !message.startsWith(`${failurePrefix} failed:`);
+}
+
+function buildHealthPlanRepairPrompt({
+  promptInput,
+  previousDraft,
+  defectMessage,
+  instruction,
+  calibrationBrief = null,
+} = {}) {
+  return [
+    instruction || "Your previous draft did not pass the server review. Repair it and return a corrected JSON response.",
+    "Fix every issue listed below while staying grounded in the provided source signals.",
+    JSON.stringify({
+      validation_error: defectMessage,
+      calibration_brief: calibrationBrief,
+      previous_draft: previousDraft,
+      prompt_input: promptInput,
+    }, null, 2),
+  ].join("\n\n");
+}
+
+function evaluateAcceptedHealthPlanDraft({
+  plan,
+  sourceSignals,
+  promptInput,
+  recommendationCalibration = null,
+  label = "Health plan generation",
+} = {}) {
+  const acceptance = buildHealthPlanDraftAcceptance({
+    plan,
+    sourceSignals,
+    promptInput,
+    recommendationCalibration,
+  });
+  if (acceptance?.can_accept_for_generation) return acceptance;
+  const blocker = Array.isArray(acceptance?.blocking_items) ? acceptance.blocking_items[0] || null : null;
+  throw healthPlanGenerationError(
+    502,
+    blocker?.message || acceptance?.summary || `${label} did not pass the final usefulness and trust acceptance checks`,
+    {
+      code: "health_plan_draft_rejected",
+      acceptance,
+    },
+  );
+}
+
+function resolveHealthPlanCandidateCount(promptInput, options = {}) {
+  const explicitCount = Number.isFinite(Number(options?.candidateCount))
+    ? Number(options.candidateCount)
+    : Number.isFinite(healthPlanDirectCandidateCountOverride)
+      ? healthPlanDirectCandidateCountOverride
+      : null;
+  if (explicitCount !== null) {
+    return Math.max(1, Math.min(3, Math.round(explicitCount)));
+  }
+
+  const reviewWindow = String(promptInput?.review_governance?.review_window || "").trim().toLowerCase();
+  const escalationGrade = String(promptInput?.escalation_grade?.grade || "").trim().toLowerCase();
+  const liveStatus = String(promptInput?.live_evidence_summary?.status || "").trim().toLowerCase();
+  const readinessStatus = String(promptInput?.readiness?.overall_status || "").trim().toLowerCase();
+  const hasHighSeverityGap = Array.isArray(promptInput?.data_quality_gaps)
+    && promptInput.data_quality_gaps.some((gap) => String(gap?.severity || "").trim().toLowerCase() === "high");
+
+  if (reviewWindow === "today" || escalationGrade === "urgent" || liveStatus === "pressure") return 3;
+  if (escalationGrade === "heightened" || readinessStatus === "guarded" || hasHighSeverityGap) return 2;
+  return 1;
+}
+
+function assertAcceptedHealthPlanDraft({
+  plan,
+  sourceSignals,
+  promptInput,
+  recommendationCalibration = null,
+  label = "Health plan generation",
+} = {}) {
+  return evaluateAcceptedHealthPlanDraft({
+    plan,
+    sourceSignals,
+    promptInput,
+    recommendationCalibration,
+    label,
+  });
+}
+
+function finalizeGeneratedHealthPlanDraft({
+  parsed,
+  sourceSignals,
+  promptInput,
+  existingPlan = null,
+  label = "Health plan generation",
+  generationPath = "direct",
+} = {}) {
+  const normalizedPlan = normalizeGeneratedHealthPlan(parsed);
+  const enrichedSections = enrichHealthPlanSections({
+    goals_json: normalizedPlan.goals_json,
+    daily_support_json: normalizedPlan.daily_support_json,
+    monitoring_json: normalizedPlan.monitoring_json,
+    escalation_json: normalizedPlan.escalation_json,
+    caregiver_guidance_json: normalizedPlan.caregiver_guidance_json,
+  }, { sourceSignals, signalTriage: promptInput?.signal_triage || {} });
+  const calibrated = applyHealthPlanConfidenceCalibration({
+    ...normalizedPlan,
+    ...enrichedSections,
+  }, {
+    sourceSignals,
+    dataQualityGaps: promptInput?.data_quality_gaps || [],
+    evidenceConflicts: promptInput?.evidence_conflicts || [],
+    followThrough: promptInput?.existing_plan_feedback || null,
+    sectionDrift: promptInput?.existing_plan_section_drift || [],
+  });
+
+  const validated = validateGeneratedHealthPlan({
+    ...(calibrated.plan || { ...normalizedPlan, ...enrichedSections }),
+    generator_provider: "openai",
+    generator_model: healthPlanOpenAiModel,
+    generator_version: generationPath === "repair" ? `${healthPlanGeneratorVersion}-repair` : healthPlanGeneratorVersion,
+  }, sourceSignals, promptInput);
+  assertNoRecommendationCarryForward({
+    existingPlan,
+    nextPlan: validated.plan,
+    promptInput,
+    label,
+  });
+  const draftAcceptance = assertAcceptedHealthPlanDraft({
+    plan: validated.plan,
+    sourceSignals,
+    promptInput,
+    recommendationCalibration: validated.recommendation_calibration || null,
+    label,
+  });
+  return {
+    ...validated,
+    draft_acceptance: draftAcceptance,
+  };
+}
+
+function finalizeGeneratedHealthPlanSectionRefresh({
+  parsed,
+  sourceSignals,
+  promptInput,
+  existingPlan,
+  normalizedSections,
+  label = "Health plan section refresh",
+  generationPath = "direct",
+} = {}) {
+  const refreshedSections = {};
+  for (const sectionKey of normalizedSections) {
+    const definition = healthPlanSectionDefinitionByStorageKey[sectionKey];
+    refreshedSections[sectionKey] = normalizeHealthPlanSectionItems(parsed?.[definition.outputKey]);
+  }
+  const calibrated = applyHealthPlanConfidenceCalibration({
+    summary_text: nullIfBlank(parsed?.summary_text) || existingPlan?.summary_text || null,
+    summary_signal_ids: normalizeHealthPlanSignalIds(parsed?.summary_signal_ids),
+    ...enrichHealthPlanSections(refreshedSections, { sourceSignals, signalTriage: promptInput?.signal_triage || {} }),
+  }, {
+    sourceSignals,
+    dataQualityGaps: promptInput?.data_quality_gaps || [],
+    evidenceConflicts: promptInput?.evidence_conflicts || [],
+    followThrough: promptInput?.existing_plan_feedback || null,
+    sectionDrift: promptInput?.existing_plan_section_drift || [],
+  });
+
+  const refreshedPlan = {
+    ...calibrated.plan,
+    generator_provider: "openai",
+    generator_model: healthPlanOpenAiModel,
+    generator_version: generationPath === "repair" ? `${healthPlanGeneratorVersion}-repair` : healthPlanGeneratorVersion,
+  };
+  assertNoRecommendationCarryForward({
+    existingPlan,
+    nextPlan: refreshedPlan,
+    promptInput,
+    targetSections: normalizedSections,
+    label,
+  });
+  const mergedPlan = {
+    summary_text: refreshedPlan.summary_text || existingPlan.summary_text,
+    summary_signal_ids: refreshedPlan.summary_signal_ids?.length ? refreshedPlan.summary_signal_ids : existingPlan.summary_signal_ids,
+    goals_json: normalizedSections.includes("goals_json") ? refreshedPlan.goals_json : existingPlan.goals_json,
+    daily_support_json: normalizedSections.includes("daily_support_json") ? refreshedPlan.daily_support_json : existingPlan.daily_support_json,
+    monitoring_json: normalizedSections.includes("monitoring_json") ? refreshedPlan.monitoring_json : existingPlan.monitoring_json,
+    escalation_json: normalizedSections.includes("escalation_json") ? refreshedPlan.escalation_json : existingPlan.escalation_json,
+    caregiver_guidance_json: normalizedSections.includes("caregiver_guidance_json") ? refreshedPlan.caregiver_guidance_json : existingPlan.caregiver_guidance_json,
+    generator_provider: refreshedPlan.generator_provider,
+    generator_model: refreshedPlan.generator_model,
+    generator_version: refreshedPlan.generator_version,
+  };
+  const validated = validateGeneratedHealthPlan(mergedPlan, sourceSignals, promptInput);
+  const draftAcceptance = assertAcceptedHealthPlanDraft({
+    plan: validated.plan,
+    sourceSignals,
+    promptInput,
+    recommendationCalibration: validated.recommendation_calibration || null,
+    label,
+  });
+  return {
+    ...validated,
+    draft_acceptance: draftAcceptance,
+  };
+}
+
+async function generateHealthPlanWithOpenAI(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  language,
+  existingPlan = null,
+  existingPlanFeedback = null,
+  existingPlanHistory = [],
+  options = {},
+) {
+  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated");
+
+  const promptInput = options?.promptInput || assembleHealthPlanPromptInput(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    language,
+    existingPlan,
+    existingPlanFeedback,
+    existingPlanHistory,
+    options,
+  );
+  const systemPrompt = [
+    "You create personalized client support plans for a Red Cross operations console.",
+    "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
+    "Be specific to the provided profile, but avoid inventing facts.",
+    "Keep each list item concise and actionable.",
+    "Every summary and recommendation must cite one or more source signal ids from the provided source_signals array.",
+    "If a recommendation is marked high priority, today, or high confidence, ground it in strong live evidence rather than broad profile context alone.",
+    "When more than one relevant live signal is available, use multiple corroborating source_signal_ids for urgent guidance instead of leaning on a single weak cue.",
+    "If only weak or background context is available, soften the recommendation into verification, re-checking, or cautious follow-up language.",
+    "When the evidence is clear enough, include priority, confidence, and timing on each recommendation item using only the allowed enum values.",
+    "For same-day or high-priority recommendations, set verification_required to true unless the recommendation is purely stabilizing routine guidance with no live uncertainty.",
+    "For same-day or high-priority monitoring, escalation, or caregiver guidance recommendations, include owner_role so staff can see who owns the next step without inference. Use only one of: assigned_staff, caregiver, on_call_coordinator, care_team.",
+    "For same-day or high-priority recommendations, include completion_signal so staff know what outcome, confirmation, or documented handoff closes the loop.",
+    "For escalation or urgent follow-up recommendations, include fallback_owner_role when another person or team should take over if the first outreach path fails. Use only one of: assigned_staff, caregiver, on_call_coordinator, care_team.",
+    "Critical signal ids must be addressed clearly in monitoring or escalation guidance.",
+    "Treat signal_triage as the decision brief for this case: action_signal_ids should drive the summary and same-day response, verification_signal_ids should justify confirm or re-check language, stabilizing_signal_ids should preserve routines that are still helping, and background_signal_ids should stay secondary.",
+    "Treat generation_brief as the first-pass writing map. Start from its priority_signals and section_briefs before scanning the wider context. If lower-rank background context conflicts with this brief, keep the brief's act-now and verify priorities unless fresher explicit human judgment clearly overturns them.",
+    "Use evidence_pack as the ranked pre-write brief. Cover must_address_facts directly in the summary, monitoring, or escalation sections. Turn verification_needs into explicit confirm, re-check, or do-not-assume language. Preserve stabilizing_facts when they still fit the live picture. Resolve contradictions openly instead of smoothing them over. When a contradiction includes preferred_signal_ids, let those signals lead the wording. When it includes preserve_signal_ids, keep them only as conditional supporting context. If requires_verification is true, make the recommendation explicitly verification-led and respect contradiction.response_window timing. Do not let fragile_pattern_warnings slip back in without a fresh evidence-backed reason.",
+    "Treat escalation_grade as the minimum urgency floor for this case. If the grade is urgent, the summary, monitoring, and escalation sections should all read as same-day coordination guidance. If the grade is heightened, do not flatten it into routine wording.",
+    "When existing_plan.review_note is present, treat it as the latest explicit human review judgment about what was confirmed, what still needs watching, or why the plan was accepted.",
+    "When existing_plan.recommendation_review_decisions is present, treat it as the most specific human judgment on exact recommendations. Preserve approved recommendations when the live evidence still supports them, keep watch recommendations cautious and verification-led, and rewrite needs_edit recommendations substantively instead of lightly polishing them.",
+    "When existing_plan_calibration is present, treat it as the memory of where earlier AI drafts overstated certainty. Do not repeat those overconfident patterns. If a prior recommendation needed softer confidence or explicit verification wording, bake that caution directly into this draft instead of waiting for validator correction.",
+    "Use data_quality_gaps to narrow or soften claims when the underlying inputs are incomplete. When a high-severity gap exists, prefer verification language and conservative support guidance over assumptions.",
+    "Use improvement_actions as the ranked list of unresolved plan weaknesses. If an action is high priority, address it directly instead of repeating generic guidance.",
+    "Use completed_improvement_actions as proof of what staff already fixed or confirmed. Do not keep talking as if those exact issues are still unresolved unless the live signals clearly show they remain open.",
+    "Use explicit_staff_feedback and section_outcomes as the strongest evidence of what held up in practice. Preserve sections that staff marked helped unless stronger new evidence contradicts them. Rework sections marked did_not_help or needs_follow_up before repeating their old guidance.",
+    "When section_outcomes shows a strengthening trend or supportive evidence_balance, preserve that section's core routine unless stronger live evidence now contradicts it. When section_outcomes shows a weakening trend or caution evidence_balance, rewrite that section substantively instead of lightly polishing it. Use operational_learning_summary as the short explanation of what real follow-through has been teaching us.",
+    "Use client_response_memory to adapt the plan to how this specific client actually responds. Lean more on strongest_anchors when they still fit the live picture. Treat fragile_anchors as categories that need caution, tighter verification, or a different approach. Use response_by_source and category_patterns to understand whether outreach, check-ins, medication structure, or caregiver reinforcement is currently landing or breaking down.",
+    "Use cohort_guidance only as cautious same-organization fallback learning when this client's own history is thin or mixed. Never let cohort patterns override fresher client_response_memory, explicit_staff_feedback, live alerts, direct follow-through, or recommendation_effectiveness.",
+    "Use inferred_operational_feedback as observed evidence from real activity after the last plan, including check-in outcomes, Brain Coach outcomes, medication logs, alerts, and risk movement. Treat it as weaker than explicit human judgment but stronger than generic background context.",
+    "Use recent_operational_events as the freshest contact record across scheduled services, medication logs, and outreach activity. If these events show repeated misses or failed outreach, tighten monitoring and escalation wording.",
+    "Use live_evidence_summary as the pattern-level read of the current situation. Repeated missed touchpoints, unstable medication adherence, alert-heavy sensor pressure, or weak reachability should change the plan more than any single isolated event.",
+    "Use longitudinal_memory as the longer-pattern check. If a pressure area keeps resurfacing across recent plan cycles, treat it as persistent instability rather than short-lived noise, and avoid overly optimistic wording just because one recent signal looks calmer.",
+    "Use readiness as the evidence-sufficiency brief. If readiness is guarded, keep the wording modest and explicit about what still needs confirmation. Do not write as if blocked evidence gaps are already resolved.",
+    "Before finalizing each recommendation, challenge it: ask whether the evidence is strong enough, whether the wording sounds too optimistic for the live pressure, and what fallback applies if the first step fails.",
+    "Use existing_plan_freshness as the trust meter for the prior plan. If it is stale or critical, do not lightly recycle old guidance: refresh the affected sections decisively and treat post-checkpoint caution events as stronger than older reassuring signals.",
+    "Use existing_plan_refresh_strategy to see which sections deserve refresh first and which sections look stable enough to preserve. When it says full_regeneration_preferred, rebuild the plan decisively instead of making cosmetic edits.",
+    "Use recommendation_learning and signal_preference_weights to learn at the recommendation level, not just the section level. Prefer wording and routines tied to preserve signals, reuse_priority preserve recommendations, strengthening trajectories, and operational_pattern reinforcing. Be skeptical of recommendations tied to recheck signals, reuse_priority replace recommendations, weakening trajectories, or operational_pattern conflicting.",
+    "Use recommendation_effectiveness as the actionable keep-or-change brief. Protect preserve_now routines unless stronger live evidence now contradicts them. Rework rework_now routines instead of copying them forward unchanged. Do not let retire_now language come back unchanged unless fresh evidence now clearly reverses the old outcome.",
+    "Use recommendation_repair_brief as the per-recommendation edit map. Preserve items marked preserve unless fresher live evidence clearly overturns them. Rewrite items marked rework with clearer evidence, fallback, or verification wording. Replace items marked retire instead of bringing them back unchanged. Treat verify items as needing explicit confirm or re-check language.",
+    "Use recommendation_challenges as the skepticism map from the previous plan. If a recommendation was challenged for weak evidence, optimistic tone, or a missing fallback, fix that weakness directly instead of carrying the old pattern forward.",
+    "Use recommendation_survivorship as the cross-version memory of what keeps surviving for this client. Protect durable patterns unless fresher evidence clearly beats them, treat emerging patterns as promising but not proven, and do not resurrect retired patterns without a new reason.",
+    "Use recommendation_revision_memory as the rewrite-outcome memory across versions. Preserve recommendations that genuinely improved, keep steady preserved recommendations aligned with the current signals, fix unresolved rewrites directly instead of lightly polishing them, and do not resurrect regressed wording without fresh evidence.",
+    "Use quality_memory as the saved audit memory of where earlier plans stayed trustworthy or kept breaking down. Preserve durable_patterns unless fresher evidence clearly overturns them. If recurring_quality_risks or repeated_refresh_sections keep pointing at the same weakness, fix that weakness directly instead of lightly rephrasing it. Treat current_guardrails as live ceilings on certainty and keep fragile_patterns from slipping back in without a new evidence-backed reason.",
+    "Use quality_memory.candidate_selection_memory as the record of which recent drafts actually won and held up. Prefer the traits that recur in winning_strengths, and avoid the weak patterns called out in recurring_fragilities or guardrails when you have two plausible ways to phrase the plan.",
+    "Use outcome_pattern_memory as the cross-version record of what actually held up after follow-through. Prefer preserve_patterns, stable_response_anchors, and stable_domains when the same live evidence still exists. Keep watch_patterns and unstable_sections verification-led. Do not bring replace_patterns back unchanged unless fresh evidence clearly overturns the older outcome.",
+    "Use execution_brief as the operational handoff pattern from the prior plan. If it highlighted same-day actions, verification gaps, fallback gaps, or weak close-the-loop wording, fix those exact execution weaknesses directly in the new draft.",
+    "Use review_remediation as the concrete fix list from the previous quality review. If it called for section refreshes or a full rebuild, repair those weaknesses explicitly instead of lightly polishing around them.",
+    "Use operational_completeness as the execution-quality check. High-pressure sections should name who acts next, when they act, what trigger changes the response, and what the fallback route is if the first step fails. Caregiver guidance should say how to report back.",
+    "Use action_impact as the closed-loop outcome check on the prior plan. Preserve sections marked reinforced unless fresher live evidence now overturns them. Rewrite sections marked contradicted decisively instead of lightly polishing them. Treat mixed sections as needing tighter verification, fallback, or ownership wording before trusting them heavily.",
+    "Use recommendation_impact as the exact recommendation-level outcome check on the prior plan. Protect recommendations marked preserve or reinforced. Rewrite recommendations marked mixed with clearer verification or fallback wording. Replace recommendations marked contradicted or retire when fresher real-world evidence is already proving they are the wrong routine for this client.",
+    "Use recommendation_history as the cross-version outcome memory for exact recommendations. Protect stable or improving recommendations when they still fit the live picture, but replace deteriorating recommendations and tighten volatile ones instead of treating them as settled.",
+    "Use recommendation_evidence_diversity as the corroboration check for each recommendation. Be skeptical of recommendations marked fragile because they lean on one narrow or indirect source. When diversity is guarded, soften certainty or add explicit verification wording before staff act on it.",
+    "Use recommendation_review as the explicit human override lane for flagged recommendations. If staff marked a recommendation approved, preserve its core meaning unless fresher evidence clearly overturns it. If staff marked watch, keep it but make the wording explicitly monitored or verification-led. If staff marked needs_edit, rewrite it substantively and do not carry the old wording forward unchanged.",
+    "Use benchmark_guidance as the archetype backstop for this case. When a matched benchmark archetype is present, satisfy its required sections, timing pressure, verification language, and stabilizing anchors unless fresher client-specific evidence clearly makes that archetype irrelevant.",
+    "Use review_priorities as the human-review map. If a section is marked high priority or response_window today, make the wording concrete, explicitly verified, and operationally owned rather than generic. Treat why_now as the reason staff would pause on that section first.",
+    "Recent feedback should outweigh stale feedback. When older positive feedback now conflicts with live alerts, worsening risk, or drifted sections, prefer the live evidence and conservative verification language.",
+    "Use evidence_hierarchy to decide what should win when sources disagree: fresh staff feedback first, then live alerts and blocking operational signals, then live service or medication state, then predictive signals, and finally broader context.",
+    "Use evidence_conflicts to name where the record is disagreeing with itself. Resolve those conflicts explicitly instead of smoothing them over with generic wording.",
+    "Use intervention_memory as the client-specific learning loop. Preserve routines marked helping unless stronger new evidence contradicts them. Tighten, replace, or explicitly re-check routines marked fragile. Keep routines marked unproven conservative until fresh evidence supports them.",
+    "Use clinical_cautions as non-negotiable safety pressure. If a caution is present, the plan must include the named response path in the required sections instead of staying generic.",
+    "Use critical_response_brief as the life-safety action contract. For each active contract, carry its trigger signal ids into the named sections, keep the response window explicit, and do not omit owner, fallback, verification, or close-the-loop outcome.",
+    "Do not merge multiple same-day response contracts into one vague sentence. If two different high-risk contracts are active, keep both operationally visible in the relevant sections.",
+    "Use response_adjudication_brief as the ranking check for what should come first. Lead the summary, monitoring, and escalation sections with the top-ranked same-day contract before secondary risks. Keep the second-ranked same-day contract visible near the top instead of burying it later in the section.",
+    "When existing_plan_feedback is present, treat it as the reality check on the last plan. If it shows unresolved alerts, worsening risk, or no fresh follow-through, update the plan decisively rather than lightly rephrasing the prior version.",
+    "When existing_plan_section_drift is present, refresh the sections marked needs_refresh first. Preserve sections marked fresh unless the new evidence clearly contradicts them.",
+    "Use confidence_guardrails as a ceiling, not decoration. If a section is capped at medium or low confidence, write it with explicit verification language and avoid overstating certainty.",
+    "Do not let calmer background context outweigh the action or verification signals when they conflict.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    "Generate a structured personalized health plan from this profile context.",
+    "If predictive data is missing, rely on the live care profile, services, medication, sensors, and alerts.",
+    JSON.stringify(promptInput, null, 2),
+  ].join("\n\n");
+  const candidateCount = resolveHealthPlanCandidateCount(promptInput, options);
+  const directCandidates = [];
+  let repairSeedDraft = null;
+  let repairSeedError = null;
+
+  for (let attempt = 0; attempt < candidateCount; attempt += 1) {
+    const candidateLabel = candidateCount > 1
+      ? `Health plan generation candidate ${attempt + 1}/${candidateCount}`
+      : "Health plan generation";
+    let parsed = null;
     try {
-      return await generateHealthPlanWithOpenAI(profile, predictiveContext, sourceSignals, language);
+      parsed = await requestStructuredOpenAiJson({
+        systemPrompt,
+        userPrompt,
+        schemaName: "personalized_health_plan",
+        schema: structuredHealthPlanSchema,
+        errorLabel: candidateLabel,
+      });
+      repairSeedDraft = parsed;
+      const finalized = finalizeGeneratedHealthPlanDraft({
+        parsed,
+        sourceSignals,
+        promptInput,
+        existingPlan,
+        label: candidateLabel,
+      });
+      directCandidates.push({
+        ...finalized,
+        candidate_id: `candidate-${attempt + 1}`,
+      });
     } catch (error) {
-      console.warn("Health plan LLM generation failed, using deterministic fallback:", error?.message || error);
-      return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+      if (!repairSeedError && shouldAttemptHealthPlanRepair(error, candidateLabel)) {
+        repairSeedError = error;
+      }
+      if (candidateCount === 1) {
+        repairSeedDraft = parsed || repairSeedDraft;
+      }
     }
   }
-  return buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+
+  if (directCandidates.length > 0) {
+    const selection = selectBestHealthPlanCandidate(directCandidates);
+    const finalized = selection?.winner || directCandidates[0];
+    if (candidateCount > 1 && selection?.winner?.candidate_id) {
+      console.info(`Health plan generation selected ${selection.winner.candidate_id} from ${directCandidates.length} accepted candidate(s).`);
+    }
+    if (!shouldAttemptHealthPlanCalibrationRepair(finalized?.recommendation_calibration)) {
+      return {
+        ...finalized,
+        candidate_selection: buildHealthPlanCandidateSelectionSnapshot(selection),
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    }
+    try {
+      const repaired = await requestStructuredOpenAiJson({
+        systemPrompt,
+        userPrompt: buildHealthPlanRepairPrompt({
+          promptInput,
+          previousDraft: finalized.plan,
+          defectMessage: buildHealthPlanCalibrationRepairMessage(finalized.recommendation_calibration),
+          calibrationBrief: buildHealthPlanCalibrationRepairBrief(finalized.recommendation_calibration),
+          instruction: "Your previous personalized health plan draft only became acceptable after the server softened its confidence or added verification language. Rewrite it so those corrections are naturally present in the draft while staying client-specific and operationally useful.",
+        }),
+        schemaName: "personalized_health_plan_calibration_repair",
+        schema: structuredHealthPlanSchema,
+        errorLabel: "Health plan generation calibration repair",
+      });
+      return {
+        ...finalizeGeneratedHealthPlanDraft({
+          parsed: repaired,
+          sourceSignals,
+          promptInput,
+          existingPlan,
+          label: "Health plan generation calibration repair",
+          generationPath: "repair",
+        }),
+        candidate_selection: buildHealthPlanCandidateSelectionSnapshot(selection),
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    } catch (repairError) {
+      console.warn("Health plan calibration-aware repair failed, keeping validated draft:", repairError?.message || repairError);
+      return {
+        ...finalized,
+        candidate_selection: buildHealthPlanCandidateSelectionSnapshot(selection),
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    }
+  }
+
+  if (!repairSeedError || !repairSeedDraft) {
+    throw repairSeedError || httpError(502, "Health plan generation did not produce an accepted draft");
+  }
+
+  const repaired = await requestStructuredOpenAiJson({
+    systemPrompt,
+    userPrompt: buildHealthPlanRepairPrompt({
+      promptInput,
+      previousDraft: repairSeedDraft,
+      defectMessage: repairSeedError?.message || "The draft did not pass validation.",
+      calibrationBrief: existingPlan?.quality_snapshot_json?.recommendation_calibration || null,
+      instruction: "Your previous personalized health plan draft failed the server safety and evidence review. Repair it without weakening the client-specific guidance.",
+    }),
+    schemaName: "personalized_health_plan_repair",
+    schema: structuredHealthPlanSchema,
+    errorLabel: "Health plan generation repair",
+  });
+  return {
+    ...finalizeGeneratedHealthPlanDraft({
+      parsed: repaired,
+      sourceSignals,
+      promptInput,
+      existingPlan,
+      label: "Health plan generation repair",
+      generationPath: "repair",
+    }),
+    candidate_selection: buildHealthPlanCandidateSelectionSnapshot({
+      attempted_count: candidateCount,
+      accepted_count: 0,
+      rejected_count: candidateCount,
+      selection_summary: "No direct draft cleared acceptance, so a repair pass was used.",
+      winner: null,
+      ranked_candidates: [],
+    }),
+    cohort_guidance: promptInput?.cohort_guidance || null,
+  };
+}
+
+async function generateHealthPlan(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  language,
+  existingPlan = null,
+  existingPlanFeedback = null,
+  existingPlanHistory = [],
+  options = {},
+) {
+  const promptInput = assembleHealthPlanPromptInput(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    language,
+    existingPlan,
+    existingPlanFeedback,
+    existingPlanHistory,
+    options,
+  );
+  assertHealthPlanReadinessForGeneration(promptInput, "Health plan generation");
+  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+    try {
+      return await generateHealthPlanWithOpenAI(
+        profile,
+        predictiveContext,
+        sourceSignals,
+        language,
+        existingPlan,
+        existingPlanFeedback,
+        existingPlanHistory,
+        { ...options, promptInput },
+      );
+    } catch (error) {
+      if (Number(error?.statusCode || error?.status || 0) === 409) throw error;
+      console.warn("Health plan LLM generation failed, using deterministic fallback:", error?.message || error);
+      const fallbackPlan = buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+      return {
+        plan: applyHealthPlanConfidenceCalibration(fallbackPlan, {
+          sourceSignals,
+          dataQualityGaps: promptInput?.data_quality_gaps || [],
+          evidenceConflicts: promptInput?.evidence_conflicts || [],
+          followThrough: promptInput?.existing_plan_feedback || null,
+          sectionDrift: promptInput?.existing_plan_section_drift || [],
+        }).plan,
+        recommendation_calibration: null,
+        candidate_selection: null,
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    }
+  }
+  const fallbackPlan = buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+  return {
+    plan: applyHealthPlanConfidenceCalibration(fallbackPlan, {
+      sourceSignals,
+      dataQualityGaps: promptInput?.data_quality_gaps || [],
+      evidenceConflicts: promptInput?.evidence_conflicts || [],
+      followThrough: promptInput?.existing_plan_feedback || null,
+      sectionDrift: promptInput?.existing_plan_section_drift || [],
+    }).plan,
+    recommendation_calibration: null,
+    candidate_selection: null,
+    cohort_guidance: promptInput?.cohort_guidance || null,
+  };
+}
+
+async function generateHealthPlanSectionsWithOpenAI(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  language,
+  existingPlan,
+  existingPlanFeedback,
+  existingPlanHistory,
+  targetSections,
+  options = {},
+) {
+  if (!openAiApiKey) throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated");
+  const normalizedSections = normalizeHealthPlanTargetSections(targetSections);
+  if (!normalizedSections.length) throw httpError(400, "At least one health plan section is required");
+
+  const promptInput = options?.promptInput || assembleHealthPlanPromptInput(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    language,
+    existingPlan,
+    existingPlanFeedback,
+    existingPlanHistory,
+    { ...options, targetSections: normalizedSections },
+  );
+  const sectionLabels = normalizedSections
+    .map((sectionKey) => healthPlanSectionDefinitionByStorageKey[sectionKey]?.promptLabel || sectionKey)
+    .join(", ");
+  const partialSchema = buildStructuredHealthPlanPartialSchema(normalizedSections);
+  const systemPrompt = [
+    "You refresh targeted sections inside an existing personalized client support plan for a Red Cross operations console.",
+    "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
+    `Write all user-facing text in ${languageName(language)}.`,
+    "Use plain, practical, reassuring language that can be shared with the client or caregiver.",
+    "Be specific to the provided profile, but avoid inventing facts.",
+    "Keep each list item concise and actionable.",
+    "Every recommendation must cite one or more source signal ids from the provided source_signals array.",
+    "When the evidence is clear enough, include priority, confidence, and timing on each recommendation item using only the allowed enum values.",
+    "For same-day or high-priority recommendations, set verification_required to true unless the recommendation is purely stabilizing routine guidance with no live uncertainty.",
+    "For same-day or high-priority monitoring, escalation, or caregiver guidance recommendations, include owner_role so staff can see who owns the next step without inference. Use only one of: assigned_staff, caregiver, on_call_coordinator, care_team.",
+    "For same-day or high-priority recommendations, include completion_signal so staff know what outcome, confirmation, or documented handoff closes the loop.",
+    "For escalation or urgent follow-up recommendations, include fallback_owner_role when another person or team should take over if the first outreach path fails. Use only one of: assigned_staff, caregiver, on_call_coordinator, care_team.",
+    "Return an updated summary_text plus only the requested sections. Do not return any unrequested sections.",
+    "Treat signal_triage as the decision brief for this case: action_signal_ids should drive same-day response, verification_signal_ids should justify confirm or re-check language, stabilizing_signal_ids should preserve routines that are still helping, and background_signal_ids should stay secondary.",
+    "Treat generation_brief as the first-pass writing map for the requested sections. Start from its priority_signals and section_briefs before scanning the wider context. If lower-rank background context conflicts with this brief, keep the brief's act-now and verify priorities unless fresher explicit human judgment clearly overturns them.",
+    "Use evidence_pack as the ranked pre-write brief for the requested sections. Carry must_address_facts into the refreshed wording, turn verification_needs into explicit re-check language where needed, preserve stabilizing_facts when they still fit, and resolve contradictions directly instead of writing around them. When a contradiction includes preferred_signal_ids, let those signals lead the refreshed wording. When it includes preserve_signal_ids, keep them only as conditional support. If requires_verification is true, make the refreshed recommendation explicitly verification-led and respect contradiction.response_window timing. Do not let fragile_pattern_warnings return without a fresh evidence-backed reason.",
+    "Treat escalation_grade as the minimum urgency floor for this case. If the grade is urgent, the refreshed sections should stay same-day and explicit. If the grade is heightened, keep stronger monitoring or escalation language in place.",
+    "When existing_plan.review_note is present, treat it as the latest explicit human review judgment about what was confirmed, what still needs watching, or why the plan was accepted.",
+    "When existing_plan.recommendation_review_decisions is present, treat it as the specific human judgment on exact recommendations. Preserve approved recommendations when the live evidence still supports them, keep watch recommendations cautious and verification-led, and rewrite needs_edit recommendations substantively instead of lightly polishing them.",
+    "When existing_plan_calibration is present, treat it as the memory of where earlier AI drafts overstated certainty. Do not repeat those overconfident patterns in the refreshed sections. If a prior recommendation needed softer confidence or explicit verification wording, carry that caution directly into the refreshed draft.",
+    "Use data_quality_gaps to narrow or soften claims when the underlying inputs are incomplete. When a high-severity gap exists, prefer verification language and conservative support guidance over assumptions.",
+    "Use improvement_actions as the ranked list of unresolved weaknesses from the previous plan state. If one maps to a requested section, fix that weakness directly rather than lightly rewriting the old wording.",
+    "Use completed_improvement_actions as proof of what staff already fixed or confirmed. Do not carry old weakness language forward unless the current signals still support it.",
+    "Use explicit_staff_feedback and section_outcomes as the strongest evidence of what held up in practice. Preserve sections that staff marked helped unless stronger new evidence contradicts them. Rework sections marked did_not_help or needs_follow_up before repeating their old guidance.",
+    "When section_outcomes shows a strengthening trend or supportive evidence_balance, preserve that section's core routine unless stronger live evidence now contradicts it. When section_outcomes shows a weakening trend or caution evidence_balance, rewrite that section decisively instead of lightly polishing it. Use operational_learning_summary as the short explanation of what real follow-through has been teaching us.",
+    "Use client_response_memory to adapt the requested sections to how this specific client actually responds. Lean more on strongest_anchors when they still fit the live picture. Treat fragile_anchors as categories that need caution, tighter verification, or a different approach. Use response_by_source and category_patterns to understand whether outreach, check-ins, medication structure, or caregiver reinforcement is currently landing or breaking down.",
+    "Use cohort_guidance only as cautious same-organization fallback learning when this client's own history is thin or mixed. Never let cohort patterns override fresher client_response_memory, explicit_staff_feedback, live alerts, direct follow-through, or recommendation_effectiveness.",
+    "Use inferred_operational_feedback as observed evidence from real activity after the last plan, including check-in outcomes, Brain Coach outcomes, medication logs, alerts, and risk movement. Treat it as weaker than explicit human judgment but stronger than generic background context.",
+    "Use recent_operational_events as the freshest contact record across scheduled services, medication logs, and outreach activity. If these events show repeated misses or failed outreach, tighten monitoring and escalation wording.",
+    "Use live_evidence_summary as the pattern-level read for the requested sections. Repeated missed touchpoints, unstable medication adherence, alert-heavy sensor pressure, or weak reachability should change the refreshed wording more than any single isolated event.",
+    "Use longitudinal_memory as the longer-pattern check for the requested sections. If an instability keeps resurfacing across recent plan cycles, refresh that section as a recurring pattern rather than a short-lived blip.",
+    "Use readiness as the evidence-sufficiency brief for the requested sections. If readiness is guarded, keep the refreshed wording modest and explicit about what still needs confirmation. Do not write as if blocked evidence gaps are already resolved.",
+    "Before finalizing each refreshed recommendation, challenge it: ask whether the evidence is strong enough, whether the wording sounds too optimistic for the live pressure, and what fallback applies if the first step fails.",
+    "Use existing_plan_freshness as the trust meter for the prior plan. If it is stale or critical, do not preserve wording just because it was reviewed before; update the target sections to match the newer signals.",
+    "Use existing_plan_refresh_strategy to understand why these target sections were chosen and which neighboring sections should stay aligned. If monitoring or escalation is part of the high-priority refresh path, keep their logic in sync.",
+    "Use recommendation_learning and signal_preference_weights to learn at the recommendation level, not just the section level. Prefer wording and routines tied to preserve signals, reuse_priority preserve recommendations, strengthening trajectories, and operational_pattern reinforcing. Be skeptical of recommendations tied to recheck signals, reuse_priority replace recommendations, weakening trajectories, or operational_pattern conflicting.",
+    "Use recommendation_effectiveness as the actionable keep-or-change brief for the requested sections. Protect preserve_now routines unless stronger live evidence now contradicts them. Rework rework_now routines instead of copying them forward unchanged. Do not let retire_now language come back unchanged unless fresh evidence now clearly reverses the old outcome.",
+    "Use recommendation_repair_brief as the per-recommendation edit map for the requested sections. Preserve items marked preserve unless fresher evidence clearly overturns them. Rewrite items marked rework with clearer evidence, fallback, or verification wording. Replace items marked retire instead of bringing them back back unchanged. Treat verify items as needing explicit confirm or re-check language.",
+    "Use recommendation_challenges as the skepticism map from the previous plan. If a recommendation was challenged for weak evidence, optimistic tone, or a missing fallback, fix that weakness directly instead of carrying the old pattern forward.",
+    "Use recommendation_survivorship as the cross-version memory of what keeps surviving for this client. Preserve durable recommendation patterns when they still fit the live picture, but let fragile or retired patterns fall away unless new evidence now supports them.",
+    "Use recommendation_revision_memory as the rewrite-outcome memory for the requested sections. If a rewrite improved, protect the stronger version. If it stayed unresolved, rewrite that weakness directly instead of making cosmetic edits. If it regressed, do not bring the old wording back without new evidence.",
+    "Use quality_memory as the saved audit memory of what previous plan versions kept getting wrong or right. If recurring_quality_risks or repeated_refresh_sections keep targeting one of the requested sections, rewrite that section substantively instead of making cosmetic edits. Preserve durable_patterns when they still fit, keep fragile_patterns from returning without new proof, and treat current_guardrails as ceilings on certainty.",
+    "Use quality_memory.candidate_selection_memory as the record of which recent drafts actually won and held up. In the refreshed sections, prefer patterns that recur in winning_strengths and avoid patterns flagged in recurring_fragilities or guardrails when the wording choice is close.",
+    "Use outcome_pattern_memory as the cross-version record of what actually held up after follow-through for these requested sections. Prefer preserve_patterns, stable_response_anchors, and stable_domains when the same live evidence still exists. Keep watch_patterns and unstable_sections verification-led. Do not bring replace_patterns back unchanged unless fresh evidence clearly overturns the older outcome.",
+    "Use execution_brief as the operational handoff pattern from the prior plan. If it highlighted same-day actions, verification gaps, fallback gaps, or weak close-the-loop wording, fix those exact execution weaknesses directly in the refreshed sections.",
+    "Use review_remediation as the concrete fix list from the previous quality review. If it called for section refreshes or a full rebuild, repair those weaknesses explicitly instead of lightly polishing around them.",
+    "Use operational_completeness as the execution-quality check for the requested sections. Refresh vague wording until the section makes timing, trigger, owner, and fallback concrete enough for staff to execute under pressure.",
+    "Use action_impact as the closed-loop outcome check for the requested sections. Protect reinforced sections unless fresher live evidence now overturns them. Rewrite contradicted sections decisively instead of cosmetic edits. Treat mixed sections as needing tighter verification, fallback, or ownership wording before staff trust them heavily.",
+    "Use recommendation_impact as the exact recommendation-level outcome check for the requested sections. Protect reinforced recommendations that are still landing. Refresh mixed recommendations with clearer verification, ownership, or fallback wording. Replace contradicted recommendations instead of lightly polishing them.",
+    "Use recommendation_history as the cross-version outcome memory for the requested sections. If a recommendation has been deteriorating or volatile across saved versions, rewrite it substantively rather than preserving the old pattern.",
+    "Use recommendation_evidence_diversity as the corroboration check for the requested sections. If a recommendation is fragile because it relies on one narrow or indirect source, either add a stronger live anchor or make the wording more conditional and verification-led.",
+    "Use recommendation_review as the explicit human override lane for the requested sections. Preserve approved recommendations when the live evidence still supports them, keep watch recommendations under explicit verification, and fully rewrite recommendations marked needs_edit instead of making cosmetic wording changes.",
+    "Use benchmark_guidance as the archetype backstop for the requested sections. If a matched benchmark archetype expects same-day timing, explicit verification, a fallback path, or stabilizing support continuity, keep those qualities present in the refreshed wording.",
+    "Use review_priorities as the human-review map for the requested sections. If a requested section is marked high priority or response_window today, refresh it decisively with concrete verification and ownership instead of cosmetic wording changes.",
+    "Recent feedback should outweigh stale feedback. When older positive feedback now conflicts with live alerts, worsening risk, or drifted sections, prefer the live evidence and conservative verification language.",
+    "Use evidence_hierarchy to decide what should win when sources disagree: fresh staff feedback first, then live alerts and blocking operational signals, then live service or medication state, then predictive signals, and finally broader context.",
+    "Use evidence_conflicts to name where the record is disagreeing with itself. Resolve those conflicts explicitly instead of smoothing them over with generic wording.",
+    "Use intervention_memory as the client-specific learning loop. Preserve routines marked helping unless stronger new evidence contradicts them. Tighten, replace, or explicitly re-check routines marked fragile. Keep routines marked unproven conservative until fresh evidence supports them.",
+    "Use clinical_cautions as non-negotiable safety pressure. If a caution is present, the refreshed sections must include the named response path instead of staying generic.",
+    "Use critical_response_brief as the life-safety action contract for the refreshed sections. Keep each active same-day contract explicit, with trigger signals, owner, fallback, verification, and close-the-loop outcome still visible after the refresh.",
+    "Do not collapse multiple same-day response contracts into one soft sentence during section refresh.",
+    "Use response_adjudication_brief as the ranking check for the refreshed sections. Keep the top-ranked same-day contract first in the refreshed monitoring and escalation wording, and keep the next-ranked contract visible near the top rather than letting it drift into background support language.",
+    "Use existing_plan_feedback and existing_plan_section_drift as the quality check on the previous plan. Prioritize sections marked needs_refresh, and preserve the strongest routines unless the new evidence clearly contradicts them.",
+    "Use confidence_guardrails as a ceiling, not decoration. If a requested section is capped at medium or low confidence, write it with explicit verification language and avoid overstating certainty.",
+    "Do not let calmer background context outweigh the action or verification signals when they conflict.",
+    "Return only valid JSON that matches the provided schema.",
+  ].join(" ");
+  const userPrompt = [
+    `Refresh only these health plan sections: ${sectionLabels}.`,
+    "Keep the updated sections aligned with the rest of the saved plan.",
+    JSON.stringify(promptInput, null, 2),
+  ].join("\n\n");
+  const parsed = await requestStructuredOpenAiJson({
+    systemPrompt,
+    userPrompt,
+    schemaName: "personalized_health_plan_partial_refresh",
+    schema: partialSchema,
+    errorLabel: "Health plan section refresh",
+  });
+
+  try {
+    const finalized = finalizeGeneratedHealthPlanSectionRefresh({
+      parsed,
+      sourceSignals,
+      promptInput,
+      existingPlan,
+      normalizedSections,
+      label: "Health plan section refresh",
+    });
+    if (!shouldAttemptHealthPlanCalibrationRepair(finalized?.recommendation_calibration)) {
+      return {
+        ...finalized,
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    }
+    try {
+      const repaired = await requestStructuredOpenAiJson({
+        systemPrompt,
+        userPrompt: buildHealthPlanRepairPrompt({
+          promptInput,
+          previousDraft: finalized.plan,
+          defectMessage: buildHealthPlanCalibrationRepairMessage(finalized.recommendation_calibration),
+          calibrationBrief: buildHealthPlanCalibrationRepairBrief(finalized.recommendation_calibration),
+          instruction: `Your previous targeted refresh for ${sectionLabels} only became acceptable after the server softened confidence or added verification wording. Rewrite only the requested sections so those corrections are naturally present while staying aligned with the saved plan.`,
+        }),
+        schemaName: "personalized_health_plan_partial_refresh_calibration_repair",
+        schema: partialSchema,
+        errorLabel: "Health plan section refresh calibration repair",
+      });
+      return {
+        ...finalizeGeneratedHealthPlanSectionRefresh({
+          parsed: repaired,
+          sourceSignals,
+          promptInput,
+          existingPlan,
+          normalizedSections,
+          label: "Health plan section refresh calibration repair",
+          generationPath: "repair",
+        }),
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    } catch (repairError) {
+      console.warn("Health plan section calibration-aware repair failed, keeping validated refresh:", repairError?.message || repairError);
+      return {
+        ...finalized,
+        cohort_guidance: promptInput?.cohort_guidance || null,
+      };
+    }
+  } catch (error) {
+    if (!shouldAttemptHealthPlanRepair(error, "Health plan section refresh")) throw error;
+    const repaired = await requestStructuredOpenAiJson({
+      systemPrompt,
+      userPrompt: buildHealthPlanRepairPrompt({
+        promptInput,
+        previousDraft: parsed,
+        defectMessage: error?.message || "The refreshed sections did not pass validation.",
+        calibrationBrief: existingPlan?.quality_snapshot_json?.recommendation_calibration || null,
+        instruction: `Your previous targeted refresh for ${sectionLabels} failed the server review. Repair only the requested sections and keep them aligned with the saved plan.`,
+      }),
+      schemaName: "personalized_health_plan_partial_refresh_repair",
+      schema: partialSchema,
+      errorLabel: "Health plan section refresh repair",
+    });
+    return {
+      ...finalizeGeneratedHealthPlanSectionRefresh({
+        parsed: repaired,
+        sourceSignals,
+        promptInput,
+        existingPlan,
+        normalizedSections,
+        label: "Health plan section refresh repair",
+        generationPath: "repair",
+      }),
+      cohort_guidance: promptInput?.cohort_guidance || null,
+    };
+  }
+}
+
+async function generateTargetedHealthPlanSections(
+  profile,
+  predictiveContext,
+  sourceSignals,
+  language,
+  existingPlan,
+  existingPlanFeedback,
+  existingPlanHistory,
+  targetSections,
+  options = {},
+) {
+  const normalizedSections = normalizeHealthPlanTargetSections(targetSections);
+  if (!normalizedSections.length) throw httpError(400, "At least one health plan section is required");
+  const promptInput = assembleHealthPlanPromptInput(
+    profile,
+    predictiveContext,
+    sourceSignals,
+    language,
+    existingPlan,
+    existingPlanFeedback,
+    existingPlanHistory,
+    { ...options, targetSections: normalizedSections },
+  );
+  assertHealthPlanReadinessForGeneration(promptInput, "Health plan section refresh");
+
+  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+    try {
+      return await generateHealthPlanSectionsWithOpenAI(
+        profile,
+        predictiveContext,
+        sourceSignals,
+        language,
+        existingPlan,
+        existingPlanFeedback,
+        existingPlanHistory,
+        normalizedSections,
+        { ...options, promptInput },
+      );
+    } catch (error) {
+      if (Number(error?.statusCode || error?.status || 0) === 409) throw error;
+      console.warn("Health plan section refresh failed, using deterministic fallback:", error?.message || error);
+    }
+  }
+
+  const fallbackPlan = buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
+  const calibrated = applyHealthPlanConfidenceCalibration(fallbackPlan, {
+    sourceSignals,
+    dataQualityGaps: promptInput?.data_quality_gaps || [],
+    evidenceConflicts: promptInput?.evidence_conflicts || [],
+    followThrough: promptInput?.existing_plan_feedback || null,
+    sectionDrift: promptInput?.existing_plan_section_drift || [],
+  });
+  const partialPlan = {
+    summary_text: calibrated.plan?.summary_text || fallbackPlan.summary_text,
+    summary_signal_ids: normalizeHealthPlanSignalIds(calibrated.plan?.summary_signal_ids || fallbackPlan.summary_signal_ids),
+    ...Object.fromEntries(
+      normalizedSections.map((sectionKey) => [sectionKey, normalizeHealthPlanSectionItems(calibrated.plan?.[sectionKey] || fallbackPlan?.[sectionKey])]),
+    ),
+    generator_provider: fallbackPlan.generator_provider,
+    generator_model: fallbackPlan.generator_model,
+    generator_version: fallbackPlan.generator_version,
+  };
+  return {
+    plan: {
+      summary_text: partialPlan.summary_text || existingPlan.summary_text,
+      summary_signal_ids: partialPlan.summary_signal_ids?.length ? partialPlan.summary_signal_ids : existingPlan.summary_signal_ids,
+      goals_json: normalizedSections.includes("goals_json") ? partialPlan.goals_json : existingPlan.goals_json,
+      daily_support_json: normalizedSections.includes("daily_support_json") ? partialPlan.daily_support_json : existingPlan.daily_support_json,
+      monitoring_json: normalizedSections.includes("monitoring_json") ? partialPlan.monitoring_json : existingPlan.monitoring_json,
+      escalation_json: normalizedSections.includes("escalation_json") ? partialPlan.escalation_json : existingPlan.escalation_json,
+      caregiver_guidance_json: normalizedSections.includes("caregiver_guidance_json") ? partialPlan.caregiver_guidance_json : existingPlan.caregiver_guidance_json,
+      generator_provider: partialPlan.generator_provider,
+      generator_model: partialPlan.generator_model,
+      generator_version: partialPlan.generator_version,
+    },
+    recommendation_calibration: null,
+    cohort_guidance: promptInput?.cohort_guidance || null,
+  };
 }
 
 function normalizeHealthPlanPayload(
@@ -1535,6 +3848,21 @@ function normalizeHealthPlanPayload(
   } = {},
 ) {
   const reviewStatus = payload?.review_status === "reviewed" ? "reviewed" : "draft";
+  const normalizedSourceSignals = normalizeHealthPlanSourceSignals(payload?.source_signals_json ?? sourceSignals);
+  const normalizedDataQualityGaps = normalizeHealthPlanDataQualityGaps(payload?.data_quality_gaps_json);
+  const normalizedCompletedImprovementActions = normalizeCompletedHealthPlanImprovementActions(payload?.completed_improvement_actions_json);
+  const normalizedFeedbackEntries = normalizeHealthPlanFeedbackEntries(payload?.feedback_entries_json);
+  const normalizedInferredFeedback = normalizeHealthPlanFeedbackEntries(payload?.inferred_feedback_json);
+  const normalizedRecommendationLearning = normalizeHealthPlanRecommendationLearning(payload?.recommendation_learning_json);
+  const signalTriage = buildHealthPlanSignalTriage(normalizedSourceSignals);
+  const enrichedSections = enrichHealthPlanSections({
+    goals_json: normalizeHealthPlanSectionItems(payload?.goals_json ?? payload?.goals),
+    daily_support_json: normalizeHealthPlanSectionItems(payload?.daily_support_json ?? payload?.daily_support),
+    monitoring_json: normalizeHealthPlanSectionItems(payload?.monitoring_json ?? payload?.monitoring),
+    escalation_json: normalizeHealthPlanSectionItems(payload?.escalation_json ?? payload?.escalation),
+    caregiver_guidance_json: normalizeHealthPlanSectionItems(payload?.caregiver_guidance_json ?? payload?.caregiver_guidance),
+  }, { sourceSignals: normalizedSourceSignals, signalTriage });
+  const summarySignalIds = inferHealthPlanSummarySignalIds(payload?.summary_signal_ids, normalizedSourceSignals, signalTriage, enrichedSections);
   return {
     action_type: normalizeHealthPlanActionType(payload?.action_type, actionType),
     actor_user_id: nullIfBlank(payload?.actor_user_id) || actorUserId || generatedByUserId || null,
@@ -1542,13 +3870,29 @@ function normalizeHealthPlanPayload(
     language: normalizeLanguage(payload?.language, fallbackLanguage),
     status: "current",
     review_status: reviewStatus,
+    escalation_grade: ["routine", "heightened", "urgent"].includes(nullIfBlank(payload?.escalation_grade)) ? payload.escalation_grade : "routine",
+    review_required: Boolean(payload?.review_required),
+    review_window: ["today", "this_week", "ongoing"].includes(nullIfBlank(payload?.review_window)) ? payload.review_window : "ongoing",
+    review_summary: nullIfBlank(payload?.review_summary),
+    review_reasons_json: Array.isArray(payload?.review_reasons_json) ? payload.review_reasons_json : [],
+    review_note: reviewStatus === "reviewed" ? nullIfBlank(payload?.review_note) : null,
+    review_checklist_json: reviewStatus === "reviewed"
+      ? normalizeHealthPlanReviewChecklist(payload?.review_checklist_json)
+      : normalizeHealthPlanReviewChecklist(null),
+    recommendation_review_decisions_json: normalizeHealthPlanRecommendationReviewDecisions(payload?.recommendation_review_decisions_json),
     summary_text: nullIfBlank(payload?.summary_text),
-    goals_json: normalizeHealthPlanSectionItems(payload?.goals_json ?? payload?.goals),
-    daily_support_json: normalizeHealthPlanSectionItems(payload?.daily_support_json ?? payload?.daily_support),
-    monitoring_json: normalizeHealthPlanSectionItems(payload?.monitoring_json ?? payload?.monitoring),
-    escalation_json: normalizeHealthPlanSectionItems(payload?.escalation_json ?? payload?.escalation),
-    caregiver_guidance_json: normalizeHealthPlanSectionItems(payload?.caregiver_guidance_json ?? payload?.caregiver_guidance),
-    source_signals_json: normalizeHealthPlanSourceSignals(payload?.source_signals_json ?? sourceSignals),
+    summary_signal_ids: summarySignalIds,
+    goals_json: enrichedSections.goals_json,
+    daily_support_json: enrichedSections.daily_support_json,
+    monitoring_json: enrichedSections.monitoring_json,
+    escalation_json: enrichedSections.escalation_json,
+    caregiver_guidance_json: enrichedSections.caregiver_guidance_json,
+    source_signals_json: normalizedSourceSignals,
+    data_quality_gaps_json: normalizedDataQualityGaps,
+    completed_improvement_actions_json: normalizedCompletedImprovementActions,
+    feedback_entries_json: normalizedFeedbackEntries,
+    inferred_feedback_json: normalizedInferredFeedback,
+    recommendation_learning_json: normalizedRecommendationLearning,
     generator_provider: nullIfBlank(payload?.generator_provider) || generator?.provider || null,
     generator_model: nullIfBlank(payload?.generator_model) || generator?.model || null,
     generator_version: nullIfBlank(payload?.generator_version) || generator?.version || null,
@@ -1575,11 +3919,102 @@ async function saveHealthPlan(client, userId, context, payload) {
     actorEmail: context?.email || null,
   });
   if (!normalized.summary_text) return { error: "summary_text is required" };
+  const criticalSignalIds = normalizeHealthPlanSignalIds(payload?.critical_signal_ids);
+  const signalTriage = buildHealthPlanSignalTriage(normalized.source_signals_json, criticalSignalIds);
+  const escalationGrade = buildHealthPlanEscalationGrade({
+    sourceSignals: normalized.source_signals_json,
+    signalTriage,
+    criticalSignalIds,
+  });
+  const coverageIssues = findHealthPlanCoverageIssues({
+    summary_signal_ids: normalized.summary_signal_ids,
+    goals_json: normalized.goals_json,
+    daily_support_json: normalized.daily_support_json,
+    monitoring_json: normalized.monitoring_json,
+    escalation_json: normalized.escalation_json,
+    caregiver_guidance_json: normalized.caregiver_guidance_json,
+  }, {
+    sourceSignals: normalized.source_signals_json,
+    signalTriage,
+    criticalSignalIds,
+  });
+  if (coverageIssues.length) return { error: coverageIssues[0].message || "Health plan is missing required support coverage" };
+  const safetyIssues = findHealthPlanSafetyIssues({
+    summary_text: normalized.summary_text,
+    summary_signal_ids: normalized.summary_signal_ids,
+    goals_json: normalized.goals_json,
+    daily_support_json: normalized.daily_support_json,
+    monitoring_json: normalized.monitoring_json,
+    escalation_json: normalized.escalation_json,
+    caregiver_guidance_json: normalized.caregiver_guidance_json,
+  }, {
+    sourceSignals: normalized.source_signals_json,
+    signalTriage,
+    criticalSignalIds,
+  });
+  if (safetyIssues.length) return { error: safetyIssues[0].message || "Health plan wording is not operationally safe enough" };
+  const escalationGradeIssues = findHealthPlanEscalationGradeIssues({
+    summary_text: normalized.summary_text,
+    summary_signal_ids: normalized.summary_signal_ids,
+    goals_json: normalized.goals_json,
+    daily_support_json: normalized.daily_support_json,
+    monitoring_json: normalized.monitoring_json,
+    escalation_json: normalized.escalation_json,
+    caregiver_guidance_json: normalized.caregiver_guidance_json,
+  }, {
+    escalationGrade,
+    sourceSignals: normalized.source_signals_json,
+  });
+  if (escalationGradeIssues.length) return { error: escalationGradeIssues[0].message || "Health plan does not match the current escalation floor" };
+  const clinicalCautions = buildHealthPlanClinicalCautions({
+    sourceSignals: normalized.source_signals_json,
+    followThrough: payload?.follow_through || null,
+  });
+  const clinicalCautionIssues = findHealthPlanClinicalCautionIssues({
+    summary_text: normalized.summary_text,
+    summary_signal_ids: normalized.summary_signal_ids,
+    goals_json: normalized.goals_json,
+    daily_support_json: normalized.daily_support_json,
+    monitoring_json: normalized.monitoring_json,
+    escalation_json: normalized.escalation_json,
+    caregiver_guidance_json: normalized.caregiver_guidance_json,
+  }, {
+    sourceSignals: normalized.source_signals_json,
+    followThrough: payload?.follow_through || null,
+    clinicalCautions,
+  });
+  if (clinicalCautionIssues.length) return { error: clinicalCautionIssues[0].message || "Health plan missed a clinically important caution response" };
+  const combinedFeedbackEntries = [
+    ...normalizeHealthPlanFeedbackEntries(normalized.feedback_entries_json),
+    ...normalizeHealthPlanFeedbackEntries(normalized.inferred_feedback_json),
+  ].sort((left, right) => {
+    const leftTime = left?.recorded_at ? new Date(left.recorded_at).getTime() : 0;
+    const rightTime = right?.recorded_at ? new Date(right.recorded_at).getTime() : 0;
+    return rightTime - leftTime;
+  });
+  const recommendationLearningSnapshot = normalizeHealthPlanRecommendationLearning(
+    normalized.recommendation_learning_json?.length
+      ? normalized.recommendation_learning_json
+      : buildHealthPlanRecommendationOutcomeMemory({
+        plan: {
+          goals_json: normalized.goals_json,
+          daily_support_json: normalized.daily_support_json,
+          monitoring_json: normalized.monitoring_json,
+          escalation_json: normalized.escalation_json,
+          caregiver_guidance_json: normalized.caregiver_guidance_json,
+        },
+        feedbackEntries: combinedFeedbackEntries,
+        followThrough: payload?.follow_through || null,
+        sectionDrift: payload?.section_drift || [],
+        recentOperationalEvents: payload?.recent_operational_events || [],
+        sourceSignals: normalized.source_signals_json,
+      }),
+  );
   const generatedAt = normalizeTimestampValue(payload?.generated_at) || new Date().toISOString();
   const organizationId = scopeOrganizationId(context);
   const currentResult = await client.query(
     `
-      SELECT id::text, current_version
+      SELECT id::text, current_version, review_checklist_json
       FROM public.vyva_user_health_plans
       WHERE vyva_user_id = $1
         AND organization_id = $2
@@ -1598,6 +4033,416 @@ async function saveHealthPlan(client, userId, context, payload) {
     : normalized.action_type === "regenerated"
       ? "generated"
       : normalized.action_type;
+  if (normalized.review_status === "reviewed") {
+    normalized.review_checklist_json = applyHealthPlanReviewChecklistAudit(
+      normalized.review_checklist_json,
+      {
+        previousChecklist: existing?.review_checklist_json || null,
+        reviewedAt: normalized.reviewed_at,
+        actorUserId: normalized.reviewed_by_user_id || normalized.actor_user_id || null,
+        actorEmail: normalized.reviewed_by_email || normalized.actor_email || null,
+        actionType: effectiveActionType,
+      },
+    );
+  }
+  const historyBeforeSave = existing ? await loadHealthPlanHistory(userId, context, client) : [];
+  const previousPlan = historyBeforeSave[0] || null;
+  const annotatedSections = annotateHealthPlanSectionsWithEditorialTrace(
+    {
+      goals_json: normalized.goals_json,
+      daily_support_json: normalized.daily_support_json,
+      monitoring_json: normalized.monitoring_json,
+      escalation_json: normalized.escalation_json,
+      caregiver_guidance_json: normalized.caregiver_guidance_json,
+    },
+    {
+      previousPlan,
+      actionType: effectiveActionType,
+      actorUserId: normalized.actor_user_id,
+      actorEmail: normalized.actor_email,
+      recordedAt: generatedAt,
+      manualOverrideReason: payload?.manual_override_reason,
+    },
+  );
+  const evidenceConflicts = buildHealthPlanEvidenceConflicts({
+    sourceSignals: normalized.source_signals_json,
+    feedbackEntries: combinedFeedbackEntries,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+  });
+  const reviewGovernance = buildHealthPlanReviewGovernance({
+    escalationGrade,
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    followThrough: payload?.follow_through || null,
+    evidenceConflicts,
+  });
+  const sectionOutcomes = buildHealthPlanOutcomeScores({
+    plan: {
+      goals_json: annotatedSections.goals_json,
+      daily_support_json: annotatedSections.daily_support_json,
+      monitoring_json: annotatedSections.monitoring_json,
+      escalation_json: annotatedSections.escalation_json,
+      caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+    },
+    feedbackEntries: combinedFeedbackEntries,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+  });
+  const confidenceProfile = buildHealthPlanConfidenceProfile({
+    plan: {
+      goals_json: annotatedSections.goals_json,
+      daily_support_json: annotatedSections.daily_support_json,
+      monitoring_json: annotatedSections.monitoring_json,
+      escalation_json: annotatedSections.escalation_json,
+      caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+    },
+    sourceSignals: normalized.source_signals_json,
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    evidenceConflicts,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+  });
+  const decisionTracePlan = {
+    goals_json: annotatedSections.goals_json,
+    daily_support_json: annotatedSections.daily_support_json,
+    monitoring_json: annotatedSections.monitoring_json,
+    escalation_json: annotatedSections.escalation_json,
+    caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+    recommendation_review_decisions_json: normalized.recommendation_review_decisions_json,
+  };
+  const freshnessSnapshot = buildHealthPlanFreshnessSnapshot({
+    plan: {
+      ...decisionTracePlan,
+      generated_at: generatedAt,
+      reviewed_at: normalized.reviewed_at,
+      review_status: normalized.review_status,
+    },
+    followThrough: payload?.follow_through || null,
+    recentOperationalEvents: payload?.recent_operational_events || [],
+    reviewGovernance,
+    sectionDrift: payload?.section_drift || [],
+  });
+  const refreshStrategySnapshot = buildHealthPlanRefreshStrategy({
+    freshness: freshnessSnapshot,
+    sectionDrift: payload?.section_drift || [],
+    reviewGovernance,
+    followThrough: payload?.follow_through || null,
+  });
+  const currentDraftRevision = {
+    version_number: nextVersion,
+    goals_json: annotatedSections.goals_json,
+    daily_support_json: annotatedSections.daily_support_json,
+    monitoring_json: annotatedSections.monitoring_json,
+    escalation_json: annotatedSections.escalation_json,
+    caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+    recommendation_learning_json: recommendationLearningSnapshot,
+    recommendation_review_decisions_json: normalized.recommendation_review_decisions_json,
+  };
+  const survivorshipSnapshot = buildHealthPlanRecommendationSurvivorship({
+    history: [
+      currentDraftRevision,
+      ...historyBeforeSave,
+    ],
+  });
+  const signalPreferenceWeights = buildHealthPlanSignalPreferenceWeights({
+    plan: decisionTracePlan,
+    feedbackEntries: combinedFeedbackEntries,
+    sourceSignals: normalized.source_signals_json,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+    recentOperationalEvents: payload?.recent_operational_events || [],
+  });
+  const liveEvidenceSummary = payload?.live_evidence_summary || buildHealthPlanLiveEvidenceSummary({
+    recentOperationalEvents: payload?.recent_operational_events || [],
+  });
+  const longitudinalMemory = payload?.longitudinal_memory || buildHealthPlanLongitudinalMemory({
+    liveEvidenceSummary,
+    history: historyBeforeSave,
+  });
+  const evidenceHierarchy = buildHealthPlanEvidenceHierarchy({
+    sourceSignals: normalized.source_signals_json,
+    feedbackEntries: combinedFeedbackEntries,
+  });
+  const evidencePack = payload?.evidence_pack || buildHealthPlanEvidencePack({
+    sourceSignals: normalized.source_signals_json,
+    signalTriage,
+    criticalSignalIds,
+    evidenceHierarchy,
+    evidenceConflicts,
+    escalationGrade,
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    followThrough: payload?.follow_through || null,
+  });
+  const interventionMemory = buildHealthPlanInterventionMemory({
+    plan: decisionTracePlan,
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+    completedActions: normalized.completed_improvement_actions_json,
+    feedbackEntries: combinedFeedbackEntries,
+  });
+  const clientResponseMemory = buildHealthPlanClientResponseMemory({
+    recentOperationalEvents: payload?.recent_operational_events || [],
+    recommendationLearning: recommendationLearningSnapshot,
+    sectionOutcomes,
+    sourceSignals: normalized.source_signals_json,
+  });
+  const reviewPriorities = payload?.review_priorities || buildHealthPlanReviewPriorities({
+    sourceSignals: normalized.source_signals_json,
+    escalationGrade,
+    reviewGovernance,
+    confidenceProfile,
+    sectionOutcomes,
+    clientResponseMemory,
+    clinicalCautions: payload?.clinical_cautions || [],
+    freshness: freshnessSnapshot,
+    refreshStrategy: refreshStrategySnapshot,
+  });
+  const generationQuality = buildHealthPlanGenerationQuality({
+    plan: decisionTracePlan,
+    reviewPriorities,
+    confidenceProfile,
+  });
+  const operationalCompleteness = buildHealthPlanOperationalCompleteness({
+    plan: decisionTracePlan,
+    reviewPriorities,
+    escalationGrade,
+    liveEvidenceSummary,
+  });
+  const recommendationImpact = buildHealthPlanRecommendationImpact({
+    plan: decisionTracePlan,
+    recentOperationalEvents: payload?.recent_operational_events || [],
+    liveEvidenceSummary,
+    followThrough: payload?.follow_through || null,
+    sourceSignals: normalized.source_signals_json,
+  });
+  const recommendationEffectiveness = buildHealthPlanRecommendationEffectiveness({
+    recommendationLearning: recommendationLearningSnapshot,
+    recommendationSurvivorship: survivorshipSnapshot,
+    recommendationImpact,
+  });
+  const outcomePatternMemory = buildHealthPlanOutcomePatternMemory({
+    history: [
+      {
+        version_number: nextVersion,
+        quality_snapshot_json: {
+          client_response_memory: clientResponseMemory,
+          recommendation_effectiveness: recommendationEffectiveness,
+          section_outcomes: buildHealthPlanOutcomeScoreBrief(sectionOutcomes),
+          intervention_memory: buildHealthPlanInterventionMemoryBrief(interventionMemory),
+        },
+      },
+      ...historyBeforeSave,
+    ],
+  });
+  const recommendationHistory = buildHealthPlanRecommendationHistory({
+    history: [
+      {
+        ...currentDraftRevision,
+        summary_text: normalized.summary_text,
+        goals_json: annotatedSections.goals_json,
+        daily_support_json: annotatedSections.daily_support_json,
+        monitoring_json: annotatedSections.monitoring_json,
+        escalation_json: annotatedSections.escalation_json,
+        caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+        quality_snapshot_json: {
+          recommendation_impact: recommendationImpact,
+          recommendation_effectiveness: recommendationEffectiveness,
+        },
+      },
+      ...historyBeforeSave,
+    ],
+    recommendationImpact,
+    recommendationEffectiveness,
+  });
+  const recommendationChallenges = buildHealthPlanRecommendationChallenges({
+    plan: decisionTracePlan,
+    sourceSignals: normalized.source_signals_json,
+    reviewPriorities,
+    liveEvidenceSummary,
+    longitudinalMemory,
+  });
+  const recommendationSourceRanking = buildHealthPlanRecommendationSourceRanking({
+    plan: decisionTracePlan,
+    sourceSignals: normalized.source_signals_json,
+    evidenceHierarchy,
+    signalPreferenceWeights,
+    recommendationEffectiveness,
+    recommendationChallenges,
+  });
+  const recommendationEvidenceDiversity = buildHealthPlanRecommendationEvidenceDiversity({
+    recommendationSourceRanking,
+  });
+  const recommendationGrounding = buildHealthPlanRecommendationGrounding({
+    plan: decisionTracePlan,
+    sourceSignals: normalized.source_signals_json,
+    evidencePack,
+    reviewPriorities,
+    confidenceProfile,
+    recommendationSourceRanking,
+  });
+  const recommendationCoverage = buildHealthPlanRecommendationCoverage({
+    plan: decisionTracePlan,
+    evidencePack,
+    reviewPriorities,
+    followThrough: payload?.follow_through || null,
+  });
+  const recommendationReview = buildHealthPlanRecommendationReviewSummary({
+    plan: decisionTracePlan,
+    recommendationImpact,
+    recommendationHistory,
+    recommendationEvidenceDiversity,
+    recommendationGrounding,
+    recommendationChallenges,
+    recommendationReviewDecisions: normalized.recommendation_review_decisions_json,
+  });
+  const editorialTrace = buildHealthPlanEditorialTrace({ plan: decisionTracePlan });
+  const recommendationChangeAudit = buildHealthPlanRevisionChange(
+    {
+      ...currentDraftRevision,
+      summary_text: normalized.summary_text,
+      review_status: normalized.review_status,
+      quality_snapshot_json: {
+        recommendation_source_ranking: recommendationSourceRanking,
+        recommendation_effectiveness: recommendationEffectiveness,
+      },
+    },
+    previousPlan,
+  );
+  if ((effectiveActionType === "edited" || effectiveActionType === "reviewed") && hasHighPriorityManualOverrideWithoutReason(editorialTrace)) {
+    return {
+      error: "manual_override_reason is required when saving high-priority manual health plan overrides",
+    };
+  }
+  const benchmarkAssessment = buildHealthPlanBenchmarkAssessment({
+    plan: decisionTracePlan,
+    sourceSignals: normalized.source_signals_json,
+    evidencePack,
+    reviewPriorities,
+    confidenceProfile,
+    followThrough: payload?.follow_through || null,
+  });
+  const readiness = buildHealthPlanReadiness({
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    confidenceProfile,
+    reviewGovernance,
+    liveEvidenceSummary,
+    freshness: freshnessSnapshot,
+    longitudinalMemory,
+  });
+  const actionImpact = buildHealthPlanActionImpact({
+    plan: decisionTracePlan,
+    followThrough: payload?.follow_through || null,
+    recentOperationalEvents: payload?.recent_operational_events || [],
+    liveEvidenceSummary,
+    operationalCompleteness,
+  });
+  const reviewReadiness = buildHealthPlanReviewReadiness({
+    reviewGovernance,
+    readiness,
+    generationQuality,
+    operationalCompleteness,
+    actionImpact,
+    recommendationImpact,
+    recommendationHistory,
+    recommendationEvidenceDiversity,
+    recommendationGrounding,
+    recommendationCoverage,
+    recommendationChallenges,
+    recommendationReview,
+    recommendationChangeAudit,
+    benchmarkAssessment,
+    editorialTrace,
+  });
+  if (normalized.review_status === "reviewed" && reviewReadiness?.can_mark_reviewed === false) {
+    return {
+      error: reviewReadiness?.blocking_items?.[0]?.label || reviewReadiness?.summary || "This plan still needs quality fixes before it can be marked reviewed",
+      review_blockers: reviewReadiness?.blocking_items || [],
+    };
+  }
+  const qualitySnapshot = buildHealthPlanQualitySnapshot({
+    plan: decisionTracePlan,
+    sourceSignals: normalized.source_signals_json,
+    criticalSignalIds,
+    dataQualityGaps: normalized.data_quality_gaps_json,
+    followThrough: payload?.follow_through || null,
+    sectionDrift: payload?.section_drift || [],
+    feedbackEntries: combinedFeedbackEntries,
+    completedActions: normalized.completed_improvement_actions_json,
+    escalationGrade,
+    reviewGovernance,
+    evidenceConflicts,
+    evidenceHierarchy,
+    confidenceProfile,
+    freshness: freshnessSnapshot,
+    refreshStrategy: refreshStrategySnapshot,
+    recommendationSurvivorship: survivorshipSnapshot,
+    recommendationLearning: recommendationLearningSnapshot,
+    signalPreferenceWeights,
+    recommendationEffectiveness,
+    recommendationImpact,
+    recommendationHistory,
+    recommendationEvidenceDiversity,
+    recommendationReview,
+    sectionOutcomes,
+    clientResponseMemory,
+    cohortGuidance: payload?.cohort_guidance || null,
+    reviewPriorities,
+    generationQuality,
+    operationalCompleteness,
+    actionImpact,
+    recommendationGrounding,
+    recommendationCoverage,
+    benchmarkAssessment,
+    benchmarkGuidance: payload?.benchmark_guidance || null,
+    liveEvidenceSummary,
+    longitudinalMemory,
+    readiness,
+    recommendationChallenges,
+    recommendationSourceRanking,
+    recommendationEvidenceDiversity,
+    recommendationCalibration: payload?.recommendation_calibration || null,
+    candidateSelection: payload?.candidate_selection || existing?.quality_snapshot_json?.candidate_selection || null,
+    outcomePatternMemory,
+    recommendationChangeAudit,
+    editorialTrace,
+    evidencePack,
+    qualityMemory: payload?.quality_memory || null,
+    clinicalCautions: payload?.clinical_cautions || [],
+    interventionMemory,
+    recentOperationalEvents: payload?.recent_operational_events || [],
+    capturedAt: generatedAt,
+  });
+  qualitySnapshot.recommendation_history = recommendationHistory;
+  qualitySnapshot.recommendation_review = recommendationReview;
+  qualitySnapshot.editorial_trace = editorialTrace;
+  qualitySnapshot.recommendation_change_audit = recommendationChangeAudit;
+  qualitySnapshot.recommendation_revision_memory = buildHealthPlanRecommendationRevisionMemory({
+    history: [
+      {
+        ...currentDraftRevision,
+        summary_text: normalized.summary_text,
+        review_status: normalized.review_status,
+        goals_json: annotatedSections.goals_json,
+        daily_support_json: annotatedSections.daily_support_json,
+        monitoring_json: annotatedSections.monitoring_json,
+        escalation_json: annotatedSections.escalation_json,
+        caregiver_guidance_json: annotatedSections.caregiver_guidance_json,
+        quality_snapshot_json: qualitySnapshot,
+        change: qualitySnapshot.recommendation_change_audit,
+      },
+      ...historyBeforeSave,
+    ],
+  });
+
+  if (normalized.review_status === "reviewed" && qualitySnapshot?.operational_release?.can_use_for_staff_workflow === false) {
+    return {
+      error: qualitySnapshot?.operational_release?.blocking_items?.[0]?.label
+        || qualitySnapshot?.operational_release?.summary
+        || "This plan still has operational release blockers and cannot be marked reviewed yet",
+      review_blockers: qualitySnapshot?.operational_release?.blocking_items || [],
+    };
+  }
 
   let currentPlanId = existing?.id || null;
   let result;
@@ -1615,23 +4460,38 @@ async function saveHealthPlan(client, userId, context, payload) {
           language,
           status,
           review_status,
+          escalation_grade,
+          review_required,
+          review_window,
+          review_summary,
+          review_reasons_json,
           summary_text,
+          summary_signal_ids_json,
           goals_json,
           daily_support_json,
           monitoring_json,
           escalation_json,
           caregiver_guidance_json,
           source_signals_json,
+          data_quality_gaps_json,
+          completed_improvement_actions_json,
+          feedback_entries_json,
+          inferred_feedback_json,
+          recommendation_learning_json,
+          quality_snapshot_json,
           generator_provider,
           generator_model,
           generator_version,
           generated_at,
           generated_by_user_id,
+          review_note,
+          review_checklist_json,
+          recommendation_review_decisions_json,
           reviewed_at,
           reviewed_by_user_id,
           reviewed_by_email
         )
-        VALUES ($1, $2, $3, $4, now(), $5, $6, $7, 'current', $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19::timestamptz, $20, $21::timestamptz, $22, $23)
+        VALUES ($1, $2, $3, $4, now(), $5, $6, $7, 'current', $8, $9, $10, $11, $12, $13::jsonb, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb, $27::jsonb, $28, $29, $30, $31::timestamptz, $32, $33, $34::jsonb, $35::jsonb, $36::timestamptz, $37, $38)
         RETURNING *, id::text, vyva_user_id::text, organization_id::text
       `,
       [
@@ -1643,18 +4503,33 @@ async function saveHealthPlan(client, userId, context, payload) {
         normalized.actor_email,
         normalized.language,
         normalized.review_status,
+        normalized.escalation_grade,
+        normalized.review_required,
+        normalized.review_window,
+        normalized.review_summary,
+        JSON.stringify(normalized.review_reasons_json),
         normalized.summary_text,
-        JSON.stringify(normalized.goals_json),
-        JSON.stringify(normalized.daily_support_json),
-        JSON.stringify(normalized.monitoring_json),
-        JSON.stringify(normalized.escalation_json),
-        JSON.stringify(normalized.caregiver_guidance_json),
+        JSON.stringify(normalized.summary_signal_ids),
+        JSON.stringify(annotatedSections.goals_json),
+        JSON.stringify(annotatedSections.daily_support_json),
+        JSON.stringify(annotatedSections.monitoring_json),
+        JSON.stringify(annotatedSections.escalation_json),
+        JSON.stringify(annotatedSections.caregiver_guidance_json),
         JSON.stringify(normalized.source_signals_json),
+        JSON.stringify(normalized.data_quality_gaps_json),
+        JSON.stringify(normalized.completed_improvement_actions_json),
+        JSON.stringify(normalized.feedback_entries_json),
+        JSON.stringify(normalized.inferred_feedback_json),
+        JSON.stringify(recommendationLearningSnapshot),
+        JSON.stringify(qualitySnapshot),
         normalized.generator_provider,
         normalized.generator_model,
         normalized.generator_version,
         generatedAt,
         normalized.generated_by_user_id,
+        normalized.review_note,
+        JSON.stringify(normalized.review_checklist_json),
+        JSON.stringify(normalized.recommendation_review_decisions_json),
         normalized.reviewed_at,
         normalized.reviewed_by_user_id,
         normalized.reviewed_by_email,
@@ -1675,21 +4550,36 @@ async function saveHealthPlan(client, userId, context, payload) {
           language = $7,
           status = 'current',
           review_status = $8,
-          summary_text = $9,
-          goals_json = $10::jsonb,
-          daily_support_json = $11::jsonb,
-          monitoring_json = $12::jsonb,
-          escalation_json = $13::jsonb,
-          caregiver_guidance_json = $14::jsonb,
-          source_signals_json = $15::jsonb,
-          generator_provider = $16,
-          generator_model = $17,
-          generator_version = $18,
-          generated_at = $19::timestamptz,
-          generated_by_user_id = $20,
-          reviewed_at = $21::timestamptz,
-          reviewed_by_user_id = $22,
-          reviewed_by_email = $23,
+          escalation_grade = $9,
+          review_required = $10,
+          review_window = $11,
+          review_summary = $12,
+          review_reasons_json = $13::jsonb,
+          summary_text = $14,
+          summary_signal_ids_json = $15::jsonb,
+          goals_json = $16::jsonb,
+          daily_support_json = $17::jsonb,
+          monitoring_json = $18::jsonb,
+          escalation_json = $19::jsonb,
+          caregiver_guidance_json = $20::jsonb,
+          source_signals_json = $21::jsonb,
+          data_quality_gaps_json = $22::jsonb,
+          completed_improvement_actions_json = $23::jsonb,
+          feedback_entries_json = $24::jsonb,
+          inferred_feedback_json = $25::jsonb,
+          recommendation_learning_json = $26::jsonb,
+          quality_snapshot_json = $27::jsonb,
+          generator_provider = $28,
+          generator_model = $29,
+          generator_version = $30,
+          generated_at = $31::timestamptz,
+          generated_by_user_id = $32,
+          review_note = $33,
+          review_checklist_json = $34::jsonb,
+          recommendation_review_decisions_json = $35::jsonb,
+          reviewed_at = $36::timestamptz,
+          reviewed_by_user_id = $37,
+          reviewed_by_email = $38,
           updated_at = now()
         WHERE id = $1
           AND organization_id = $2
@@ -1704,18 +4594,33 @@ async function saveHealthPlan(client, userId, context, payload) {
         normalized.actor_email,
         normalized.language,
         normalized.review_status,
+        normalized.escalation_grade,
+        normalized.review_required,
+        normalized.review_window,
+        normalized.review_summary,
+        JSON.stringify(normalized.review_reasons_json),
         normalized.summary_text,
-        JSON.stringify(normalized.goals_json),
-        JSON.stringify(normalized.daily_support_json),
-        JSON.stringify(normalized.monitoring_json),
-        JSON.stringify(normalized.escalation_json),
-        JSON.stringify(normalized.caregiver_guidance_json),
+        JSON.stringify(normalized.summary_signal_ids),
+        JSON.stringify(annotatedSections.goals_json),
+        JSON.stringify(annotatedSections.daily_support_json),
+        JSON.stringify(annotatedSections.monitoring_json),
+        JSON.stringify(annotatedSections.escalation_json),
+        JSON.stringify(annotatedSections.caregiver_guidance_json),
         JSON.stringify(normalized.source_signals_json),
+        JSON.stringify(normalized.data_quality_gaps_json),
+        JSON.stringify(normalized.completed_improvement_actions_json),
+        JSON.stringify(normalized.feedback_entries_json),
+        JSON.stringify(normalized.inferred_feedback_json),
+        JSON.stringify(recommendationLearningSnapshot),
+        JSON.stringify(qualitySnapshot),
         normalized.generator_provider,
         normalized.generator_model,
         normalized.generator_version,
         generatedAt,
         normalized.generated_by_user_id,
+        normalized.review_note,
+        JSON.stringify(normalized.review_checklist_json),
+        JSON.stringify(normalized.recommendation_review_decisions_json),
         normalized.reviewed_at,
         normalized.reviewed_by_user_id,
         normalized.reviewed_by_email,
@@ -1738,23 +4643,38 @@ async function saveHealthPlan(client, userId, context, payload) {
         language,
         status,
         review_status,
+        escalation_grade,
+        review_required,
+        review_window,
+        review_summary,
+        review_reasons_json,
         summary_text,
+        summary_signal_ids_json,
         goals_json,
         daily_support_json,
         monitoring_json,
         escalation_json,
         caregiver_guidance_json,
         source_signals_json,
+        data_quality_gaps_json,
+        completed_improvement_actions_json,
+        feedback_entries_json,
+        inferred_feedback_json,
+        recommendation_learning_json,
+        quality_snapshot_json,
         generator_provider,
         generator_model,
         generator_version,
         generated_at,
         generated_by_user_id,
+        review_note,
+        review_checklist_json,
+        recommendation_review_decisions_json,
         reviewed_at,
         reviewed_by_user_id,
         reviewed_by_email
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'current', $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15::jsonb, $16::jsonb, $17, $18, $19, $20::timestamptz, $21, $22::timestamptz, $23, $24)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'current', $9, $10, $11, $12, $13, $14::jsonb, $15, $16::jsonb, $17::jsonb, $18::jsonb, $19::jsonb, $20::jsonb, $21::jsonb, $22::jsonb, $23::jsonb, $24::jsonb, $25::jsonb, $26::jsonb, $27::jsonb, $28, $29, $30, $31::timestamptz, $32, $33, $34::jsonb, $35::jsonb, $36::timestamptz, $37, $38)
     `,
     [
       currentPlanId,
@@ -1766,18 +4686,33 @@ async function saveHealthPlan(client, userId, context, payload) {
       normalized.actor_email,
       normalized.language,
       normalized.review_status,
+      normalized.escalation_grade,
+      normalized.review_required,
+      normalized.review_window,
+      normalized.review_summary,
+      JSON.stringify(normalized.review_reasons_json),
       normalized.summary_text,
-      JSON.stringify(normalized.goals_json),
-      JSON.stringify(normalized.daily_support_json),
-      JSON.stringify(normalized.monitoring_json),
-      JSON.stringify(normalized.escalation_json),
-      JSON.stringify(normalized.caregiver_guidance_json),
+      JSON.stringify(normalized.summary_signal_ids),
+      JSON.stringify(annotatedSections.goals_json),
+      JSON.stringify(annotatedSections.daily_support_json),
+      JSON.stringify(annotatedSections.monitoring_json),
+      JSON.stringify(annotatedSections.escalation_json),
+      JSON.stringify(annotatedSections.caregiver_guidance_json),
       JSON.stringify(normalized.source_signals_json),
+      JSON.stringify(normalized.data_quality_gaps_json),
+      JSON.stringify(normalized.completed_improvement_actions_json),
+      JSON.stringify(normalized.feedback_entries_json),
+      JSON.stringify(normalized.inferred_feedback_json),
+      JSON.stringify(recommendationLearningSnapshot),
+      JSON.stringify(qualitySnapshot),
       normalized.generator_provider,
       normalized.generator_model,
       normalized.generator_version,
       generatedAt,
       normalized.generated_by_user_id,
+      normalized.review_note,
+      JSON.stringify(normalized.review_checklist_json),
+      JSON.stringify(normalized.recommendation_review_decisions_json),
       normalized.reviewed_at,
       normalized.reviewed_by_user_id,
       normalized.reviewed_by_email,
@@ -1872,11 +4807,20 @@ function mergeExternalProfileWithLocalAssignments(data, careProviders, externalU
     can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
     edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
   };
-  return applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
+  const withScheduledContact = applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
     checkins: merged.checkins,
     brainCoach: merged.brainCoach,
     medicationActivity: merged.medicationActivity,
   })));
+  return {
+    ...withScheduledContact,
+    healthPlanFeedback: withScheduledContact.healthPlan
+      ? buildHealthPlanFollowThroughSummary({
+        plan: withScheduledContact.healthPlan,
+        profile: withScheduledContact,
+      })
+      : null,
+  };
 }
 
 function normalizeLivingContextValue(value) {
@@ -2189,11 +5133,16 @@ async function optionalRows(text, params = [], client = { query }) {
   }
 }
 
-function httpError(status, message, expose = status < 500) {
+function httpError(status, message, expose = status < 500, details = null) {
   const error = new Error(message);
   error.status = status;
   error.expose = expose;
+  error.details = details;
   return error;
+}
+
+function healthPlanGenerationError(status, message, details = null) {
+  return httpError(status, message, true, details);
 }
 
 const PROJECT_OWNER_PLATFORM_ADMIN_EMAILS = [
@@ -6260,16 +9209,18 @@ async function loadUserInfo(
   const user = userResult.rows[0];
   if (!user) return null;
 
-  const [consent, health, medications, medicationActivity, checkins, brainCoach, careProviders, sensors, alerts, healthPlan] = await Promise.all([
+  const [consent, health, medications, medicationActivity, medicationHistory, checkins, brainCoach, careProviders, sensors, alerts, campaignJobs, healthPlan] = await Promise.all([
     optionalRows("SELECT *, id::text FROM public.vyva_user_consent WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_health WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_medications WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
     loadLatestMedicationActivity(userId, client),
+    loadRecentMedicationActivityHistory(userId, client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_checkins WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_brain_coach WHERE vyva_user_id = $1 LIMIT 1", [userId], client),
     loadUserCareProviders(userId, context, client),
     optionalRows("SELECT *, id::text FROM public.vyva_user_sensors WHERE vyva_user_id = $1 ORDER BY created_at DESC", [userId], client),
     optionalRows("SELECT *, id::text FROM public.vyva_sensor_alerts WHERE vyva_user_id = $1 ORDER BY created_at DESC LIMIT 50", [userId], client),
+    loadRecentCampaignCallJobsForUser(userId, context, client),
     includeHealthPlan ? loadCurrentHealthPlan(userId, context, client) : Promise.resolve(null),
   ]);
   const caregivers = careProviders
@@ -6316,7 +9267,25 @@ async function loadUserInfo(
     caregivers,
     sensors,
     alerts,
+    recentOperationalEvents: buildRecentOperationalEvents({
+      checkins: checkins[0] || null,
+      brainCoach: brainCoach[0] || null,
+      medicationActivity,
+      medicationHistory,
+      campaignJobs,
+    }),
     readings: [],
+    healthPlanFeedback: healthPlan
+      ? buildHealthPlanFollowThroughSummary({
+        plan: healthPlan,
+        profile: {
+          checkins: checkins[0] || null,
+          brainCoach: brainCoach[0] || null,
+          medicationActivity,
+          alerts,
+        },
+      })
+      : null,
     can_edit_care_plan: carePlanAccess.can_edit_care_plan,
     can_edit_medications: carePlanAccess.can_edit_medications,
     can_edit_checkins: carePlanAccess.can_edit_checkins,
@@ -8157,8 +11126,9 @@ function phoneDigits(value) {
 function countryKeyFromPhone(value) {
   const digits = phoneDigits(value);
   if (!digits) return null;
-  if (digits.startsWith("34")) return "spain";
-  if (digits.startsWith("49")) return "germany";
+  const normalized = digits.startsWith("00") ? digits.slice(2) : digits;
+  if (normalized.startsWith("34")) return "spain";
+  if (normalized.startsWith("49")) return "germany";
   return null;
 }
 
@@ -8839,6 +11809,27 @@ app.get("/api/v1/user-dashboard/users/:id/health-plan/history", asyncRoute(async
   res.json(await loadHealthPlanHistory(resolved.value, req.context));
 }));
 
+app.get("/api/v1/user-dashboard/users/:id/health-plan/history-replay", asyncRoute(async (req, res) => {
+  if (!pool) {
+    res.json(null);
+    return;
+  }
+  const resolved = await resolveHealthPlanUserId(req.params.id, req.context, { createShadow: false });
+  if (resolved.notFound) {
+    res.json(null);
+    return;
+  }
+  if (resolved.error) throw httpError(400, resolved.error);
+  const [currentPlan, history] = await Promise.all([
+    loadCurrentHealthPlan(resolved.value, req.context),
+    loadHealthPlanHistory(resolved.value, req.context),
+  ]);
+  res.json(buildHealthPlanBenchmarkReplayFromHistory({
+    history,
+    currentPlan,
+  }));
+}));
+
 app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(async (req, res) => {
   if (!pool) throw httpError(503, "Database is not configured");
   const client = await pool.connect();
@@ -8864,26 +11855,582 @@ app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(asy
     );
     const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
     const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
-    const generated = await generateHealthPlan(profileResult.value.profile, predictiveContext, sourceSignals, language);
+    const peerCohort = await loadHealthPlanPeerCohortContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
+    const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+      medications: profileResult.value.profile?.medications || [],
+      medicationActivity: profileResult.value.profile?.medicationActivity || null,
+      checkins: profileResult.value.profile?.checkins || null,
+      brainCoach: profileResult.value.profile?.brainCoach || null,
+      sensors: profileResult.value.profile?.sensors || [],
+      alerts: profileResult.value.profile?.alerts || [],
+      recentOperationalEvents: profileResult.value.profile?.recentOperationalEvents || [],
+    });
+    const dataQualityGaps = buildHealthPlanDataQualityGaps({
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+    });
+    const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profileResult.value.profile, predictiveContext, sourceSignals);
+    const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+    const existingPlan = await loadCurrentHealthPlan(profileResult.value.userId, req.context, client);
+    const existingPlanHistory = existingPlan
+      ? await loadHealthPlanHistory(profileResult.value.userId, req.context, client)
+      : [];
+    const longitudinalMemory = buildHealthPlanLongitudinalMemory({
+      liveEvidenceSummary,
+      history: existingPlanHistory,
+    });
+    const existingPlanFeedback = existingPlan
+      ? buildHealthPlanFollowThroughSummary({
+        plan: existingPlan,
+        profile: profileResult.value.profile,
+        predictiveContext,
+      })
+      : null;
+    const sectionDrift = existingPlan
+      ? buildHealthPlanSectionDrift({
+        plan: existingPlan,
+        dataQualityGaps,
+        followThrough: existingPlanFeedback,
+      })
+      : [];
+    const governance = buildHealthPlanGovernanceSnapshot({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+      dataQualityGaps,
+      followThrough: existingPlanFeedback,
+      sectionDrift,
+      feedbackEntries: existingPlan?.feedback_entries_json || [],
+    });
+    const inferredFeedbackSnapshot = buildStoredInferredFeedbackSnapshot(
+      existingPlan,
+      profileResult.value.profile,
+      predictiveContext,
+      existingPlanFeedback,
+    );
+    const generated = await generateHealthPlan(
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      existingPlan,
+      existingPlanFeedback,
+      existingPlanHistory,
+      { peerCohort },
+    );
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
       action_type: "generated",
       language,
       review_status: "draft",
-      summary_text: generated.summary_text,
-      goals_json: generated.goals_json,
-      daily_support_json: generated.daily_support_json,
-      monitoring_json: generated.monitoring_json,
-      escalation_json: generated.escalation_json,
-      caregiver_guidance_json: generated.caregiver_guidance_json,
+      escalation_grade: governance.reviewGovernance.escalation_grade,
+      review_required: governance.reviewGovernance.review_required,
+      review_window: governance.reviewGovernance.review_window,
+      review_summary: governance.reviewGovernance.review_summary,
+      review_reasons_json: governance.reviewGovernance.review_reasons_json,
+      summary_text: generated.plan.summary_text,
+      summary_signal_ids: generated.plan.summary_signal_ids,
+      goals_json: generated.plan.goals_json,
+      daily_support_json: generated.plan.daily_support_json,
+      monitoring_json: generated.plan.monitoring_json,
+      escalation_json: generated.plan.escalation_json,
+      caregiver_guidance_json: generated.plan.caregiver_guidance_json,
       source_signals_json: sourceSignals,
-      generator_provider: generated.generator_provider,
-      generator_model: generated.generator_model,
-      generator_version: generated.generator_version,
+      live_evidence_summary: liveEvidenceSummary,
+      longitudinal_memory: longitudinalMemory,
+      cohort_guidance: generated.cohort_guidance || null,
+      data_quality_gaps_json: dataQualityGaps,
+      completed_improvement_actions_json: existingPlan?.completed_improvement_actions_json || [],
+      feedback_entries_json: existingPlan?.feedback_entries_json || [],
+      inferred_feedback_json: inferredFeedbackSnapshot,
+      recommendation_review_decisions_json: existingPlan?.recommendation_review_decisions_json || [],
+      follow_through: existingPlanFeedback,
+      section_drift: sectionDrift,
+      critical_signal_ids: criticalSignalIds,
+      generator_provider: generated.plan.generator_provider,
+      generator_model: generated.plan.generator_model,
+      generator_version: generated.plan.generator_version,
+      recommendation_calibration: generated.recommendation_calibration,
+      candidate_selection: generated.candidate_selection || null,
       generated_by_user_id: req.context?.userId || null,
     });
     if (saved.error) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: saved.error });
+      res.status(400).json({ error: saved.error, ...(saved.review_blockers ? { review_blockers: saved.review_blockers } : {}) });
+      return;
+    }
+
+    await client.query("COMMIT");
+    res.json(saved.value);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.post("/api/v1/user-dashboard/users/:id/health-plan/regenerate-sections", asyncRoute(async (req, res) => {
+  if (!pool) throw httpError(503, "Database is not configured");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const profileResult = await loadHealthPlanProfile(req.params.id, req.context, { createShadow: true, client });
+    if (profileResult.notFound) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (profileResult.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: profileResult.error });
+      return;
+    }
+
+    await requireCarePlanAccess(profileResult.value.userId, req.context, client);
+
+    const existingPlan = await loadCurrentHealthPlan(profileResult.value.userId, req.context, client);
+    if (!existingPlan) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Health plan not found" });
+      return;
+    }
+    const existingPlanHistory = await loadHealthPlanHistory(profileResult.value.userId, req.context, client);
+
+    const requestedSections = normalizeHealthPlanTargetSections(req.body?.sections);
+    if (!requestedSections.length) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "At least one health plan section is required" });
+      return;
+    }
+
+    const language = normalizeLanguage(
+      existingPlan.language,
+      profileResult.value.profile?.user?.language || req.context?.organization?.defaultLanguage || "de",
+    );
+    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
+    const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
+    const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+      medications: profileResult.value.profile?.medications || [],
+      medicationActivity: profileResult.value.profile?.medicationActivity || null,
+      checkins: profileResult.value.profile?.checkins || null,
+      brainCoach: profileResult.value.profile?.brainCoach || null,
+      sensors: profileResult.value.profile?.sensors || [],
+      alerts: profileResult.value.profile?.alerts || [],
+      recentOperationalEvents: profileResult.value.profile?.recentOperationalEvents || [],
+    });
+    const longitudinalMemory = buildHealthPlanLongitudinalMemory({
+      liveEvidenceSummary,
+      history: existingPlanHistory,
+    });
+    const dataQualityGaps = buildHealthPlanDataQualityGaps({
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+    });
+    const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profileResult.value.profile, predictiveContext, sourceSignals);
+    const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+    const existingPlanFeedback = buildHealthPlanFollowThroughSummary({
+      plan: existingPlan,
+      profile: profileResult.value.profile,
+      predictiveContext,
+    });
+    const sectionDrift = buildHealthPlanSectionDrift({
+      plan: existingPlan,
+      dataQualityGaps,
+      followThrough: existingPlanFeedback,
+    });
+    const clinicalCautions = buildHealthPlanClinicalCautions({
+      sourceSignals,
+      followThrough: existingPlanFeedback,
+    });
+    const clinicalCautionIssues = findHealthPlanClinicalCautionIssues(existingPlan, {
+      sourceSignals,
+      followThrough: existingPlanFeedback,
+      clinicalCautions,
+    });
+    const governance = buildHealthPlanGovernanceSnapshot({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+      dataQualityGaps,
+      followThrough: existingPlanFeedback,
+      sectionDrift,
+      feedbackEntries: existingPlan.feedback_entries_json || [],
+    });
+    const inferredFeedbackSnapshot = buildStoredInferredFeedbackSnapshot(
+      existingPlan,
+      profileResult.value.profile,
+      predictiveContext,
+      existingPlanFeedback,
+    );
+    const freshness = buildHealthPlanFreshnessSnapshot({
+      plan: existingPlan,
+      followThrough: existingPlanFeedback,
+      recentOperationalEvents: profileResult.value.profile?.recentOperationalEvents,
+      reviewGovernance: governance.reviewGovernance,
+      sectionDrift,
+    });
+    const refreshStrategy = buildHealthPlanRefreshStrategy({
+      freshness,
+      sectionDrift,
+      clinicalCautions,
+      clinicalCautionIssues,
+      reviewGovernance: governance.reviewGovernance,
+      followThrough: existingPlanFeedback,
+    });
+    const targetSections = expandHealthPlanRefreshSections(requestedSections, refreshStrategy);
+    const refreshed = await generateTargetedHealthPlanSections(
+      profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+      language,
+      existingPlan,
+      existingPlanFeedback,
+      existingPlanHistory,
+      targetSections,
+      { peerCohort },
+    );
+    const mergedPlan = refreshed.plan;
+    const coverageIssues = findHealthPlanCoverageIssues(mergedPlan, {
+      sourceSignals,
+      signalTriage: buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds),
+      criticalSignalIds,
+    }, {
+      targetSections: ["summary", ...targetSections],
+    });
+    if (coverageIssues.length) {
+      await client.query("ROLLBACK");
+      res.status(502).json({ error: coverageIssues[0].message || "Health plan refresh missed required support coverage" });
+      return;
+    }
+
+    const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
+      action_type: "regenerated",
+      language,
+      review_status: "draft",
+      escalation_grade: governance.reviewGovernance.escalation_grade,
+      review_required: governance.reviewGovernance.review_required,
+      review_window: governance.reviewGovernance.review_window,
+      review_summary: governance.reviewGovernance.review_summary,
+      review_reasons_json: governance.reviewGovernance.review_reasons_json,
+      summary_text: mergedPlan.summary_text,
+      summary_signal_ids: mergedPlan.summary_signal_ids,
+      goals_json: mergedPlan.goals_json,
+      daily_support_json: mergedPlan.daily_support_json,
+      monitoring_json: mergedPlan.monitoring_json,
+      escalation_json: mergedPlan.escalation_json,
+      caregiver_guidance_json: mergedPlan.caregiver_guidance_json,
+      source_signals_json: sourceSignals,
+      live_evidence_summary: liveEvidenceSummary,
+      longitudinal_memory: longitudinalMemory,
+      cohort_guidance: refreshed.cohort_guidance || null,
+      data_quality_gaps_json: dataQualityGaps,
+      completed_improvement_actions_json: existingPlan.completed_improvement_actions_json || [],
+      feedback_entries_json: existingPlan.feedback_entries_json || [],
+      inferred_feedback_json: inferredFeedbackSnapshot,
+      recommendation_review_decisions_json: existingPlan.recommendation_review_decisions_json || [],
+      follow_through: existingPlanFeedback,
+      section_drift: sectionDrift,
+      critical_signal_ids: criticalSignalIds,
+      generator_provider: mergedPlan.generator_provider || existingPlan.generator_provider,
+      generator_model: mergedPlan.generator_model || existingPlan.generator_model,
+      generator_version: mergedPlan.generator_version || existingPlan.generator_version,
+      recommendation_calibration: refreshed.recommendation_calibration,
+    });
+    if (saved.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: saved.error, ...(saved.review_blockers ? { review_blockers: saved.review_blockers } : {}) });
+      return;
+    }
+
+    await client.query("COMMIT");
+    res.json(saved.value);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.post("/api/v1/user-dashboard/users/:id/health-plan/improvement-actions/complete", asyncRoute(async (req, res) => {
+  if (!pool) throw httpError(503, "Database is not configured");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const profileResult = await loadHealthPlanProfile(req.params.id, req.context, { createShadow: true, client });
+    if (profileResult.notFound) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (profileResult.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: profileResult.error });
+      return;
+    }
+
+    await requireCarePlanAccess(profileResult.value.userId, req.context, client);
+
+    const existingPlan = await loadCurrentHealthPlan(profileResult.value.userId, req.context, client);
+    if (!existingPlan) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Health plan not found" });
+      return;
+    }
+
+    const actionId = nullIfBlank(req.body?.action_id);
+    if (!actionId) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "action_id is required" });
+      return;
+    }
+
+    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
+    const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
+    const dataQualityGaps = buildHealthPlanDataQualityGaps({
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+    });
+    const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profileResult.value.profile, predictiveContext, sourceSignals);
+    const followThrough = buildHealthPlanFollowThroughSummary({
+      plan: existingPlan,
+      profile: profileResult.value.profile,
+      predictiveContext,
+    });
+    const sectionDrift = buildHealthPlanSectionDrift({
+      plan: existingPlan,
+      dataQualityGaps,
+      followThrough,
+    });
+    const openActions = buildHealthPlanImprovementActions({
+      dataQualityGaps,
+      followThrough,
+      sectionDrift,
+      completedActions: existingPlan.completed_improvement_actions_json || [],
+    });
+    const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+    const governance = buildHealthPlanGovernanceSnapshot({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+      dataQualityGaps,
+      followThrough,
+      sectionDrift,
+      feedbackEntries: existingPlan.feedback_entries_json || [],
+    });
+    const inferredFeedbackSnapshot = buildStoredInferredFeedbackSnapshot(
+      existingPlan,
+      profileResult.value.profile,
+      predictiveContext,
+      followThrough,
+    );
+    const matchedAction = openActions.find((item) => item?.id === actionId);
+    if (!matchedAction) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Improvement action not found" });
+      return;
+    }
+
+    const completedActions = normalizeCompletedHealthPlanImprovementActions([
+      ...(existingPlan.completed_improvement_actions_json || []),
+      {
+        action_id: matchedAction.id,
+        title: matchedAction.title,
+        section_key: matchedAction.section_key,
+        completed_at: new Date().toISOString(),
+        completed_by_user_id: req.context?.userId || null,
+        completed_by_email: req.context?.email || null,
+        note: nullIfBlank(req.body?.note) || null,
+      },
+    ]);
+
+    const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
+      action_type: "edited",
+      language: existingPlan.language,
+      review_status: existingPlan.review_status,
+      review_note: existingPlan.review_note,
+      escalation_grade: governance.reviewGovernance.escalation_grade,
+      review_required: governance.reviewGovernance.review_required,
+      review_window: governance.reviewGovernance.review_window,
+      review_summary: governance.reviewGovernance.review_summary,
+      review_reasons_json: governance.reviewGovernance.review_reasons_json,
+      summary_text: existingPlan.summary_text,
+      summary_signal_ids: existingPlan.summary_signal_ids,
+      goals_json: existingPlan.goals_json,
+      daily_support_json: existingPlan.daily_support_json,
+      monitoring_json: existingPlan.monitoring_json,
+      escalation_json: existingPlan.escalation_json,
+      caregiver_guidance_json: existingPlan.caregiver_guidance_json,
+      source_signals_json: sourceSignals,
+      data_quality_gaps_json: dataQualityGaps,
+      completed_improvement_actions_json: completedActions,
+      feedback_entries_json: existingPlan.feedback_entries_json || [],
+      inferred_feedback_json: inferredFeedbackSnapshot,
+      recommendation_review_decisions_json: existingPlan.recommendation_review_decisions_json || [],
+      follow_through: followThrough,
+      section_drift: sectionDrift,
+      critical_signal_ids: criticalSignalIds,
+      generator_provider: existingPlan.generator_provider,
+      generator_model: existingPlan.generator_model,
+      generator_version: existingPlan.generator_version,
+      generated_by_user_id: existingPlan.generated_by_user_id || req.context?.userId || null,
+      generated_at: existingPlan.generated_at,
+      reviewed_at: existingPlan.reviewed_at,
+      reviewed_by_user_id: existingPlan.reviewed_by_user_id,
+      reviewed_by_email: existingPlan.reviewed_by_email,
+    });
+    if (saved.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: saved.error, ...(saved.review_blockers ? { review_blockers: saved.review_blockers } : {}) });
+      return;
+    }
+
+    await client.query("COMMIT");
+    res.json(saved.value);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.post("/api/v1/user-dashboard/users/:id/health-plan/feedback", asyncRoute(async (req, res) => {
+  if (!pool) throw httpError(503, "Database is not configured");
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const profileResult = await loadHealthPlanProfile(req.params.id, req.context, { createShadow: true, client });
+    if (profileResult.notFound) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "User not found" });
+      return;
+    }
+    if (profileResult.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: profileResult.error });
+      return;
+    }
+
+    await requireCarePlanAccess(profileResult.value.userId, req.context, client);
+
+    const existingPlan = await loadCurrentHealthPlan(profileResult.value.userId, req.context, client);
+    if (!existingPlan) {
+      await client.query("ROLLBACK");
+      res.status(404).json({ error: "Health plan not found" });
+      return;
+    }
+
+    const sectionKey = nullIfBlank(req.body?.section_key);
+    const itemId = nullIfBlank(req.body?.item_id);
+    const outcome = nullIfBlank(req.body?.outcome);
+    if (!sectionKey || !healthPlanSectionDefinitionByStorageKey[sectionKey]) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "section_key is required" });
+      return;
+    }
+    if (!["helped", "mixed", "did_not_help", "needs_follow_up"].includes(outcome)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "outcome is required" });
+      return;
+    }
+
+    const existingFeedback = normalizeHealthPlanFeedbackEntries(existingPlan.feedback_entries_json);
+    const nextFeedback = normalizeHealthPlanFeedbackEntries([
+      ...existingFeedback.filter((item) => {
+        if (item.section_key !== sectionKey) return true;
+        const existingItemId = nullIfBlank(item?.item_id);
+        if (!itemId && !existingItemId) return false;
+        if (itemId && existingItemId === itemId) return false;
+        return true;
+      }),
+      {
+        id: `${sectionKey}:${itemId || "section"}`,
+        section_key: sectionKey,
+        item_id: itemId || undefined,
+        outcome,
+        note: nullIfBlank(req.body?.note) || null,
+        recorded_at: new Date().toISOString(),
+        recorded_by_user_id: req.context?.userId || null,
+        recorded_by_email: req.context?.email || null,
+      },
+    ]);
+    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
+    const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
+    const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profileResult.value.profile, predictiveContext, sourceSignals);
+    const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+    const dataQualityGaps = buildHealthPlanDataQualityGaps({
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+    });
+    const followThrough = buildHealthPlanFollowThroughSummary({
+      plan: existingPlan,
+      profile: profileResult.value.profile,
+      predictiveContext,
+    });
+    const sectionDrift = buildHealthPlanSectionDrift({
+      plan: existingPlan,
+      dataQualityGaps,
+      followThrough,
+    });
+    const governance = buildHealthPlanGovernanceSnapshot({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+      dataQualityGaps,
+      followThrough,
+      sectionDrift,
+      feedbackEntries: nextFeedback,
+    });
+    const inferredFeedbackSnapshot = buildStoredInferredFeedbackSnapshot(
+      existingPlan,
+      profileResult.value.profile,
+      predictiveContext,
+      followThrough,
+    );
+
+    const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
+      action_type: "edited",
+      language: existingPlan.language,
+      review_status: existingPlan.review_status,
+      review_note: existingPlan.review_note,
+      escalation_grade: governance.reviewGovernance.escalation_grade,
+      review_required: governance.reviewGovernance.review_required,
+      review_window: governance.reviewGovernance.review_window,
+      review_summary: governance.reviewGovernance.review_summary,
+      review_reasons_json: governance.reviewGovernance.review_reasons_json,
+      summary_text: existingPlan.summary_text,
+      summary_signal_ids: existingPlan.summary_signal_ids,
+      goals_json: existingPlan.goals_json,
+      daily_support_json: existingPlan.daily_support_json,
+      monitoring_json: existingPlan.monitoring_json,
+      escalation_json: existingPlan.escalation_json,
+      caregiver_guidance_json: existingPlan.caregiver_guidance_json,
+      source_signals_json: sourceSignals,
+      data_quality_gaps_json: dataQualityGaps,
+      completed_improvement_actions_json: existingPlan.completed_improvement_actions_json || [],
+      feedback_entries_json: nextFeedback,
+      inferred_feedback_json: inferredFeedbackSnapshot,
+      recommendation_review_decisions_json: existingPlan.recommendation_review_decisions_json || [],
+      follow_through: followThrough,
+      section_drift: sectionDrift,
+      critical_signal_ids: criticalSignalIds,
+      generator_provider: existingPlan.generator_provider,
+      generator_model: existingPlan.generator_model,
+      generator_version: existingPlan.generator_version,
+      generated_by_user_id: existingPlan.generated_by_user_id || req.context?.userId || null,
+      generated_at: existingPlan.generated_at,
+      reviewed_at: existingPlan.reviewed_at,
+      reviewed_by_user_id: existingPlan.reviewed_by_user_id,
+      reviewed_by_email: existingPlan.reviewed_by_email,
+    });
+    if (saved.error) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: saved.error, ...(saved.review_blockers ? { review_blockers: saved.review_blockers } : {}) });
       return;
     }
 
@@ -8932,30 +12479,129 @@ app.put("/api/v1/user-dashboard/users/:id/health-plan", asyncRoute(async (req, r
             : "draft";
     const preserveReviewedMetadata = requestedReviewStatus === "reviewed" && req.body?.review_status !== "reviewed";
     const actionType = req.body?.review_status === "reviewed" ? "reviewed" : "edited";
+    const predictiveContext = await loadHealthPlanPredictiveContext(profileResult.value.userId, scopeOrganizationId(req.context), client);
+    const sourceSignals = assembleHealthPlanSourceSignals(profileResult.value.profile, predictiveContext);
+    const criticalSignalIds = deriveCriticalHealthPlanSignalIds(profileResult.value.profile, predictiveContext, sourceSignals);
+    const dataQualityGaps = buildHealthPlanDataQualityGaps({
+      profile: profileResult.value.profile,
+      predictiveContext,
+      sourceSignals,
+    });
+    const followThrough = buildHealthPlanFollowThroughSummary({
+      plan: existing,
+      profile: profileResult.value.profile,
+      predictiveContext,
+    });
+    const clinicalCautions = buildHealthPlanClinicalCautions({
+      sourceSignals,
+      followThrough,
+    });
+    const liveEvidenceSummary = buildHealthPlanLiveEvidenceSummary({
+      medications: profileResult.value.profile?.medications || [],
+      medicationActivity: profileResult.value.profile?.medicationActivity || null,
+      checkins: profileResult.value.profile?.checkins || null,
+      brainCoach: profileResult.value.profile?.brainCoach || null,
+      sensors: profileResult.value.profile?.sensors || [],
+      alerts: profileResult.value.profile?.alerts || [],
+      recentOperationalEvents: profileResult.value.profile?.recentOperationalEvents || [],
+    });
+    const healthPlanHistory = await loadHealthPlanHistory(profileResult.value.userId, req.context, client);
+    const longitudinalMemory = buildHealthPlanLongitudinalMemory({
+      liveEvidenceSummary,
+      history: healthPlanHistory,
+    });
+    const sectionDrift = buildHealthPlanSectionDrift({
+      plan: existing,
+      dataQualityGaps,
+      followThrough,
+    });
+    const signalTriage = buildHealthPlanSignalTriage(sourceSignals, criticalSignalIds);
+    const governance = buildHealthPlanGovernanceSnapshot({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+      dataQualityGaps,
+      followThrough,
+      sectionDrift,
+      feedbackEntries: existing.feedback_entries_json || [],
+    });
+    const inferredFeedbackSnapshot = buildStoredInferredFeedbackSnapshot(
+      existing,
+      profileResult.value.profile,
+      predictiveContext,
+      followThrough,
+    );
+    const reviewNote = nullIfBlank(req.body?.review_note);
+    const reviewChecklist = preserveReviewedMetadata
+      ? normalizeHealthPlanReviewChecklist(existing.review_checklist_json)
+      : normalizeHealthPlanReviewChecklist(req.body?.review_checklist_json);
+    const recommendationReviewDecisions = preserveReviewedMetadata
+      ? normalizeHealthPlanRecommendationReviewDecisions(existing.recommendation_review_decisions_json)
+      : normalizeHealthPlanRecommendationReviewDecisions(
+        req.body?.recommendation_review_decisions_json ?? existing.recommendation_review_decisions_json,
+      );
+    const urgentReviewNoteRequired =
+      requestedReviewStatus === "reviewed"
+      && governance.reviewGovernance.review_required
+      && governance.reviewGovernance.review_window === "today"
+      && !preserveReviewedMetadata;
+    if (urgentReviewNoteRequired && !reviewNote) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "review_note is required before marking an urgent health plan as reviewed" });
+      return;
+    }
+    if (urgentReviewNoteRequired && !isHealthPlanReviewChecklistComplete(reviewChecklist, { clinicalCautions })) {
+      await client.query("ROLLBACK");
+      res.status(400).json({
+        error: "review_checklist_json must confirm all urgent review checks before marking this plan as reviewed",
+        missing_items: missingHealthPlanReviewChecklistItems(reviewChecklist, { clinicalCautions }),
+      });
+      return;
+    }
 
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
       action_type: actionType,
       language: req.body?.language || existing.language,
       review_status: requestedReviewStatus,
+      escalation_grade: governance.reviewGovernance.escalation_grade,
+      review_required: governance.reviewGovernance.review_required,
+      review_window: governance.reviewGovernance.review_window,
+      review_summary: governance.reviewGovernance.review_summary,
+      review_reasons_json: governance.reviewGovernance.review_reasons_json,
+      manual_override_reason: req.body?.manual_override_reason,
       summary_text: req.body?.summary_text,
+      summary_signal_ids: req.body?.summary_signal_ids || existing.summary_signal_ids,
       goals_json: req.body?.goals_json,
       daily_support_json: req.body?.daily_support_json,
       monitoring_json: req.body?.monitoring_json,
       escalation_json: req.body?.escalation_json,
       caregiver_guidance_json: req.body?.caregiver_guidance_json,
-      source_signals_json: existing.source_signals_json,
+      source_signals_json: sourceSignals,
+      data_quality_gaps_json: dataQualityGaps,
+      completed_improvement_actions_json: existing.completed_improvement_actions_json || [],
+      feedback_entries_json: existing.feedback_entries_json || [],
+      inferred_feedback_json: inferredFeedbackSnapshot,
+      recent_operational_events: profileResult.value.profile?.recentOperationalEvents || [],
+      live_evidence_summary: liveEvidenceSummary,
+      longitudinal_memory: longitudinalMemory,
+      follow_through: followThrough,
+      section_drift: sectionDrift,
+      critical_signal_ids: criticalSignalIds,
       generator_provider: existing.generator_provider,
       generator_model: existing.generator_model,
       generator_version: existing.generator_version,
       generated_by_user_id: existing.generated_by_user_id || req.context?.userId || null,
       generated_at: existing.generated_at,
+      review_note: preserveReviewedMetadata ? existing.review_note : reviewNote,
+      review_checklist_json: reviewChecklist,
+      recommendation_review_decisions_json: recommendationReviewDecisions,
       reviewed_at: preserveReviewedMetadata ? existing.reviewed_at : undefined,
       reviewed_by_user_id: preserveReviewedMetadata ? existing.reviewed_by_user_id : undefined,
       reviewed_by_email: preserveReviewedMetadata ? existing.reviewed_by_email : undefined,
     });
     if (saved.error) {
       await client.query("ROLLBACK");
-      res.status(400).json({ error: saved.error });
+      res.status(400).json({ error: saved.error, ...(saved.review_blockers ? { review_blockers: saved.review_blockers } : {}) });
       return;
     }
 
@@ -10465,7 +14111,8 @@ app.use((error, _req, res, _next) => {
   const status = error.status || (error.code === "23505" ? 409 : error.code === "DB_NOT_CONFIGURED" ? 503 : 500);
   if (status >= 500) console.error(error);
   res.status(status).json({
-    error: status === 409 ? "Record already exists" : status >= 500 && !error.expose ? "Server error" : error.message,
+    error: error.code === "23505" ? "Record already exists" : status >= 500 && !error.expose ? "Server error" : error.message,
+    ...(error.details && typeof error.details === "object" ? error.details : {}),
   });
 });
 
