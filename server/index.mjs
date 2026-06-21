@@ -11687,6 +11687,10 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
       context = await resolveRequestContext(req);
       req.context = context;
     }
+    if (context) {
+      res.json(await loadDashboardUsers(context));
+      return;
+    }
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
       query: scopedVyvaBackendQuery(req.query, context),
     });
