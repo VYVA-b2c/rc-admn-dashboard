@@ -640,19 +640,6 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
 function mergeDashboardPayloads(primary, local) {
   const primaryUsers = Array.isArray(primary?.gisUsers) ? primary.gisUsers : [];
   const localUsers = Array.isArray(local?.gisUsers) ? local.gisUsers : [];
-  const localExternalUserIds = new Set(
-    localUsers
-      .map((user) => nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id)))
-      .filter(Boolean),
-  );
-  const retainedPrimaryUsers = primaryUsers.filter((user) => {
-    const primaryId = nullIfBlank(user?.id);
-    const primaryExternalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
-    return Boolean(
-      (primaryId && localExternalUserIds.has(primaryId)) ||
-      (primaryExternalUserId && localExternalUserIds.has(primaryExternalUserId)),
-    );
-  });
   const seenUserKeys = new Set();
   const addUserKeys = (user) => {
     const id = nullIfBlank(user?.id);
@@ -663,9 +650,9 @@ function mergeDashboardPayloads(primary, local) {
     }
     if (externalUserId) seenUserKeys.add(`external:${externalUserId}`);
   };
-  retainedPrimaryUsers.forEach(addUserKeys);
+  primaryUsers.forEach(addUserKeys);
 
-  const mergedUsers = [...retainedPrimaryUsers];
+  const mergedUsers = [...primaryUsers];
   for (const user of localUsers) {
     const id = nullIfBlank(user?.id);
     const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
@@ -675,12 +662,7 @@ function mergeDashboardPayloads(primary, local) {
   }
 
   const activeAlerts = [
-    ...(Array.isArray(primary?.activeAlerts)
-      ? primary.activeAlerts.filter((alert) => {
-          const alertUserId = nullIfBlank(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id));
-          return Boolean(alertUserId && localExternalUserIds.has(alertUserId));
-        })
-      : []),
+    ...(Array.isArray(primary?.activeAlerts) ? primary.activeAlerts : []),
     ...(Array.isArray(local?.activeAlerts) ? local.activeAlerts : []),
   ];
   const cityDistribution = Array.from(
@@ -11751,7 +11733,17 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
       const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
         query: scopedVyvaBackendQuery(req.query, context),
       });
-      res.json(upstream?.ok ? removeStaleExternalShadowUsers(localDashboard, upstream.data, context) : localDashboard);
+      if (upstream?.ok) {
+        const externalIds = Array.isArray(upstream.data?.gisUsers)
+          ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
+          : [];
+        const assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
+        const upstreamDashboard = normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context);
+        const cleanedLocalDashboard = removeStaleExternalShadowUsers(localDashboard, upstream.data, context);
+        res.json(mergeDashboardPayloads(upstreamDashboard, cleanedLocalDashboard));
+        return;
+      }
+      res.json(localDashboard);
       return;
     }
     const upstream = await requestVyvaBackend("/api/v1/user-dashboard/users", {
