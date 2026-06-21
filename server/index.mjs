@@ -639,16 +639,32 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
 function mergeDashboardPayloads(primary, local) {
   const primaryUsers = Array.isArray(primary?.gisUsers) ? primary.gisUsers : [];
   const localUsers = Array.isArray(local?.gisUsers) ? local.gisUsers : [];
+  const localExternalUserIds = new Set(
+    localUsers
+      .map((user) => nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id)))
+      .filter(Boolean),
+  );
+  const retainedPrimaryUsers = primaryUsers.filter((user) => {
+    const primaryId = nullIfBlank(user?.id);
+    const primaryExternalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
+    return Boolean(
+      (primaryId && localExternalUserIds.has(primaryId)) ||
+      (primaryExternalUserId && localExternalUserIds.has(primaryExternalUserId)),
+    );
+  });
   const seenUserKeys = new Set();
   const addUserKeys = (user) => {
     const id = nullIfBlank(user?.id);
     const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
-    if (id) seenUserKeys.add(`id:${id}`);
+    if (id) {
+      seenUserKeys.add(`id:${id}`);
+      seenUserKeys.add(`external:${id}`);
+    }
     if (externalUserId) seenUserKeys.add(`external:${externalUserId}`);
   };
-  primaryUsers.forEach(addUserKeys);
+  retainedPrimaryUsers.forEach(addUserKeys);
 
-  const mergedUsers = [...primaryUsers];
+  const mergedUsers = [...retainedPrimaryUsers];
   for (const user of localUsers) {
     const id = nullIfBlank(user?.id);
     const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
@@ -658,7 +674,12 @@ function mergeDashboardPayloads(primary, local) {
   }
 
   const activeAlerts = [
-    ...(Array.isArray(primary?.activeAlerts) ? primary.activeAlerts : []),
+    ...(Array.isArray(primary?.activeAlerts)
+      ? primary.activeAlerts.filter((alert) => {
+          const alertUserId = nullIfBlank(firstValue(alert?.vyva_user_id, alert?.user_id, alert?.user?.id, alert?.vyva_users?.id));
+          return Boolean(alertUserId && localExternalUserIds.has(alertUserId));
+        })
+      : []),
     ...(Array.isArray(local?.activeAlerts) ? local.activeAlerts : []),
   ];
   const cityDistribution = Array.from(
