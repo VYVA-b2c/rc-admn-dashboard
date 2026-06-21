@@ -153,6 +153,7 @@ const pgPassword = process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD;
 const pgPort = process.env.PGPORT || process.env.POSTGRES_PORT;
 const vyvaBackendApiUrl = (process.env.VYVA_BACKEND_API_URL || process.env.VYVA_API_BASE_URL || "https://api.vyva.io").replace(/\/$/, "");
 const externalUserSource = "api.vyva.io";
+const phoneOnboardingUserSource = "phone-onboarding";
 const vyvaBackendApiDisabled = process.env.VYVA_BACKEND_API_DISABLED === "true";
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const supabaseBaseUrl = supabaseUrl ? supabaseUrl.replace(/\/$/, "") : null;
@@ -11320,6 +11321,7 @@ async function upsertPhoneRegistrationUser(registration) {
   const existingId = await findOnboardingUser(registration);
   const params = [
     registration.organization_id,
+    phoneOnboardingUserSource,
     registration.first_name,
     registration.last_name,
     registration.phone,
@@ -11344,6 +11346,7 @@ async function upsertPhoneRegistrationUser(registration) {
       `
         INSERT INTO public.vyva_users (
           organization_id,
+          external_source,
           first_name,
           last_name,
           phone,
@@ -11362,7 +11365,7 @@ async function upsertPhoneRegistrationUser(registration) {
           call_duration,
           call_timestamp
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         RETURNING *, id::text
       `,
       params,
@@ -11374,23 +11377,24 @@ async function upsertPhoneRegistrationUser(registration) {
     `
       UPDATE public.vyva_users
       SET
-        first_name = COALESCE($3, first_name),
-        last_name = COALESCE($4, last_name),
-        phone = COALESCE($5, phone),
-        city = COALESCE($6, city),
-        street = COALESCE($7, street),
-        house_number = COALESCE($8, house_number),
-        post_code = COALESCE($9, post_code),
-        country = COALESCE($10, country),
-        timezone = COALESCE($11, timezone),
-        date_of_birth = COALESCE($12, date_of_birth),
-        gender = COALESCE($13, gender),
-        language = COALESCE($14, language),
-        emergency_notes = COALESCE($15, emergency_notes),
-        conversation_id = COALESCE($16, conversation_id),
-        transcript = COALESCE($17, transcript),
-        call_duration = COALESCE($18, call_duration),
-        call_timestamp = COALESCE($19, call_timestamp),
+        external_source = $3,
+        first_name = COALESCE($4, first_name),
+        last_name = COALESCE($5, last_name),
+        phone = COALESCE($6, phone),
+        city = COALESCE($7, city),
+        street = COALESCE($8, street),
+        house_number = COALESCE($9, house_number),
+        post_code = COALESCE($10, post_code),
+        country = COALESCE($11, country),
+        timezone = COALESCE($12, timezone),
+        date_of_birth = COALESCE($13, date_of_birth),
+        gender = COALESCE($14, gender),
+        language = COALESCE($15, language),
+        emergency_notes = COALESCE($16, emergency_notes),
+        conversation_id = COALESCE($17, conversation_id),
+        transcript = COALESCE($18, transcript),
+        call_duration = COALESCE($19, call_duration),
+        call_timestamp = COALESCE($20, call_timestamp),
         updated_at = now()
       WHERE id = $1 AND organization_id = $2
       RETURNING *, id::text
