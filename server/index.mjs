@@ -32,6 +32,7 @@ import {
   normalizeHealthPlanReviewChecklist,
 } from "../src/lib/healthPlanReviewChecklist.js";
 import { findHealthPlanSafetyIssues } from "../src/lib/healthPlanSafetyReview.js";
+import { repairOperationalMonitoringLanguage } from "../src/lib/healthPlanMonitoringRepair.js";
 import {
   buildHealthPlanEvidenceConflicts,
   buildHealthPlanEvidenceHierarchy,
@@ -3485,8 +3486,16 @@ function finalizeGeneratedHealthPlanDraft({
     sectionDrift: promptInput?.existing_plan_section_drift || [],
   });
 
+  const repairedPlan = repairOperationalMonitoringLanguage(
+    calibrated.plan || { ...normalizedPlan, ...enrichedSections },
+    {
+      sourceSignals,
+      signalTriage: promptInput?.signal_triage || {},
+      criticalSignalIds: promptInput?.critical_signal_ids || [],
+    },
+  );
   const validated = validateGeneratedHealthPlan({
-    ...(calibrated.plan || { ...normalizedPlan, ...enrichedSections }),
+    ...repairedPlan,
     generator_provider: "openai",
     generator_model: healthPlanOpenAiModel,
     generator_version: generationPath === "repair" ? `${healthPlanGeneratorVersion}-repair` : healthPlanGeneratorVersion,
@@ -3536,12 +3545,16 @@ function finalizeGeneratedHealthPlanSectionRefresh({
     sectionDrift: promptInput?.existing_plan_section_drift || [],
   });
 
-  const refreshedPlan = {
+  const refreshedPlan = repairOperationalMonitoringLanguage({
     ...calibrated.plan,
     generator_provider: "openai",
     generator_model: healthPlanOpenAiModel,
     generator_version: generationPath === "repair" ? `${healthPlanGeneratorVersion}-repair` : healthPlanGeneratorVersion,
-  };
+  }, {
+    sourceSignals,
+    signalTriage: promptInput?.signal_triage || {},
+    criticalSignalIds: promptInput?.critical_signal_ids || [],
+  });
   assertNoRecommendationCarryForward({
     existingPlan,
     nextPlan: refreshedPlan,
