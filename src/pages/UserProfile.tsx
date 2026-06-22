@@ -2873,7 +2873,7 @@ export default function UserProfile() {
     : 0;
 
   return (
-    <div className="space-y-5">
+    <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" className="h-10 w-10 rounded-full" onClick={() => navigate("/users")}>
@@ -2969,7 +2969,42 @@ export default function UserProfile() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <Tabs defaultValue="overview" className="flex flex-col gap-5">
+        <div className="sticky top-3 z-10 rounded-2xl border border-border/80 bg-background/95 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <TabsList className="flex h-auto flex-wrap gap-2 bg-transparent p-0">
+            <TabsTrigger
+              value="overview"
+              className="flex min-h-14 flex-1 items-center justify-start rounded-xl border border-transparent px-4 py-3 text-left text-sm font-semibold text-muted-foreground data-[state=active]:border-primary/15 data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            >
+              <HeartPulse className="mr-2 h-4 w-4 text-vyva-pink" />
+              {t("profile.navOverview")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="support"
+              className="flex min-h-14 flex-1 items-center justify-start rounded-xl border border-transparent px-4 py-3 text-left text-sm font-semibold text-muted-foreground data-[state=active]:border-primary/15 data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            >
+              <Users className="mr-2 h-4 w-4 text-primary" />
+              {t("profile.navSupport")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="plan"
+              className="flex min-h-14 flex-1 items-center justify-start rounded-xl border border-transparent px-4 py-3 text-left text-sm font-semibold text-muted-foreground data-[state=active]:border-primary/15 data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            >
+              <Brain className="mr-2 h-4 w-4 text-primary" />
+              {t("profile.navHealthPlan")}
+            </TabsTrigger>
+            <TabsTrigger
+              value="timeline"
+              className="flex min-h-14 flex-1 items-center justify-start rounded-xl border border-transparent px-4 py-3 text-left text-sm font-semibold text-muted-foreground data-[state=active]:border-primary/15 data-[state=active]:bg-white data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            >
+              <Clock className="mr-2 h-4 w-4 text-vyva-teal" />
+              {t("profile.navTimeline")}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+
+        <TabsContent value="overview" className="mt-0">
+          <div className="grid gap-5 xl:grid-cols-2">
         <Card className="rounded-2xl border-border bg-white shadow-sm">
           <CardHeader className="flex flex-row items-center gap-2 pb-2">
             <HeartPulse className="h-5 w-5 text-vyva-pink" />
@@ -3101,7 +3136,11 @@ export default function UserProfile() {
             </div>
           </CardContent>
         </Card>
+          </div>
+        </TabsContent>
 
+        <TabsContent value="support" className="mt-0">
+          <div className="grid gap-5 xl:grid-cols-2">
         <Card className="rounded-2xl border-border bg-white shadow-sm">
           <CardHeader className="flex flex-row items-center gap-2 pb-2">
             <Users className="h-5 w-5 text-primary" />
@@ -3234,8 +3273,10 @@ export default function UserProfile() {
             </div>
           </CardContent>
         </Card>
-      </div>
+          </div>
+        </TabsContent>
 
+        <TabsContent value="plan" className="mt-0">
       <Card className="rounded-2xl border-border bg-white shadow-sm">
         <CardHeader className="flex flex-col gap-3 pb-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
@@ -3373,31 +3414,28 @@ export default function UserProfile() {
                       <HealthPlanMetaChip label={t("profile.language")} value={(healthPlan.language || user.language || "-").toString().toUpperCase()} />
                       <HealthPlanMetaChip label={t("profile.healthPlanGoals")} value={String(healthPlanSectionCount)} />
                       <HealthPlanMetaChip label={t("profile.healthPlanGenerationMode")} value={healthPlanUsesFallback ? t("profile.healthPlanModeFallback") : t("profile.healthPlanModeAI")} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanEvidenceLinked")} value={String(healthPlanEvidenceLinkedCount)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanGroundingChip")} value={healthPlanGroundingLabel(t, healthPlanRecommendationGrounding?.overall_status)} />
                       <HealthPlanMetaChip label={t("profile.healthPlanHighPrioritySignals")} value={String(healthPlanHighPrioritySignals)} />
                       <HealthPlanMetaChip label={t("profile.healthPlanEscalationGrade")} value={healthPlanEscalationGradeLabel(t, healthPlanEscalationGrade.grade)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanExecutionChip")} value={healthPlanExecutionBriefLabel(t, healthPlanExecutionBrief?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanLiveEvidenceChip")} value={healthPlanLiveEvidenceLabel(t, healthPlanLiveEvidence?.status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanLongitudinalChip")} value={String(healthPlanLongitudinalMemory?.persistent_count ?? 0)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanReadinessChip")} value={healthPlanReadinessLabel(t, healthPlanReadiness?.overall_status)} />
                       <HealthPlanMetaChip label={t("profile.healthPlanReviewReadinessChip")} value={healthPlanReviewReadinessLabel(t, healthPlanReviewReadiness?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanTrustChip")} value={healthPlanTrustLabel(t, healthPlanTrustVerdict?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanEffectivenessChip")} value={String(healthPlanRecommendationEffectiveness?.preserve_count ?? 0)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanRevisionMemoryChip")} value={String(healthPlanRecommendationRevisionMemory?.improved_count ?? 0)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanOperationalCompletenessChip")} value={healthPlanOperationalCompletenessLabel(t, healthPlanOperationalCompleteness?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanActionImpactChip")} value={healthPlanActionImpactLabel(t, healthPlanActionImpact?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanRecommendationImpactChip")} value={healthPlanRecommendationImpactLabel(t, healthPlanRecommendationImpact?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanRecommendationHistoryChip")} value={healthPlanRecommendationHistoryLabel(t, healthPlanRecommendationHistory?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanEvidenceDiversityChip")} value={healthPlanEvidenceDiversityLabel(t, healthPlanRecommendationEvidenceDiversity?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanGenerationQualityChip")} value={healthPlanGenerationStatusLabel(t, healthPlanGenerationQuality?.overall_status)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanChallengeChip")} value={String(healthPlanRecommendationChallenges?.challenged_count ?? 0)} />
                       <HealthPlanMetaChip label={t("profile.healthPlanFreshnessLabel")} value={healthPlanFreshness ? healthPlanFreshnessLabel(t, healthPlanFreshness.status) : "-"} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanReviewWindowLabel")} value={healthPlanReviewWindowLabel(t, healthPlanReviewGovernance.review_window)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanGapCount")} value={String(healthPlanDataQualityGaps.length)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanFollowThroughCount")} value={String(healthPlanFollowThrough?.fresh_touchpoints_count ?? 0)} />
-                      <HealthPlanMetaChip label={t("profile.healthPlanDriftCount")} value={String(healthPlanSectionDrift.filter((item) => item.status !== "fresh").length)} />
                     </div>
+                    <Tabs defaultValue="plan" className="flex flex-col gap-5">
+                      <TabsList className="flex h-auto flex-wrap gap-2 bg-slate-100/85 p-1">
+                        <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="plan">
+                          {t("profile.healthPlanWorkspacePlan")}
+                        </TabsTrigger>
+                        <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="review">
+                          {t("profile.healthPlanWorkspaceReview")}
+                        </TabsTrigger>
+                        <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="signals">
+                          {t("profile.healthPlanWorkspaceSignals")}
+                        </TabsTrigger>
+                        <TabsTrigger className="rounded-full px-4 py-2 text-sm font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm" value="history">
+                          {t("profile.healthPlanWorkspaceHistory")}
+                        </TabsTrigger>
+                      </TabsList>
+
+                      <TabsContent value="review" className="mt-0 space-y-4">
                     {(healthPlanSectionDrift.length > 0 || safeArray(healthPlanRefreshStrategy?.recommended_sections).length > 0) && (
                       <HealthPlanSectionDriftPanel
                         drift={healthPlanSectionDrift}
@@ -3563,9 +3601,9 @@ export default function UserProfile() {
                     {healthPlanIsReviewed && (
                       <HealthPlanReviewChecklistSummary checklist={healthPlan.review_checklist_json} className="max-w-3xl" />
                     )}
-                  </div>
-                </div>
-              </div>
+                      </TabsContent>
+
+                      <TabsContent value="plan" className="mt-0">
 
               {latestHealthPlanChange && (
                 <div className="border-t border-primary/10 bg-slate-50/55 px-6 py-5">
@@ -3573,7 +3611,27 @@ export default function UserProfile() {
                 </div>
               )}
 
-              <div className="grid gap-6 border-t border-primary/10 bg-white/80 p-6 xl:grid-cols-[minmax(0,1.85fr)_320px]">
+              <div className="space-y-5 border-t border-primary/10 bg-white/80 p-6">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-[18px] border border-border/80 bg-white/92 px-4 py-4 shadow-sm">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReviewTitle")}</p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">
+                      {healthPlanIsReviewed ? t("profile.healthPlanReviewedBadge") : t("profile.healthPlanReviewRequired")}
+                    </p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{healthPlanReviewWindowLabel(t, healthPlanReviewGovernance.review_window)}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-border/80 bg-white/92 px-4 py-4 shadow-sm">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSourceSignals")}</p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">{healthPlanSignalCount}</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("profile.healthPlanEvidenceLinked")}: {healthPlanEvidenceLinkedCount}</p>
+                  </div>
+                  <div className="rounded-[18px] border border-border/80 bg-white/92 px-4 py-4 shadow-sm">
+                    <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanGenerationQualityChip")}</p>
+                    <p className="mt-2 text-sm font-semibold text-foreground">{healthPlanGenerationStatusLabel(t, healthPlanGenerationQuality?.overall_status)}</p>
+                    <p className="mt-1 text-sm leading-6 text-muted-foreground">{t("profile.healthPlanGapCount")}: {healthPlanDataQualityGaps.length}</p>
+                  </div>
+                </div>
+
                 <div className="min-w-0 space-y-4">
                   <Tabs defaultValue="support" className="space-y-5">
                     <TabsList className="h-auto rounded-full bg-slate-100/90 p-1">
@@ -3683,7 +3741,8 @@ export default function UserProfile() {
                   </Tabs>
                 </div>
 
-                <aside className="overflow-hidden rounded-[22px] border border-border/80 bg-white/88 shadow-sm">
+                {false && (
+                  <aside className="overflow-hidden rounded-[22px] border border-border/80 bg-white/88 shadow-sm">
                   <div className="p-5">
                     <div className="flex items-start gap-3">
                       <span className={cn(
@@ -3773,12 +3832,6 @@ export default function UserProfile() {
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSourceSignals")}</p>
-                        {healthPlan.generator_provider && (
-                          <p className="mt-1 text-xs font-medium text-muted-foreground">
-                            {healthPlan.generator_provider}
-                            {healthPlan.generator_model ? ` · ${healthPlan.generator_model}` : ""}
-                          </p>
-                        )}
                       </div>
                       <Badge variant="secondary" className="rounded-full px-3 py-1">{healthPlanSignalCount}</Badge>
                     </div>
@@ -3806,17 +3859,67 @@ export default function UserProfile() {
                       <p className="py-3 text-sm text-muted-foreground">{t("profile.healthPlanNoSourceSignals")}</p>
                     )}
                   </div>
-                </aside>
+                  </aside>
+                )}
               </div>
 
-              <div className="border-t border-primary/10 bg-slate-50/70 px-6 py-6">
-                <HealthPlanHistorySection history={healthPlanHistory} />
+                      </TabsContent>
+
+                      <TabsContent value="signals" className="mt-0">
+                        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+                          <HealthPlanDataQualityPanel gaps={healthPlanDataQualityGaps} />
+                          <div className="overflow-hidden rounded-[22px] border border-border/80 bg-white/88 shadow-sm">
+                            <div className="border-b border-border/80 px-5 py-4">
+                              <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSourceSignals")}</p>
+                      </div>
+                                <Badge variant="secondary" className="rounded-full px-3 py-1">{healthPlanSignalCount}</Badge>
+                              </div>
+                            </div>
+                            <div className="max-h-[760px] overflow-y-auto px-5 pb-3 pt-1">
+                              {Array.isArray(healthPlan.source_signals_json) && healthPlan.source_signals_json.length > 0 ? (
+                                healthPlan.source_signals_json.map((signal, index) => (
+                                  <div
+                                    key={signal.id || `${signal.label}-${index}`}
+                                    className={cn("py-3", index > 0 && "border-t border-border/70")}
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-sm font-semibold leading-6 text-foreground">{signal.label}</p>
+                                      <Badge
+                                        variant="outline"
+                                        className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanSignalBadgeClasses(inferHealthPlanSignalStrength(signal)))}
+                                      >
+                                        {t(`profile.healthPlanSignal${inferHealthPlanSignalStrength(signal).charAt(0).toUpperCase()}${inferHealthPlanSignalStrength(signal).slice(1)}`)}
+                                      </Badge>
+                                    </div>
+                                    {signal.detail && <p className="mt-1 text-xs leading-5 text-muted-foreground">{signal.detail}</p>}
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="py-3 text-sm text-muted-foreground">{t("profile.healthPlanNoSourceSignals")}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </TabsContent>
+
+                      <TabsContent value="history" className="mt-0">
+                        <div className="border-t border-primary/10 bg-slate-50/70 px-6 py-6">
+                          <HealthPlanHistorySection history={healthPlanHistory} />
+                        </div>
+                      </TabsContent>
+                      </Tabs>
+                  </div>
+                </div>
               </div>
             </div>
-          )}
+            )}
         </CardContent>
       </Card>
+        </TabsContent>
 
+        <TabsContent value="timeline" className="mt-0">
       <Card className="rounded-2xl border-border bg-white shadow-sm">
         <CardHeader className="flex flex-row items-center gap-2 pb-2">
           <FileText className="h-5 w-5 text-primary" />
@@ -3856,6 +3959,8 @@ export default function UserProfile() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
 
       {editUserOpen && <EditUserDialog open={editUserOpen} onOpenChange={setEditUserOpen} user={user} profileData={data} />}
       {editHealthOpen && health && <EditHealthDialog open={editHealthOpen} onOpenChange={setEditHealthOpen} vyvaUserId={user.id} health={health} />}
@@ -9134,3 +9239,4 @@ function ServiceSummary({
     </div>
   );
 }
+

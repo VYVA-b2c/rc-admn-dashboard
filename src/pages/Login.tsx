@@ -65,7 +65,7 @@ export default function Login() {
     magicLinkInFlight.current = true;
     setLoading(true);
     try {
-      const { error, delayed } = await signInWithMagicLink(email.trim(), nextPath);
+      const { error, delayed, nextUrl } = await signInWithMagicLink(email.trim(), nextPath);
       if (error) {
         const msg = error.message?.toLowerCase() ?? "";
         if (msg.includes("rate") || msg.includes("429") || msg.includes("too many") || msg.includes("wait")) {
@@ -73,6 +73,8 @@ export default function Login() {
         } else {
           toast.error(t("login.magicLinkFailed"), { description: error.message });
         }
+      } else if (nextUrl) {
+        window.location.assign(nextUrl);
       } else if (delayed) {
         toast.error(t("login.tooManyAttempts"), { description: t("login.tooManyAttemptsDesc") });
       } else {

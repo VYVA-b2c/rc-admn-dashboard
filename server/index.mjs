@@ -5727,6 +5727,13 @@ function requestOrigin(req) {
   return `${protocol}://${host}`;
 }
 
+function isLocalOrigin(origin) {
+  const parsed = safeUrl(origin);
+  if (!parsed) return false;
+  const host = String(parsed.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
 function trimTrailingSlash(value) {
   return value ? String(value).replace(/\/$/, "") : null;
 }
@@ -6660,6 +6667,7 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin, org
       sent: false,
       error: "Console session secret is not configured",
       provider: null,
+      actionLink: null,
     };
   }
 
@@ -6670,30 +6678,33 @@ async function sendConsoleMagicLink({ email, redirectPath, language, origin, org
       sent: false,
       error: "Console app URL is not configured",
       provider: null,
+      actionLink: null,
     };
   }
   const actionUrl = new URL(loginUrl);
   actionUrl.searchParams.set("console_token", loginToken);
   if (nextPath !== "/") actionUrl.searchParams.set("next", nextPath);
+  const actionLink = actionUrl.toString();
 
   const manualUrl = userManualUrl(origin, language);
   const rendered = renderConsoleMagicLinkEmail({
-    actionLink: actionUrl.toString(),
+    actionLink,
     language,
     manualUrl,
     organizationName,
   });
   const custom = await sendRenderedTeamInviteEmail({ to: email, rendered, organizationName });
-  if (custom.sent) return custom;
-  if (inviteEmailProvider()) return custom;
+  if (custom.sent) return { ...custom, actionLink };
+  if (inviteEmailProvider()) return { ...custom, actionLink };
 
   const hosted = await sendHostedConsoleMagicLink({ email, redirectPath: nextPath, language, origin, organizationName });
-  if (hosted.sent) return hosted;
+  if (hosted.sent) return { ...hosted, actionLink };
 
   return {
     sent: false,
     error: hosted.error || custom.error || "VYVA email sender is not configured",
     provider: hosted.provider || custom.provider || null,
+    actionLink,
     failures: [custom, hosted].filter(Boolean),
   };
 }
@@ -11784,6 +11795,11 @@ app.post("/api/v1/auth/magic-link", asyncRoute(async (req, res) => {
     organizationName: loginAccess.organizationName,
     origin: requestOrigin(req),
   });
+
+  if (!sent.sent && sent.actionLink && isLocalOrigin(requestOrigin(req))) {
+    res.json({ sent: true, provider: sent.provider, actionLink: sent.actionLink, local: true });
+    return;
+  }
 
   if (!sent.sent) {
     if (isMagicLinkRateLimitError(sent.error)) {

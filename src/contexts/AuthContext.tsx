@@ -9,7 +9,7 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
-  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null; delayed?: boolean }>;
+  signInWithMagicLink: (email: string, redirectPath?: string) => Promise<{ error: Error | null; delayed?: boolean; nextUrl?: string | null }>;
   signInWithConsoleToken: (token: string) => Promise<{ error: Error | null; next?: string }>;
   signInWithOAuth: (provider: "google" | "azure", redirectPath?: string) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
@@ -234,7 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { error: new Error(body?.error || "Sign-in email could not be sent.") };
       }
       const body = await response.json().catch(() => null);
-      return { error: null, delayed: Boolean(body?.delayed) };
+      return { error: null, delayed: Boolean(body?.delayed), nextUrl: typeof body?.actionLink === "string" ? body.actionLink : null };
     } catch {
       return { error: new Error("Sign-in email could not be sent.") };
     }
