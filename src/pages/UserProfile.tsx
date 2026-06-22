@@ -185,6 +185,75 @@ function normalizeStringList(value: unknown): string[] {
   );
 }
 
+function optionalProfileString(value: unknown): string | null {
+  return readableStringValue(value);
+}
+
+function normalizeTranslationKey(value: unknown, fallback: string): string {
+  return optionalProfileString(value) ?? fallback;
+}
+
+function normalizeOperationalChannel(value: unknown, fallback: OperationalChannel): OperationalChannel {
+  const normalized = optionalProfileString(value)?.toLowerCase();
+  if (normalized === "phone" || normalized === "whatsapp" || normalized === "app") return normalized;
+  return fallback;
+}
+
+function normalizeOperationalStatus(value: unknown, fallback: OperationalStatus): OperationalStatus {
+  const normalized = optionalProfileString(value)?.toLowerCase();
+  if (normalized === "urgent" || normalized === "review" || normalized === "stable") return normalized;
+  return fallback;
+}
+
+function normalizeOperationalAge(value: unknown, fallback?: number): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.floor(parsed);
+  }
+  return fallback;
+}
+
+function normalizeDateValue(value: unknown, fallback?: string | null): string | null | undefined {
+  const candidate = optionalProfileString(value);
+  if (candidate) {
+    const date = new Date(candidate);
+    if (!Number.isNaN(date.getTime())) return candidate;
+  }
+  return fallback;
+}
+
+function normalizeOperationalContext(
+  value: unknown,
+  fallback: OperationalProfileContext,
+): OperationalProfileContext {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+  const record = value as Record<string, unknown>;
+
+  return {
+    age: normalizeOperationalAge(record.age, fallback.age),
+    assignedTo: optionalProfileString(record.assignedTo) ?? fallback.assignedTo ?? null,
+    familyConsentKey: normalizeTranslationKey(record.familyConsentKey, fallback.familyConsentKey ?? "profile.familyConsentUnknown"),
+    preferredChannel: normalizeOperationalChannel(record.preferredChannel, fallback.preferredChannel),
+    lastContactKey: normalizeTranslationKey(record.lastContactKey, fallback.lastContactKey ?? "profile.lastContactUnknown"),
+    lastContactAt: normalizeDateValue(record.lastContactAt, fallback.lastContactAt ?? null) ?? null,
+    lastContactStatus: optionalProfileString(record.lastContactStatus) ?? fallback.lastContactStatus ?? null,
+    livingContextKey: normalizeTranslationKey(record.livingContextKey, fallback.livingContextKey ?? "profile.livingContextUnknown"),
+    nextActionKey: normalizeTranslationKey(record.nextActionKey, fallback.nextActionKey ?? "usersList.nextAction.review"),
+    noResponse: typeof record.noResponse === "boolean" ? record.noResponse : fallback.noResponse,
+    reasonKey: normalizeTranslationKey(record.reasonKey, fallback.reasonKey),
+    riskStatus: normalizeOperationalStatus(record.riskStatus, fallback.riskStatus),
+    summaryKey: normalizeTranslationKey(record.summaryKey, fallback.summaryKey),
+    recentSignalKeys: normalizeStringList(record.recentSignalKeys).length
+      ? normalizeStringList(record.recentSignalKeys)
+      : fallback.recentSignalKeys,
+    recommendedQuestionKeys: normalizeStringList(record.recommendedQuestionKeys).length
+      ? normalizeStringList(record.recommendedQuestionKeys)
+      : fallback.recommendedQuestionKeys,
+    suggestedOpeningKey: normalizeTranslationKey(record.suggestedOpeningKey, fallback.suggestedOpeningKey),
+  };
+}
+
 function normalizeTimeList(value: unknown): string[] {
   const source = Array.isArray(value)
     ? value
@@ -1704,14 +1773,17 @@ export default function UserProfile() {
     }
   };
 
-  const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || t("profile.unknownPerson");
-  const firstName = String(user.first_name ?? fullName.split(" ")[0] ?? t("profile.unknownPerson"));
+  const userFirstName = optionalProfileString(user.first_name) ?? "";
+  const userLastName = optionalProfileString(user.last_name) ?? "";
+  const userCity = optionalProfileString(user.city);
+  const fullName = [userFirstName, userLastName].filter(Boolean).join(" ").trim() || t("profile.unknownPerson");
+  const firstName = userFirstName || fullName.split(" ")[0] || t("profile.unknownPerson");
   const activeAlerts = alerts.filter((alert) => !alert.resolved_at);
   const criticalAlerts = activeAlerts.filter((alert) => alert.severity === "critical").length;
   const warningAlerts = activeAlerts.filter((alert) => alert.severity === "warning").length;
   const healthConditions = normalizeStringList(health?.health_conditions);
   const mobilityNeeds = normalizeStringList(health?.mobility_needs);
-  const context: OperationalProfileContext = {
+  const fallbackContext: OperationalProfileContext = {
     age: getAge(user.date_of_birth),
     assignedTo: null,
     familyConsentKey: data.consent?.consent_given ? "profile.familyConsentActive" : "profile.familyConsentUnknown",
@@ -1725,12 +1797,17 @@ export default function UserProfile() {
     recentSignalKeys: activeAlerts.length ? activeAlerts.slice(0, 3).map((alert) => alert.message || "queue.reason.default") : ["profile.signalNoRecentAlerts"],
     recommendedQuestionKeys: ["profile.questionWellbeing", "profile.questionSupport", "profile.questionNextContact"],
     suggestedOpeningKey: "profile.suggestedOpeningDefault",
-    ...data.operationalContext,
   };
+  const context = normalizeOperationalContext(data.operationalContext, fallbackContext);
 
   const age = context.age ?? getAge(user.date_of_birth);
   const ChannelIcon = channelIcon(context.preferredChannel);
-  const address = [user.street, user.house_number, user.post_code, user.city].filter(Boolean).join(" ");
+  const address = [
+    optionalProfileString(user.street),
+    optionalProfileString(user.house_number),
+    optionalProfileString(user.post_code),
+    userCity,
+  ].filter(Boolean).join(" ");
   const assignedProviderLabel = context.assignedTo ?? primaryProfessional?.display_name ?? primaryCaregiver?.display_name ?? null;
   const healthScore = Math.max(0, Math.min(100, 100 - criticalAlerts * 20 - warningAlerts * 10 - healthConditions.length * 4));
   const services = [
@@ -2460,7 +2537,7 @@ export default function UserProfile() {
                     </span>
                   </div>
                   <p className="mt-1 text-base font-medium text-muted-foreground">
-                    {[age ? copy("profile.ageYears", { age }) : null, context.livingContextKey ? t(context.livingContextKey) : null, user.city].filter(Boolean).join(" · ")}
+                    {[age ? copy("profile.ageYears", { age }) : null, context.livingContextKey ? t(context.livingContextKey) : null, userCity].filter(Boolean).join(" · ")}
                   </p>
                   <div className="mt-5 inline-flex max-w-full items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
                     <AlertTriangle className="h-4 w-4 shrink-0" />
