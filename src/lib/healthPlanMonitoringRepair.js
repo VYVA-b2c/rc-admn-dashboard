@@ -12,12 +12,13 @@ function normalizeStrength(value) {
 }
 
 const MONITORING_ACTION_PATTERN = /\b(check|confirm|verify|review|recheck|log|document|track|monitor|compare|observe)\b/i;
+const ESCALATION_ACTION_PATTERN = /\b(call|contact|notify|escalat|review|check|confirm|verify|arrange|document|log|recheck|dispatch|reach|speak|book|schedule)\b/i;
 
-export function repairOperationalMonitoringLanguage(
+export function repairOperationalHealthPlanLanguage(
   plan,
   { sourceSignals = [], signalTriage = {}, criticalSignalIds = [] } = {},
 ) {
-  if (!plan || !Array.isArray(plan.monitoring_json)) return plan;
+  if (!plan) return plan;
   const sourceSignalStrength = new Map(
     (Array.isArray(sourceSignals) ? sourceSignals : [])
       .map((signal) => [text(signal?.id), normalizeStrength(signal?.strength)])
@@ -35,10 +36,28 @@ export function repairOperationalMonitoringLanguage(
       || sourceSignalStrength.get(id) === "high"
     );
   };
+  const repairEscalationItem = (item) => {
+    const itemText = text(item?.text);
+    if (
+      !itemText
+      || ESCALATION_ACTION_PATTERN.test(itemText)
+      || !needsConcreteMonitoringAction(item)
+    ) {
+      return item;
+    }
+    return {
+      ...item,
+      text: `Contact the responsible care lead the same day and document the next action if this occurs: ${itemText}`,
+      timing: item?.timing || "today",
+      priority: item?.priority || "high",
+      verification_required: item?.verification_required ?? true,
+      completion_signal: item?.completion_signal || "Staff recorded who was contacted, when, and what follow-up action was agreed.",
+    };
+  };
 
   return {
     ...plan,
-    monitoring_json: plan.monitoring_json.map((item) => {
+    monitoring_json: Array.isArray(plan.monitoring_json) ? plan.monitoring_json.map((item) => {
       const itemText = text(item?.text);
       if (
         !itemText
@@ -53,6 +72,13 @@ export function repairOperationalMonitoringLanguage(
         verification_required: item?.verification_required ?? true,
         completion_signal: item?.completion_signal || "Staff recorded what was checked and whether follow-up is needed.",
       };
-    }),
+    }) : plan.monitoring_json,
+    escalation_json: Array.isArray(plan.escalation_json)
+      ? plan.escalation_json.map(repairEscalationItem)
+      : plan.escalation_json,
   };
+}
+
+export function repairOperationalMonitoringLanguage(plan, options = {}) {
+  return repairOperationalHealthPlanLanguage(plan, options);
 }
