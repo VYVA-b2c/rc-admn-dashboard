@@ -65,6 +65,7 @@ import {
   type OperationalMedicationActivity,
   type OperationalProfileContext,
   type OperationalProfileResponse,
+  type OperationalQueueUser,
   type OperationalHealthPlanRevision,
   type OperationalSensor,
   type OperationalService,
@@ -1278,17 +1279,204 @@ function healthPlanRecommendationReviewStatusLabel(
   return t("profile.healthPlanRecommendationReviewPending");
 }
 
+type DashboardUsersPayload = {
+  users?: OperationalQueueUser[];
+  gisUsers?: OperationalQueueUser[];
+  data?: OperationalQueueUser[];
+};
+
+function dashboardUsersFromPayload(payload: unknown): OperationalQueueUser[] {
+  if (Array.isArray(payload)) return payload as OperationalQueueUser[];
+  if (!payload || typeof payload !== "object") return [];
+
+  const record = payload as DashboardUsersPayload;
+  return [
+    ...(Array.isArray(record.users) ? record.users : []),
+    ...(Array.isArray(record.gisUsers) ? record.gisUsers : []),
+    ...(Array.isArray(record.data) ? record.data : []),
+  ];
+}
+
+function profileIdMatches(value: unknown, id: string) {
+  return String(value ?? "") === id;
+}
+
+function queueUserMatchesProfileId(user: OperationalQueueUser, id: string) {
+  const record = user as Record<string, unknown>;
+  return [
+    record.id,
+    record.user_id,
+    record.userId,
+    record.vyva_user_id,
+    record.vyvaUserId,
+    record.client_id,
+    record.clientId,
+    record.external_user_id,
+    record.externalUserId,
+  ].some((value) => profileIdMatches(value, id));
+}
+
+function cleanString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function cleanNumber(value: unknown): number | undefined {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function queueUserNameParts(user: OperationalQueueUser) {
+  const record = user as Record<string, unknown>;
+  const firstName = cleanString(record.first_name) ?? cleanString(record.firstName);
+  const lastName = cleanString(record.last_name) ?? cleanString(record.lastName);
+  if (firstName || lastName) return { firstName: firstName ?? "Client", lastName: lastName ?? "" };
+
+  const fullName =
+    cleanString(record.name) ??
+    cleanString(record.full_name) ??
+    cleanString(record.fullName) ??
+    cleanString(record.displayName) ??
+    "Client";
+  const [first = "Client", ...rest] = fullName.split(/\s+/);
+  return { firstName: first, lastName: rest.join(" ") };
+}
+
+function normalizeQueueChannel(value: unknown): OperationalChannel {
+  return value === "whatsapp" || value === "app" || value === "phone" ? value : "phone";
+}
+
+function normalizeQueueStatus(value: unknown): OperationalStatus {
+  return value === "urgent" || value === "review" || value === "stable" ? value : "stable";
+}
+
+function buildProfileFromQueueUser(user: OperationalQueueUser, id: string): OperationalProfileResponse {
+  const record = user as Record<string, any>;
+  const operationalContextRecord =
+    record.operationalContext && typeof record.operationalContext === "object"
+      ? (record.operationalContext as Record<string, any>)
+      : {};
+  const { firstName, lastName } = queueUserNameParts(user);
+  const now = new Date().toISOString();
+  const phone = cleanString(record.phone) ?? cleanString(record.phone_number) ?? cleanString(record.mobile);
+  const primaryCaregiverName =
+    cleanString(record.primaryCaregiverName) ??
+    cleanString(record.primary_caregiver_name) ??
+    (Array.isArray(record.careProviderNames) ? cleanString(record.careProviderNames[0]) : null);
+  const primaryCaregiverPhone = cleanString(record.primaryCaregiverPhone) ?? cleanString(record.primary_caregiver_phone);
+
+  return {
+    user: {
+      ...record,
+      id: String(record.id ?? id),
+      first_name: firstName,
+      last_name: lastName,
+      city: cleanString(record.city),
+      created_at: cleanString(record.created_at) ?? cleanString(record.createdAt) ?? now,
+      date_of_birth: cleanString(record.date_of_birth) ?? cleanString(record.dateOfBirth),
+      emergency_notes: cleanString(record.emergency_notes) ?? cleanString(record.emergencyNotes),
+      gender: cleanString(record.gender),
+      house_number: cleanString(record.house_number) ?? cleanString(record.houseNumber),
+      language: cleanString(record.language) ?? cleanString(record.preferred_language),
+      living_context: cleanString(record.living_context) ?? cleanString(record.livingContext),
+      phone,
+      photo_url: cleanString(record.photo_url) ?? cleanString(record.photoUrl),
+      post_code: cleanString(record.post_code) ?? cleanString(record.postCode) ?? cleanString(record.postal_code),
+      street: cleanString(record.street),
+    },
+    consent: {
+      consent_given: Boolean(record.consent_given ?? record.consentGiven ?? true),
+      caretaker_consent: Boolean(record.caretaker_consent ?? record.caretakerConsent ?? false),
+      created_at: cleanString(record.created_at) ?? now,
+    },
+    health: {
+      health_conditions: Array.isArray(record.healthConditions) ? record.healthConditions.map(String) : [],
+      mobility_needs: Array.isArray(record.mobilityNeeds) ? record.mobilityNeeds.map(String) : [],
+    },
+    medications: [],
+    medicationActivity: null,
+    healthPlan: null,
+    healthPlanFeedback: null,
+    healthPlanHistory: [],
+    healthPlanBenchmarkReplay: null,
+    checkins: null,
+    brainCoach: null,
+    careProviders: [],
+    caregivers: primaryCaregiverName
+      ? ([
+          {
+            id: `fallback-${id}-emergency-contact`,
+            caretaker_name: primaryCaregiverName,
+            caretaker_phone: primaryCaregiverPhone,
+            relationship_label: "Emergency contact",
+            is_primary: true,
+            created_at: cleanString(record.created_at) ?? now,
+          },
+        ] as OperationalCaregiver[])
+      : [],
+    sensors: [],
+    alerts: [],
+    recentOperationalEvents: [],
+    readings: [],
+    operationalContext: {
+      age: cleanNumber(operationalContextRecord.age ?? record.age),
+      assignedTo: cleanString(operationalContextRecord.assignedTo ?? record.assigned_to ?? record.assignedTo),
+      preferredChannel: normalizeQueueChannel(operationalContextRecord.preferredChannel ?? record.preferredChannel ?? record.channel),
+      lastContactKey: cleanString(operationalContextRecord.lastContactKey ?? record.lastContactKey) ?? undefined,
+      lastContactAt: cleanString(operationalContextRecord.lastContactAt ?? record.lastContactAt ?? record.checkinLastReportedAt),
+      lastContactStatus: cleanString(operationalContextRecord.lastContactStatus ?? record.lastContactStatus ?? record.checkinLastStatus),
+      livingContextKey: cleanString(operationalContextRecord.livingContextKey ?? record.livingContextKey) ?? "profile.livingContextUnknown",
+      nextActionKey: cleanString(operationalContextRecord.nextActionKey ?? record.nextActionKey) ?? "profile.nextActionReview",
+      noResponse: Boolean(operationalContextRecord.noResponse ?? record.noResponse),
+      reasonKey: cleanString(operationalContextRecord.reasonKey ?? record.reasonKey) ?? "profile.reasonReview",
+      riskStatus: normalizeQueueStatus(operationalContextRecord.riskStatus ?? record.riskStatus ?? record.risk_status),
+      familyConsentKey: "profile.familyConsentUnknown",
+      recentSignalKeys: ["profile.signalNoRecentAlerts"],
+      recommendedQuestionKeys: [
+        "profile.demo.question.safe",
+        "profile.demo.question.support",
+        "profile.demo.question.nextContact",
+      ],
+      suggestedOpeningKey: "profile.suggestedOpeningDefault",
+      summaryKey: "profile.summaryDefault",
+    },
+    isPreviewDemo: false,
+    can_edit_care_plan: false,
+    can_edit_medications: false,
+    can_edit_checkins: false,
+    can_edit_brain_coach: false,
+    edit_block_reason: "profile.detailFromClientFeed",
+  };
+}
+
+async function fetchUserProfileFromDashboardList(
+  id: string,
+  organizationId?: string | null,
+): Promise<OperationalProfileResponse | null> {
+  const params = new URLSearchParams();
+  if (organizationId) params.set("organization_id", organizationId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const payload = await apiFetch<DashboardUsersPayload | OperationalQueueUser[]>(`/api/v1/user-dashboard/users${suffix}`);
+  const match = dashboardUsersFromPayload(payload).find((user) => queueUserMatchesProfileId(user, id));
+  return match ? buildProfileFromQueueUser(match, id) : null;
+}
+
 async function fetchUserProfile(id: string, organizationId?: string | null): Promise<OperationalProfileResponse> {
   if (isDemoUserId(id)) return getDemoProfileById(id);
 
   try {
     const params = new URLSearchParams({ user_id: id });
     if (organizationId) params.set("organization_id", organizationId);
-    const response = await apiFetch<OperationalProfileResponse>(`/api/v1/user-dashboard/user-info?${params.toString()}`);
+    const response = await apiFetch<OperationalProfileResponse | null>(`/api/v1/user-dashboard/user-info?${params.toString()}`);
 
-    if (authBypassEnabled && !response?.user) return getDemoProfileById(id);
-    return response;
+    if (response?.user) return response;
+
+    const fallbackProfile = await fetchUserProfileFromDashboardList(id, organizationId).catch(() => null);
+    if (fallbackProfile) return fallbackProfile;
+    if (authBypassEnabled) return getDemoProfileById(id);
+    throw new Error("Client profile was empty");
   } catch (error) {
+    const fallbackProfile = await fetchUserProfileFromDashboardList(id, organizationId).catch(() => null);
+    if (fallbackProfile) return fallbackProfile;
     if (authBypassEnabled) return getDemoProfileById(id);
     throw error;
   }
