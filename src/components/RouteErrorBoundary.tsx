@@ -1,4 +1,4 @@
-import { Component, ReactNode } from "react";
+import { Component, ErrorInfo, ReactNode } from "react";
 
 type RouteErrorBoundaryProps = {
   children: ReactNode;
@@ -14,6 +14,14 @@ export class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, Route
 
   static getDerivedStateFromError() {
     return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("[route-error]", {
+      title: this.props.title || "This page could not load",
+      message: error.message,
+      componentStack: errorInfo.componentStack,
+    });
   }
 
   render() {

@@ -139,8 +139,26 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
   return `${firstName?.[0] ?? ""}${lastName?.[0] ?? ""}`.toUpperCase() || "VP";
 }
 
-function safeArray<T>(value: T[] | undefined | null): T[] {
-  return Array.isArray(value) ? value : [];
+function safeArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value.filter((item): item is T => item !== null && item !== undefined) : [];
+}
+
+function stringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function normalizeTimeList(value: unknown): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\n;]/)
+      : [];
+
+  return source
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((time) => /^\d{2}:\d{2}$/.test(time));
 }
 
 function extractHealthPlanGenerationDiagnostics(error: unknown): HealthPlanGenerationDiagnosticsState | null {
@@ -235,6 +253,36 @@ function providerFromCaregiver(caregiver: OperationalCaregiver): OperationalCare
     notes: caregiver.notes,
     active: true,
     created_at: caregiver.created_at,
+  };
+}
+
+function careProvidersFromPayload(value: unknown, caregivers: OperationalCaregiver[]): OperationalCareProviderAssignment[] {
+  const direct = safeArray<OperationalCareProviderAssignment>(value);
+  if (direct.length > 0) return direct;
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const nested = [
+      ...safeArray<OperationalCareProviderAssignment>(record.providers),
+      ...safeArray<OperationalCareProviderAssignment>(record.assignments),
+      ...safeArray<OperationalCareProviderAssignment>(record.careProviders),
+      ...safeArray<OperationalCareProviderAssignment>(record.emergencyContacts),
+      ...safeArray<OperationalCareProviderAssignment>(record.redCrossStaff),
+    ];
+
+    if (nested.length > 0) return nested;
+  }
+
+  return caregivers.map(providerFromCaregiver);
+}
+
+function normalizeMedication(medication: OperationalMedication): OperationalMedication {
+  const record = medication as OperationalMedication & Record<string, unknown>;
+  return {
+    ...medication,
+    id: stringValue(record.id) ?? stringValue(record.medication_id) ?? stringValue(record.medication_name) ?? "medication",
+    medication_name: stringValue(record.medication_name) ?? stringValue(record.name) ?? "Medication",
+    schedule_times: normalizeTimeList(record.schedule_times ?? record.scheduleTimes ?? record.schedule_time),
   };
 }
 
@@ -1569,11 +1617,9 @@ export default function UserProfile() {
 
   const { user } = data;
   const health = data.health ?? null;
-  const medications = safeArray(data.medications);
-  const caregivers = safeArray(data.caregivers);
-  const careProviders = safeArray(data.careProviders).length
-    ? safeArray(data.careProviders)
-    : caregivers.map(providerFromCaregiver);
+  const medications = safeArray<OperationalMedication>(data.medications).map(normalizeMedication);
+  const caregivers = safeArray<OperationalCaregiver>(data.caregivers);
+  const careProviders = careProvidersFromPayload(data.careProviders, caregivers);
   const emergencyContacts = careProviders.filter((provider) => provider.provider_type === "caregiver");
   const redCrossStaffProviders = careProviders.filter((provider) => provider.provider_type === "field_staff");
   const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
@@ -2500,39 +2546,42 @@ export default function UserProfile() {
               <EmptyLine icon={Pill} label={t("profile.noMedications")} />
             ) : (
               <div className="space-y-2">
-                {medications.map((med) => (
-                  <div key={med.id} className="rounded-xl border border-border bg-muted/25 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-foreground">{med.medication_name}</p>
-                        <p className="text-sm text-muted-foreground">
-                          {[med.dosage, med.purpose].filter(Boolean).join(" · ") || t("profile.noExtraDetails")}
-                        </p>
-                        <div className="mt-1 flex flex-wrap items-center gap-2">
-                          <Badge variant={med.reminders_enabled ?? true ? "default" : "secondary"} className="rounded-full text-[11px]">
-                            {(med.reminders_enabled ?? true) ? t("profile.medicationRemindersOn") : t("profile.medicationRemindersOff")}
-                          </Badge>
+                {medications.map((med) => {
+                  const scheduleTimes = medicationScheduleTimes(med);
+                  return (
+                    <div key={med.id} className="rounded-xl border border-border bg-muted/25 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-foreground">{med.medication_name}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {[med.dosage, med.purpose].filter(Boolean).join(" · ") || t("profile.noExtraDetails")}
+                          </p>
+                          <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <Badge variant={med.reminders_enabled ?? true ? "default" : "secondary"} className="rounded-full text-[11px]">
+                              {(med.reminders_enabled ?? true) ? t("profile.medicationRemindersOn") : t("profile.medicationRemindersOff")}
+                            </Badge>
+                          </div>
+                          {scheduleTimes.length > 0 && (
+                            <p className={cn("mt-1 text-xs font-semibold", (med.reminders_enabled ?? true) ? "text-primary" : "text-muted-foreground")}>
+                              {scheduleTimes.join(", ")}
+                            </p>
+                          )}
+                          {med.frequency && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {t("profile.medicationFrequency")}: {med.frequency}
+                            </p>
+                          )}
                         </div>
-                        {Array.isArray(med.schedule_times) && med.schedule_times.length > 0 && (
-                          <p className={cn("mt-1 text-xs font-semibold", (med.reminders_enabled ?? true) ? "text-primary" : "text-muted-foreground")}>
-                            {med.schedule_times.join(", ")}
-                          </p>
-                        )}
-                        {med.frequency && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {t("profile.medicationFrequency")}: {med.frequency}
-                          </p>
+                        {canEditMedications && (
+                          <div className="flex gap-1">
+                            <AdminIconButton label={t("profile.editMedication")} onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }} />
+                            <AdminIconButton label={t("profile.deleteMedication")} icon={Trash2} danger onClick={() => handleDeleteMedication(med.id)} />
+                          </div>
                         )}
                       </div>
-                      {canEditMedications && (
-                        <div className="flex gap-1">
-                          <AdminIconButton label={t("profile.editMedication")} onClick={() => { setEditMedTarget(med); setEditMedOpen(true); }} />
-                          <AdminIconButton label={t("profile.deleteMedication")} icon={Trash2} danger onClick={() => handleDeleteMedication(med.id)} />
-                        </div>
-                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             <div className="grid gap-3 sm:grid-cols-2">
