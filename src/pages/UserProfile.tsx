@@ -149,6 +149,42 @@ function stringValue(value: unknown): string | null {
   return trimmed.length ? trimmed : null;
 }
 
+function readableStringValue(value: unknown): string | null {
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value).trim() || null;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return (
+      readableStringValue(record.label) ??
+      readableStringValue(record.name) ??
+      readableStringValue(record.value) ??
+      readableStringValue(record.condition) ??
+      readableStringValue(record.text) ??
+      readableStringValue(record.title)
+    );
+  }
+
+  return null;
+}
+
+function normalizeStringList(value: unknown): string[] {
+  const source = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[,\n;]/)
+      : [];
+
+  return Array.from(
+    new Set(
+      source
+        .map((item) => readableStringValue(item))
+        .filter((item): item is string => Boolean(item)),
+    ),
+  );
+}
+
 function normalizeTimeList(value: unknown): string[] {
   const source = Array.isArray(value)
     ? value
@@ -1164,13 +1200,13 @@ function healthPlanRecommendationReviewStatusLabel(
   return t("profile.healthPlanRecommendationReviewPending");
 }
 
-async function fetchUserProfile(id: string): Promise<OperationalProfileResponse> {
+async function fetchUserProfile(id: string, organizationId?: string | null): Promise<OperationalProfileResponse> {
   if (isDemoUserId(id)) return getDemoProfileById(id);
 
   try {
-    const response = await apiFetch<OperationalProfileResponse>(
-      `/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(id)}`,
-    );
+    const params = new URLSearchParams({ user_id: id });
+    if (organizationId) params.set("organization_id", organizationId);
+    const response = await apiFetch<OperationalProfileResponse>(`/api/v1/user-dashboard/user-info?${params.toString()}`);
 
     if (authBypassEnabled && !response?.user) return getDemoProfileById(id);
     return response;
@@ -1248,7 +1284,7 @@ export default function UserProfile() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["vyva-user-profile", organizationId, id],
-    queryFn: () => fetchUserProfile(id!),
+    queryFn: () => fetchUserProfile(id!, organizationId),
     enabled: Boolean(id && organizationId),
     retry: false,
   });
@@ -1673,8 +1709,8 @@ export default function UserProfile() {
   const activeAlerts = alerts.filter((alert) => !alert.resolved_at);
   const criticalAlerts = activeAlerts.filter((alert) => alert.severity === "critical").length;
   const warningAlerts = activeAlerts.filter((alert) => alert.severity === "warning").length;
-  const healthConditions = safeArray<string>(health?.health_conditions);
-  const mobilityNeeds = safeArray<string>(health?.mobility_needs);
+  const healthConditions = normalizeStringList(health?.health_conditions);
+  const mobilityNeeds = normalizeStringList(health?.mobility_needs);
   const context: OperationalProfileContext = {
     age: getAge(user.date_of_birth),
     assignedTo: null,
