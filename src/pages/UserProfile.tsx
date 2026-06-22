@@ -58,11 +58,16 @@ import {
   type OperationalAlert,
   type OperationalCaregiver,
   type OperationalCareProviderAssignment,
+  type OperationalConsent,
+  type OperationalHealth,
+  type OperationalHealthPlan,
   type OperationalMedication,
+  type OperationalMedicationActivity,
   type OperationalProfileContext,
   type OperationalProfileResponse,
   type OperationalHealthPlanRevision,
   type OperationalSensor,
+  type OperationalService,
   type OperationalStatus,
 } from "@/lib/operationalDemoData";
 import { providerCoverageLabel, providerTypeKey } from "@/lib/careProviders";
@@ -141,6 +146,10 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
 
 function safeArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value.filter((item): item is T => item !== null && item !== undefined) : [];
+}
+
+function safeRecord<T extends Record<string, unknown>>(value: unknown): T | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as T) : null;
 }
 
 function stringValue(value: unknown): string | null {
@@ -1721,7 +1730,8 @@ export default function UserProfile() {
   }
 
   const { user } = data;
-  const health = data.health ?? null;
+  const health = safeRecord<OperationalHealth>(data.health);
+  const consent = safeRecord<OperationalConsent>(data.consent);
   const medications = safeArray<OperationalMedication>(data.medications).map(normalizeMedication);
   const caregivers = safeArray<OperationalCaregiver>(data.caregivers);
   const careProviders = careProvidersFromPayload(data.careProviders, caregivers);
@@ -1730,13 +1740,13 @@ export default function UserProfile() {
   const primaryCaregiver = careProviders.find((provider) => provider.provider_type === "caregiver" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "caregiver") ?? null;
   const primaryProfessional = careProviders.find((provider) => provider.provider_type === "field_staff" && provider.is_primary) ?? careProviders.find((provider) => provider.provider_type === "field_staff") ?? null;
   const additionalEmergencyContacts = emergencyContacts.filter((provider) => provider.id !== primaryCaregiver?.id);
-  const sensors = safeArray(data.sensors);
-  const alerts = safeArray(data.alerts);
+  const sensors = safeArray<OperationalSensor>(data.sensors);
+  const alerts = safeArray<OperationalAlert>(data.alerts);
   const recentOperationalEvents = safeArray(data.recentOperationalEvents);
-  const checkins = data.checkins ?? null;
-  const brainCoach = data.brainCoach ?? null;
-  const medicationActivity = data.medicationActivity ?? null;
-  const healthPlan = data.healthPlan ?? null;
+  const checkins = safeRecord<OperationalService>(data.checkins);
+  const brainCoach = safeRecord<OperationalService>(data.brainCoach);
+  const medicationActivity = safeRecord<OperationalMedicationActivity>(data.medicationActivity);
+  const healthPlan = safeRecord<OperationalHealthPlan>(data.healthPlan);
   const isPreviewDemo = Boolean(data.isPreviewDemo);
   const openAddNoteDialog = () => {
     setNoteDraft("");
@@ -1786,7 +1796,7 @@ export default function UserProfile() {
   const fallbackContext: OperationalProfileContext = {
     age: getAge(user.date_of_birth),
     assignedTo: null,
-    familyConsentKey: data.consent?.consent_given ? "profile.familyConsentActive" : "profile.familyConsentUnknown",
+    familyConsentKey: consent?.consent_given ? "profile.familyConsentActive" : "profile.familyConsentUnknown",
     preferredChannel: "phone",
     lastContactKey: "profile.lastContactUnknown",
     livingContextKey: livingContextKey(user.living_context) ?? "profile.livingContextUnknown",
@@ -1816,7 +1826,7 @@ export default function UserProfile() {
     { key: "profile.service.medications", active: medications.length > 0, icon: Pill },
     { key: "profile.service.caregivers", active: careProviders.length > 0, icon: Users },
     { key: "profile.service.sensors", active: sensors.length > 0, icon: Activity },
-    { key: "profile.service.consent", active: Boolean(data.consent?.consent_given), icon: ShieldCheck },
+    { key: "profile.service.consent", active: Boolean(consent?.consent_given), icon: ShieldCheck },
   ];
   const servicesActive = services.filter((service) => service.active).length;
 
@@ -1985,12 +1995,12 @@ export default function UserProfile() {
         icon: Users,
       });
     }
-    if (data.consent) {
+    if (consent) {
       events.push({
-        date: recordDate(data.consent, ["updated_at", "created_at"]) || user.created_at,
-        label: t(data.consent.consent_given ? "profile.timeline.consentActive" : "profile.timeline.consentMissing"),
+        date: recordDate(consent, ["updated_at", "created_at"]) || user.created_at,
+        label: t(consent.consent_given ? "profile.timeline.consentActive" : "profile.timeline.consentMissing"),
         detail: t("profile.timeline.consentDetail"),
-        tone: data.consent.consent_given ? "teal" : "orange",
+        tone: consent.consent_given ? "teal" : "orange",
         icon: ShieldCheck,
       });
     }
@@ -2048,7 +2058,7 @@ export default function UserProfile() {
           medicationActivity,
           sensors,
           careProviders,
-          consent: data.consent,
+          consent,
         },
         sourceSignals: healthPlanSignals,
       }))
@@ -2072,8 +2082,10 @@ export default function UserProfile() {
     })
     : [];
   const healthPlanUsesFallback = healthPlan?.generator_provider === "fallback";
-  const healthPlanHistory = safeArray(data?.healthPlanHistory).length > 0 ? safeArray(data?.healthPlanHistory) : healthPlanHistoryQuery;
-  const healthPlanHistoryReplay = data?.healthPlanBenchmarkReplay || healthPlanHistoryReplayQuery || null;
+  const profileHealthPlanHistory = safeArray<OperationalHealthPlanRevision>(data?.healthPlanHistory);
+  const queryHealthPlanHistory = safeArray<OperationalHealthPlanRevision>(healthPlanHistoryQuery);
+  const healthPlanHistory = profileHealthPlanHistory.length > 0 ? profileHealthPlanHistory : queryHealthPlanHistory;
+  const healthPlanHistoryReplay = safeRecord(data?.healthPlanBenchmarkReplay) || safeRecord(healthPlanHistoryReplayQuery);
   const healthPlanRecommendationSurvivorship = buildHealthPlanRecommendationSurvivorship({
     history: healthPlanHistory.length
       ? healthPlanHistory
