@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { repairOperationalMonitoringLanguage } from "./healthPlanMonitoringRepair";
+import { findHealthPlanCoverageIssues } from "./healthPlanCoverageRules";
+import { buildHealthPlanEscalationGrade, findHealthPlanEscalationGradeIssues } from "./healthPlanEscalationGrade";
 import { findHealthPlanSafetyIssues } from "./healthPlanSafetyReview";
 
 describe("healthPlanMonitoringRepair", () => {
@@ -68,5 +70,46 @@ describe("healthPlanMonitoringRepair", () => {
       verification_required: true,
     });
     expect(findHealthPlanSafetyIssues(repaired, { sourceSignals, signalTriage })).toEqual([]);
+  });
+
+  it("fills predictable coverage gaps for generated drafts before quality gates run", () => {
+    const sourceSignals = [
+      { id: "alert-active", label: "Active alert", strength: "high" },
+      { id: "medication-plan", label: "Medication follow-through", strength: "medium" },
+      { id: "service-checkins", label: "Check-in timing", strength: "medium" },
+      { id: "sensor-status", label: "Sensor visibility", strength: "high" },
+      { id: "consent-family-sharing", label: "Family sharing not confirmed", detail: "Consent is limited", strength: "medium" },
+      { id: "care-circle-context", label: "No care provider assigned", detail: "No care provider is assigned", strength: "medium" },
+    ];
+    const signalTriage = {
+      action_signal_ids: ["alert-active"],
+      verification_signal_ids: ["sensor-status"],
+      stabilizing_signal_ids: ["service-checkins"],
+    };
+    const criticalSignalIds = ["alert-active"];
+    const plan = {
+      summary_text: "The client needs a practical support plan.",
+      summary_signal_ids: [],
+      goals_json: [],
+      daily_support_json: [],
+      monitoring_json: [],
+      escalation_json: [],
+      caregiver_guidance_json: [],
+    };
+
+    const repaired = repairOperationalMonitoringLanguage(plan, {
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+    });
+    const escalationGrade = buildHealthPlanEscalationGrade({
+      sourceSignals,
+      signalTriage,
+      criticalSignalIds,
+    });
+
+    expect(findHealthPlanCoverageIssues(repaired, { sourceSignals, signalTriage, criticalSignalIds })).toEqual([]);
+    expect(findHealthPlanSafetyIssues(repaired, { sourceSignals, signalTriage, criticalSignalIds })).toEqual([]);
+    expect(findHealthPlanEscalationGradeIssues(repaired, { escalationGrade, sourceSignals })).toEqual([]);
   });
 });
