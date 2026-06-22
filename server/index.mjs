@@ -7589,7 +7589,7 @@ async function loadDashboardUsers(context) {
         AND (
           slot_date::date < CURRENT_DATE
           OR scheduled_time.value = ''
-          OR scheduled_time.value <= to_char(CURRENT_TIMESTAMP, 'HH24:MI')
+          OR scheduled_time.value::text <= to_char(CURRENT_TIMESTAMP, 'HH24:MI')
         )
     ),
     missed_med_counts AS (

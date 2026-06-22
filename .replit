@@ -13,3 +13,11 @@ run = ["sh", "-c", "npm run start"]
 
 [agent]
 expertMode = true
+
+[[ports]]
+localPort = 8080
+externalPort = 8080
+
+[[ports]]
+localPort = 24678
+externalPort = 80

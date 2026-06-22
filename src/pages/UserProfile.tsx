@@ -1766,11 +1766,12 @@ export default function UserProfile() {
   const [healthPlanGenerationDiagnostics, setHealthPlanGenerationDiagnostics] = useState<HealthPlanGenerationDiagnosticsState | null>(null);
   const [insufficientHealthPlanSignalsOpen, setInsufficientHealthPlanSignalsOpen] = useState(false);
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["vyva-user-profile", organizationId, id],
     queryFn: () => fetchUserProfile(id!, organizationId),
     enabled: Boolean(id && organizationId),
     retry: false,
+    staleTime: 0,
   });
   const { data: healthPlanHistoryQuery = [] } = useQuery({
     queryKey: ["vyva-user-health-plan-history", organizationId, id],
@@ -2123,9 +2124,14 @@ export default function UserProfile() {
             ? error.message
             : "The client list is still available. Try reopening the profile or refresh the console."}
         </p>
-        <Button variant="link" onClick={() => navigate("/users")}>
-          {t("profile.backToPeople")}
-        </Button>
+        <div className="mt-4 flex items-center justify-center gap-3">
+          <Button variant="outline" onClick={() => void refetch()}>
+            Try again
+          </Button>
+          <Button variant="link" onClick={() => navigate("/users")}>
+            {t("profile.backToPeople")}
+          </Button>
+        </div>
       </div>
     );
   }

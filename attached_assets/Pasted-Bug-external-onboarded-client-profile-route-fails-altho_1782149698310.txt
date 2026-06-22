@@ -1,0 +1,37 @@
+Bug: external/onboarded client profile route fails although the client exists elsewhere.
+
+Repo: VYVA-b2c/rc-admn-dashboard
+Production: https://redcross.vyva.life
+Route failing: /users/201
+
+Current behavior:
+- /users loads the client list correctly.
+- Example visible client: Kareem Assad, Leipzig, phone +49664338991.
+- /checkin-monitoring also shows the same client and schedule correctly.
+- But clicking the client row opens /users/201 and the page shows:
+  “Client profile could not load”
+- This is not only one client. Newly onboarded German-number clients have the same issue.
+
+DevTools observations:
+- /users/201 document request returns 200, so this is not a route 404.
+- XHR/fetch calls around the profile route return empty/null/304 responses.
+- The profile page appears to fail rendering when the direct profile response is empty instead of falling back to the same source used by /users or /checkin-monitoring.
+
+Expected behavior:
+- /users/:id must render external/onboarded clients with numeric IDs like 201.
+- It should not assume only local UUID users.
+- If direct profile data is missing, it should build the profile from the dashboard/client/check-in feed that already contains the user.
+- The page should not crash or show the error boundary.
+
+Important org rule:
+- German phone numbers (+49) belong to Red Cross Leipzig.
+- Spanish phone numbers (+34) belong to Red Cross Zamora.
+- Org filtering must be applied consistently across /users, /users/:id, /checkin-monitoring, Brain Coach, risk, campaigns, and profile APIs/query keys.
+
+Please fix:
+1. Profile route /users/:id for external numeric IDs.
+2. Make profile fallback use the same working source as /users and /checkin-monitoring.
+3. Make API/query cache avoid stale empty 304 profile fallback responses if needed.
+4. Ensure org switching invalidates/refetches all relevant profile and dashboard queries.
+5. Add a guard so empty profile API responses do not crash the page.
+6. Verify with /users/201 and a newly onboarded German-number client.
