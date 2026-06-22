@@ -1198,7 +1198,7 @@ export default function UserProfile() {
   const [healthPlanError, setHealthPlanError] = useState<string | null>(null);
   const [healthPlanGenerationDiagnostics, setHealthPlanGenerationDiagnostics] = useState<HealthPlanGenerationDiagnosticsState | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ["vyva-user-profile", organizationId, id],
     queryFn: () => fetchUserProfile(id!),
     enabled: Boolean(id && organizationId),
@@ -1534,6 +1534,23 @@ export default function UserProfile() {
           <Skeleton className="h-80 rounded-2xl" />
           <Skeleton className="h-80 rounded-2xl" />
         </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-white px-6 py-16 text-center shadow-sm">
+        <AlertTriangle className="mx-auto mb-3 h-10 w-10 text-amber-600" />
+        <p className="font-semibold text-foreground">Client profile could not load.</p>
+        <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+          {error instanceof Error && error.message
+            ? error.message
+            : "The client list is still available. Try reopening the profile or refresh the console."}
+        </p>
+        <Button variant="link" onClick={() => navigate("/users")}>
+          {t("profile.backToPeople")}
+        </Button>
       </div>
     );
   }
