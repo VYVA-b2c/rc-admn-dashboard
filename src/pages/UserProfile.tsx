@@ -19,9 +19,13 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Sparkles,
+  Target,
   Trash2,
+  Trophy,
   UserRound,
   Users,
+  Volume2,
   Wifi,
   WifiOff,
   type LucideIcon,
@@ -3397,6 +3401,9 @@ export default function UserProfile() {
                         </Badge>
                       )}
                     </div>
+                    {healthPlanReadiness && (
+                      <HealthPlanReadinessPanel summary={healthPlanReadiness} />
+                    )}
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSummary")}</p>
                       <p className="mt-3 max-w-5xl text-[15px] font-medium leading-8 text-foreground">{healthPlan.summary_text || "-"}</p>
@@ -3483,9 +3490,6 @@ export default function UserProfile() {
                     )}
                     {healthPlanLongitudinalMemory && safeArray(healthPlanLongitudinalMemory?.domains).length > 0 && (
                       <HealthPlanLongitudinalMemoryPanel summary={healthPlanLongitudinalMemory} />
-                    )}
-                    {healthPlanReadiness && (
-                      <HealthPlanReadinessPanel summary={healthPlanReadiness} />
                     )}
                     {healthPlanReviewReadiness && (
                       <HealthPlanReviewReadinessPanel summary={healthPlanReviewReadiness} />
@@ -6872,6 +6876,9 @@ function HealthPlanReadinessPanel({
     summary?: string | null;
     blocker_count?: number | null;
     caution_count?: number | null;
+    high_gap_count?: number | null;
+    low_confidence_section_count?: number | null;
+    live_pressure_count?: number | null;
     blocking_reasons?: Array<{
       id?: string | null;
       label?: string | null;
@@ -6893,60 +6900,207 @@ function HealthPlanReadinessPanel({
   } | null;
 }) {
   const { t } = useLanguage();
+  const [speaking, setSpeaking] = useState(false);
   const blockers = safeArray(summary?.blocking_reasons);
   const cautions = safeArray(summary?.caution_reasons);
   const actions = safeArray(summary?.collection_actions);
+  const status = summary?.overall_status || "blocked";
+  const blockerCount = Number(summary?.blocker_count || blockers.length || 0);
+  const cautionCount = Number(summary?.caution_count || cautions.length || 0);
+  const livePressureCount = Number(summary?.live_pressure_count || 0);
+  const highGapCount = Number(summary?.high_gap_count || 0);
+  const lowConfidenceCount = Number(summary?.low_confidence_section_count || 0);
+  const readinessScore = Math.max(
+    8,
+    Math.min(
+      96,
+      status === "ready"
+        ? 92 - Math.min(cautionCount, 2) * 4
+        : status === "guarded"
+          ? 74 - Math.min(cautionCount, 5) * 6 - Math.min(highGapCount, 2) * 7
+          : 42 - Math.min(blockerCount, 4) * 7 - Math.min(highGapCount, 3) * 5,
+    ),
+  );
+  const reasons = [...blockers, ...cautions].slice(0, 4);
+  const primaryAction = actions[0];
+  const voiceScript = interpolate(
+    status === "ready"
+      ? t("profile.healthPlanArenaVoiceReady")
+      : status === "guarded"
+        ? t("profile.healthPlanArenaVoiceGuarded")
+        : t("profile.healthPlanArenaVoiceBlocked"),
+    {
+      score: readinessScore,
+      blockers: blockerCount,
+      cautions: cautionCount,
+      action: primaryAction?.action || primaryAction?.label || t("profile.healthPlanReadinessActionFallback"),
+    },
+  );
+  const playVoiceGuide = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(voiceScript);
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+    utterance.onend = () => setSpeaking(false);
+    utterance.onerror = () => setSpeaking(false);
+    window.speechSynthesis.cancel();
+    setSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  };
+  const lanes = [
+    {
+      label: t("profile.healthPlanArenaEvidence"),
+      value: highGapCount > 0 ? interpolate(t("profile.healthPlanArenaHighGaps"), { count: highGapCount }) : t("profile.healthPlanArenaNoHighGaps"),
+      tone: highGapCount > 0 ? "border-amber-300/70 bg-amber-50 text-amber-900" : "border-emerald-300/70 bg-emerald-50 text-emerald-900",
+      icon: ShieldCheck,
+    },
+    {
+      label: t("profile.healthPlanArenaPressure"),
+      value: livePressureCount > 0 ? interpolate(t("profile.healthPlanArenaPressureCount"), { count: livePressureCount }) : t("profile.healthPlanArenaStablePressure"),
+      tone: livePressureCount > 0 ? "border-rose-300/70 bg-rose-50 text-rose-900" : "border-sky-300/70 bg-sky-50 text-sky-900",
+      icon: Activity,
+    },
+    {
+      label: t("profile.healthPlanArenaConfidence"),
+      value: lowConfidenceCount > 0 ? interpolate(t("profile.healthPlanArenaLowConfidence"), { count: lowConfidenceCount }) : t("profile.healthPlanArenaConfidenceGood"),
+      tone: lowConfidenceCount > 0 ? "border-orange-300/70 bg-orange-50 text-orange-900" : "border-cyan-300/70 bg-cyan-50 text-cyan-900",
+      icon: Target,
+    },
+  ];
 
   return (
-    <div className="rounded-[18px] border border-border/80 bg-white/90 px-4 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReadinessTitle")}</p>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{summary?.summary || t("profile.healthPlanReadinessDescription")}</p>
-        </div>
-        <Badge variant="outline" className={cn("rounded-full px-3 py-1 text-xs font-semibold", healthPlanReadinessTone(summary?.overall_status))}>
-          {healthPlanReadinessLabel(t, summary?.overall_status)}
-        </Badge>
-      </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Badge variant="secondary" className="rounded-full px-3 py-1">
-          {interpolate(t("profile.healthPlanReadinessBlockers"), { count: Number(summary?.blocker_count || 0) })}
-        </Badge>
-        <Badge variant="secondary" className="rounded-full px-3 py-1">
-          {interpolate(t("profile.healthPlanReadinessCautions"), { count: Number(summary?.caution_count || 0) })}
-        </Badge>
-      </div>
-      {(blockers.length > 0 || cautions.length > 0) && (
-        <div className="mt-4 grid gap-3 xl:grid-cols-2">
-          {[...blockers, ...cautions].slice(0, 4).map((reason, index) => (
-            <div key={reason.id || index} className="rounded-2xl border border-border/70 bg-slate-50/70 px-3.5 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <p className="text-sm font-semibold text-foreground">{reason.label || t("profile.healthPlanReadinessReasonFallback")}</p>
-                <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanGapSeverityClasses(reason.severity))}>
-                  {healthPlanGapSeverityLabel(t, reason.severity)}
-                </Badge>
-              </div>
-              {reason.detail && <p className="mt-2 text-sm leading-6 text-foreground/80">{reason.detail}</p>}
+    <div className="overflow-hidden rounded-[22px] border border-emerald-950/10 bg-[#071b14] text-white shadow-[0_18px_50px_rgba(6,78,59,0.18)]">
+      <div className="relative grid gap-5 p-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px),linear-gradient(0deg,rgba(255,255,255,0.04)_1px,transparent_1px),radial-gradient(circle_at_18%_16%,rgba(34,211,238,0.22),transparent_30%),radial-gradient(circle_at_88%_8%,rgba(16,185,129,0.24),transparent_28%),linear-gradient(135deg,rgba(20,184,166,0.12),transparent_45%)] bg-[size:54px_54px,54px_54px,auto,auto,auto]" />
+        <div className="relative flex min-h-[220px] flex-col justify-between rounded-[18px] border border-emerald-200/15 bg-white/10 p-4 shadow-inner shadow-white/5">
+          <div>
+            <div className="flex items-center gap-2 text-cyan-200">
+              <Trophy className="h-4 w-4" />
+              <p className="text-[11px] font-black uppercase tracking-[0.18em]">{t("profile.healthPlanArenaTitle")}</p>
             </div>
-          ))}
-        </div>
-      )}
-      {actions.length > 0 && (
-        <div className="mt-4 rounded-2xl border border-border/70 bg-slate-50/70 px-3.5 py-3">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanReadinessCollectNext")}</p>
-          <div className="mt-3 space-y-2.5">
-            {actions.slice(0, 4).map((action, index) => (
-              <div key={action.id || index} className="rounded-xl border border-white/80 bg-white/90 px-3 py-2.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-semibold text-foreground">{action.label || t("profile.healthPlanReadinessActionFallback")}</p>
-                  <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanImprovePriorityClasses(action.priority))}>
-                    {healthPlanImprovePriorityLabel(t, action.priority)}
-                  </Badge>
-                </div>
-                {action.action && <p className="mt-1.5 text-sm leading-6 text-foreground/80">{action.action}</p>}
-              </div>
-            ))}
+            <div className="mt-5">
+              <p className="text-5xl font-black leading-none tracking-normal text-white">{readinessScore}</p>
+              <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaScore")}</p>
+            </div>
           </div>
+          <div>
+            <div className="h-2 overflow-hidden rounded-full bg-white/15">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all",
+                  status === "ready" ? "bg-emerald-400" : status === "guarded" ? "bg-amber-300" : "bg-rose-400",
+                )}
+                style={{ width: `${readinessScore}%` }}
+              />
+            </div>
+            <Badge variant="outline" className={cn("mt-4 rounded-full border-white/20 bg-white/10 px-3 py-1 text-xs font-bold", healthPlanReadinessTone(status))}>
+              {healthPlanReadinessLabel(t, status)}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="relative min-w-0 space-y-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-200">{t("profile.healthPlanReadinessTitle")}</p>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">{summary?.summary || t("profile.healthPlanReadinessDescription")}</p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="h-10 shrink-0 rounded-full border border-white/15 bg-white/12 px-4 text-xs font-black text-white hover:bg-white/20 hover:text-white"
+              onClick={playVoiceGuide}
+            >
+              <Volume2 className="mr-2 h-4 w-4" />
+              {speaking ? t("profile.healthPlanArenaStopVoice") : t("profile.healthPlanArenaPlayVoice")}
+            </Button>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            {lanes.map((lane) => {
+              const Icon = lane.icon;
+              return (
+                <div key={lane.label} className={cn("rounded-[16px] border px-3.5 py-3", lane.tone)}>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[10px] font-black uppercase tracking-[0.15em] opacity-75">{lane.label}</p>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <p className="mt-2 text-sm font-black leading-5">{lane.value}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="rounded-[18px] border border-white/12 bg-white/10 p-4">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-cyan-200" />
+                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaVoiceGuide")}</p>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-slate-100">{voiceScript}</p>
+            </div>
+            <div className="rounded-[18px] border border-white/12 bg-white/10 p-4">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaNextMove")}</p>
+              <p className="mt-3 text-sm font-bold leading-6 text-white">
+                {primaryAction?.action || primaryAction?.label || (status === "ready" ? t("profile.healthPlanGenerate") : t("profile.healthPlanReadinessActionFallback"))}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary" className="rounded-full bg-white/12 px-3 py-1 text-white hover:bg-white/12">
+              {interpolate(t("profile.healthPlanReadinessBlockers"), { count: blockerCount })}
+            </Badge>
+            <Badge variant="secondary" className="rounded-full bg-white/12 px-3 py-1 text-white hover:bg-white/12">
+              {interpolate(t("profile.healthPlanReadinessCautions"), { count: cautionCount })}
+            </Badge>
+          </div>
+        </div>
+      </div>
+
+      {(reasons.length > 0 || actions.length > 0) && (
+        <div className="grid gap-4 border-t border-white/10 bg-[#0b241b] p-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+          {reasons.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">{t("profile.healthPlanArenaDataLineup")}</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                {reasons.map((reason, index) => (
+                  <div key={reason.id || index} className="rounded-2xl border border-white/10 bg-white/[0.07] px-3.5 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-bold text-white">{reason.label || t("profile.healthPlanReadinessReasonFallback")}</p>
+                      <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanGapSeverityClasses(reason.severity))}>
+                        {healthPlanGapSeverityLabel(t, reason.severity)}
+                      </Badge>
+                    </div>
+                    {reason.detail && <p className="mt-2 text-sm leading-6 text-slate-300">{reason.detail}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {actions.length > 0 && (
+            <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">{t("profile.healthPlanReadinessCollectNext")}</p>
+              <div className="mt-3 space-y-2.5">
+                {actions.slice(0, 4).map((action, index) => (
+                  <div key={action.id || index} className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-bold text-white">{action.label || t("profile.healthPlanReadinessActionFallback")}</p>
+                      <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanImprovePriorityClasses(action.priority))}>
+                        {healthPlanImprovePriorityLabel(t, action.priority)}
+                      </Badge>
+                    </div>
+                    {action.action && <p className="mt-1.5 text-sm leading-6 text-slate-300">{action.action}</p>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
