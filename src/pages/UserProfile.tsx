@@ -2569,7 +2569,7 @@ export default function UserProfile() {
       : (healthPlan ? [healthPlan] : []),
   });
   const latestHealthPlanRevision = safeArray(healthPlanHistory)[0] || null;
-  const latestHealthPlanChange = latestHealthPlanRevision?.version_number === healthPlan?.current_version
+  const latestHealthPlanChange = latestHealthPlanRevision && latestHealthPlanRevision.version_number === healthPlan?.current_version
     ? latestHealthPlanRevision.change || healthPlan?.quality_snapshot_json?.recommendation_change_audit || null
     : healthPlan?.quality_snapshot_json?.recommendation_change_audit || null;
   const healthPlanHighPrioritySignals = healthPlanSignals.filter((signal) => inferHealthPlanSignalStrength(signal) === "high").length;
