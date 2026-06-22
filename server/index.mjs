@@ -905,12 +905,17 @@ function normalizeExternalProfilePayload(data) {
         }))
       : records;
 
+  const normalizeService = (service) => {
+    if (!service || typeof service !== "object" || Array.isArray(service)) return service;
+    return { ...service, id: service.id != null ? String(service.id) : service.id };
+  };
+
   return {
     ...data,
     user: sourceUser
       ? {
           ...sourceUser,
-          id: flatUserId == null ? sourceUser.id : String(flatUserId),
+          id: sourceUser.id != null ? String(flatUserId ?? sourceUser.id) : sourceUser.id,
         }
       : data.user,
     consent: data.consent
@@ -919,6 +924,8 @@ function normalizeExternalProfilePayload(data) {
     health: data.health
       ? { ...data.health, id: data.health.id == null ? data.health.id : String(data.health.id) }
       : data.health,
+    checkins: normalizeService(data.checkins),
+    brainCoach: normalizeService(data.brainCoach),
     medications: normalizeRecords(data.medications),
     healthPlan: data.healthPlan || data.health_plan ? normalizeHealthPlanRow(data.healthPlan || data.health_plan) : null,
     healthPlanFeedback: data.healthPlanFeedback || data.health_plan_feedback || null,
@@ -12121,6 +12128,12 @@ app.post("/api/v1/team-members", asyncRoute(async (req, res) => {
     member: result.value,
   });
 }));
+
+app.post("/api/v1/client-error", express.json(), (req, res) => {
+  const { title, message, stack, componentStack } = req.body || {};
+  console.error("[CLIENT-RENDER-ERROR]", JSON.stringify({ title, message, stack: (stack || "").slice(0, 800), componentStack: (componentStack || "").slice(0, 800) }));
+  res.sendStatus(204);
+});
 
 app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
   try {

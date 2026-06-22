@@ -20,8 +20,21 @@ export class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, Route
     console.error("[route-error]", {
       title: this.props.title || "This page could not load",
       message: error.message,
+      stack: error.stack,
       componentStack: errorInfo.componentStack,
     });
+    try {
+      fetch("/api/v1/client-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: this.props.title || "This page could not load",
+          message: error.message,
+          stack: error.stack,
+          componentStack: errorInfo.componentStack,
+        }),
+      }).catch(() => {});
+    } catch {}
   }
 
   render() {
