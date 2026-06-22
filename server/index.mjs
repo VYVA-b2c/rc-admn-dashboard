@@ -2975,6 +2975,11 @@ function validateGeneratedHealthPlan(generatedPlan, sourceSignals, promptInput) 
   const sourceSignalIds = new Set(sourceSignals.map((signal) => signal.id));
   const criticalSignalIds = new Set(Array.isArray(promptInput?.critical_signal_ids) ? promptInput.critical_signal_ids : []);
   const signalTriage = promptInput?.signal_triage || {};
+  generatedPlan = repairOperationalMonitoringLanguage(generatedPlan, {
+    sourceSignals,
+    signalTriage,
+    criticalSignalIds: [...criticalSignalIds],
+  });
   const escalationGrade = promptInput?.escalation_grade
     || buildHealthPlanEscalationGrade({
       sourceSignals,
@@ -4235,6 +4240,22 @@ async function saveHealthPlan(client, userId, context, payload) {
   if (!normalized.summary_text) return { error: "summary_text is required" };
   const criticalSignalIds = normalizeHealthPlanSignalIds(payload?.critical_signal_ids);
   const signalTriage = buildHealthPlanSignalTriage(normalized.source_signals_json, criticalSignalIds);
+  if (["generated", "regenerated"].includes(normalized.action_type)) {
+    const repairedGeneratedPlan = repairOperationalMonitoringLanguage({
+      summary_text: normalized.summary_text,
+      summary_signal_ids: normalized.summary_signal_ids,
+      goals_json: normalized.goals_json,
+      daily_support_json: normalized.daily_support_json,
+      monitoring_json: normalized.monitoring_json,
+      escalation_json: normalized.escalation_json,
+      caregiver_guidance_json: normalized.caregiver_guidance_json,
+    }, {
+      sourceSignals: normalized.source_signals_json,
+      signalTriage,
+      criticalSignalIds,
+    });
+    normalized.monitoring_json = repairedGeneratedPlan.monitoring_json;
+  }
   const escalationGrade = buildHealthPlanEscalationGrade({
     sourceSignals: normalized.source_signals_json,
     signalTriage,
