@@ -1280,44 +1280,200 @@ function healthPlanRecommendationReviewStatusLabel(
 }
 
 type DashboardUsersPayload = {
-  users?: OperationalQueueUser[];
-  gisUsers?: OperationalQueueUser[];
-  data?: OperationalQueueUser[];
+  users?: unknown;
+  clients?: unknown;
+  gisUsers?: unknown;
+  data?: unknown;
+  items?: unknown;
+  records?: unknown;
+  results?: unknown;
+  rows?: unknown;
+  list?: unknown;
+  people?: unknown;
 };
 
 function dashboardUsersFromPayload(payload: unknown): OperationalQueueUser[] {
-  if (Array.isArray(payload)) return payload as OperationalQueueUser[];
-  if (!payload || typeof payload !== "object") return [];
+  const collect = (value: unknown, depth = 0): OperationalQueueUser[] => {
+    if (Array.isArray(value)) return value as OperationalQueueUser[];
+    if (!value || typeof value !== "object" || depth > 3) return [];
 
-  const record = payload as DashboardUsersPayload;
-  return [
-    ...(Array.isArray(record.users) ? record.users : []),
-    ...(Array.isArray(record.gisUsers) ? record.gisUsers : []),
-    ...(Array.isArray(record.data) ? record.data : []),
-  ];
+    const record = value as DashboardUsersPayload;
+    return ["users", "clients", "gisUsers", "data", "items", "records", "results", "rows", "list", "people"].flatMap((key) =>
+      collect(record[key as keyof DashboardUsersPayload], depth + 1),
+    );
+  };
+
+  const seen = new Set<string>();
+  return collect(payload).filter((user, index) => {
+    const record = user as Record<string, unknown>;
+    const stableId =
+      cleanScalarString(record.id) ??
+      cleanScalarString(record.user_id) ??
+      cleanScalarString(record.userId) ??
+      cleanScalarString(record.client_id) ??
+      cleanScalarString(record.clientId) ??
+      cleanScalarString(record.external_user_id) ??
+      cleanScalarString(record.externalUserId) ??
+      String(index);
+    if (seen.has(stableId)) return false;
+    seen.add(stableId);
+    return true;
+  });
 }
 
 function profileIdMatches(value: unknown, id: string) {
-  return String(value ?? "") === id;
+  return String(value ?? "").trim() === id.trim();
 }
 
 function queueUserMatchesProfileId(user: OperationalQueueUser, id: string) {
   const record = user as Record<string, unknown>;
-  return [
+  const nestedRecords = [record.user, record.client, record.person].filter(
+    (value): value is Record<string, unknown> => Boolean(value) && typeof value === "object",
+  );
+  const candidateIds = [
     record.id,
     record.user_id,
     record.userId,
+    record.profile_id,
+    record.profileId,
     record.vyva_user_id,
     record.vyvaUserId,
     record.client_id,
     record.clientId,
+    record.person_id,
+    record.personId,
     record.external_user_id,
     record.externalUserId,
-  ].some((value) => profileIdMatches(value, id));
+    record.external_id,
+    record.externalId,
+    record.source_id,
+    record.sourceId,
+    record.original_id,
+    record.originalId,
+    ...nestedRecords.flatMap((nested) => [
+      nested.id,
+      nested.user_id,
+      nested.userId,
+      nested.client_id,
+      nested.clientId,
+      nested.external_user_id,
+      nested.externalUserId,
+      nested.external_id,
+      nested.externalId,
+    ]),
+  ];
+
+  return candidateIds.some((value) => profileIdMatches(value, id));
+}
+
+function queueUserProfileId(record: Record<string, unknown>, routeId: string) {
+  return (
+    cleanScalarString(record.id) ??
+    cleanScalarString(record.user_id) ??
+    cleanScalarString(record.userId) ??
+    cleanScalarString(record.profile_id) ??
+    cleanScalarString(record.profileId) ??
+    cleanScalarString(record.vyva_user_id) ??
+    cleanScalarString(record.vyvaUserId) ??
+    cleanScalarString(record.client_id) ??
+    cleanScalarString(record.clientId) ??
+    cleanScalarString(record.external_user_id) ??
+    cleanScalarString(record.externalUserId) ??
+    cleanScalarString(record.external_id) ??
+    cleanScalarString(record.externalId) ??
+    routeId
+  );
+}
+
+function arrayFromQueueValue(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {
+      return value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function nestedQueueRecord(record: Record<string, any>, key: string) {
+  const value = record[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, any>) : {};
+}
+
+function queueDateValue(record: Record<string, any>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = cleanString(record[key]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function queueBooleanValue(record: Record<string, any>, key: string, fallback = false) {
+  const value = record[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return ["true", "1", "yes", "active"].includes(value.toLowerCase());
+  if (typeof value === "number") return value > 0;
+  return fallback;
+}
+
+function queuePrimaryCareProviderNames(record: Record<string, any>) {
+  const careProviderNames = Array.isArray(record.careProviderNames)
+    ? record.careProviderNames
+    : Array.isArray(record.care_provider_names)
+      ? record.care_provider_names
+      : [];
+  return careProviderNames.map(String).filter(Boolean);
+}
+
+function queueFirstNestedValue(record: Record<string, any>, ...paths: string[]) {
+  for (const path of paths) {
+    const parts = path.split(".");
+    let current: unknown = record;
+    for (const part of parts) {
+      current =
+        current && typeof current === "object"
+          ? (current as Record<string, unknown>)[part]
+          : undefined;
+    }
+    const cleaned = cleanString(current);
+    if (cleaned) return cleaned;
+  }
+  return null;
+}
+
+function queuePreferredLanguage(record: Record<string, any>) {
+  const language =
+    cleanString(record.language) ??
+    cleanString(record.preferred_language) ??
+    cleanString(record.preferredLanguage) ??
+    queueFirstNestedValue(record, "user.language", "client.language");
+  return language ? language.toUpperCase() : undefined;
+}
+
+function queueProfileFallbackUser(record: Record<string, any>, id: string) {
+  const nestedUser = nestedQueueRecord(record, "user");
+  const nestedClient = nestedQueueRecord(record, "client");
+  return {
+    ...nestedClient,
+    ...nestedUser,
+    ...record,
+    id: queueUserProfileId(record, id),
+  };
 }
 
 function cleanString(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function cleanScalarString(value: unknown): string | null {
+  return cleanString(value);
 }
 
 function cleanNumber(value: unknown): number | undefined {
@@ -1327,15 +1483,18 @@ function cleanNumber(value: unknown): number | undefined {
 
 function queueUserNameParts(user: OperationalQueueUser) {
   const record = user as Record<string, unknown>;
-  const firstName = cleanString(record.first_name) ?? cleanString(record.firstName);
-  const lastName = cleanString(record.last_name) ?? cleanString(record.lastName);
+  const nestedUser = nestedQueueRecord(record as Record<string, any>, "user");
+  const nestedClient = nestedQueueRecord(record as Record<string, any>, "client");
+  const source = { ...nestedClient, ...nestedUser, ...record };
+  const firstName = cleanString(source.first_name) ?? cleanString(source.firstName);
+  const lastName = cleanString(source.last_name) ?? cleanString(source.lastName);
   if (firstName || lastName) return { firstName: firstName ?? "Client", lastName: lastName ?? "" };
 
   const fullName =
-    cleanString(record.name) ??
-    cleanString(record.full_name) ??
-    cleanString(record.fullName) ??
-    cleanString(record.displayName) ??
+    cleanString(source.name) ??
+    cleanString(source.full_name) ??
+    cleanString(source.fullName) ??
+    cleanString(source.displayName) ??
     "Client";
   const [first = "Client", ...rest] = fullName.split(/\s+/);
   return { firstName: first, lastName: rest.join(" ") };
@@ -1350,24 +1509,35 @@ function normalizeQueueStatus(value: unknown): OperationalStatus {
 }
 
 function buildProfileFromQueueUser(user: OperationalQueueUser, id: string): OperationalProfileResponse {
-  const record = user as Record<string, any>;
+  const record = queueProfileFallbackUser(user as Record<string, any>, id);
+  const healthRecord = nestedQueueRecord(record, "health");
+  const consentRecord = nestedQueueRecord(record, "consent");
   const operationalContextRecord =
     record.operationalContext && typeof record.operationalContext === "object"
       ? (record.operationalContext as Record<string, any>)
       : {};
-  const { firstName, lastName } = queueUserNameParts(user);
+  const { firstName, lastName } = queueUserNameParts(record as OperationalQueueUser);
   const now = new Date().toISOString();
-  const phone = cleanString(record.phone) ?? cleanString(record.phone_number) ?? cleanString(record.mobile);
+  const phone =
+    cleanString(record.phone) ??
+    cleanString(record.phone_number) ??
+    cleanString(record.phoneNumber) ??
+    cleanString(record.mobile);
+  const careProviderNames = queuePrimaryCareProviderNames(record);
   const primaryCaregiverName =
     cleanString(record.primaryCaregiverName) ??
     cleanString(record.primary_caregiver_name) ??
-    (Array.isArray(record.careProviderNames) ? cleanString(record.careProviderNames[0]) : null);
-  const primaryCaregiverPhone = cleanString(record.primaryCaregiverPhone) ?? cleanString(record.primary_caregiver_phone);
+    careProviderNames[0] ??
+    queueFirstNestedValue(record, "primaryCaregiver.name", "primary_caregiver.name");
+  const primaryCaregiverPhone =
+    cleanString(record.primaryCaregiverPhone) ??
+    cleanString(record.primary_caregiver_phone) ??
+    queueFirstNestedValue(record, "primaryCaregiver.phone", "primary_caregiver.phone");
 
   return {
     user: {
       ...record,
-      id: String(record.id ?? id),
+      id: queueUserProfileId(record, id),
       first_name: firstName,
       last_name: lastName,
       city: cleanString(record.city),
@@ -1376,7 +1546,7 @@ function buildProfileFromQueueUser(user: OperationalQueueUser, id: string): Oper
       emergency_notes: cleanString(record.emergency_notes) ?? cleanString(record.emergencyNotes),
       gender: cleanString(record.gender),
       house_number: cleanString(record.house_number) ?? cleanString(record.houseNumber),
-      language: cleanString(record.language) ?? cleanString(record.preferred_language),
+      language: queuePreferredLanguage(record),
       living_context: cleanString(record.living_context) ?? cleanString(record.livingContext),
       phone,
       photo_url: cleanString(record.photo_url) ?? cleanString(record.photoUrl),
@@ -1384,13 +1554,23 @@ function buildProfileFromQueueUser(user: OperationalQueueUser, id: string): Oper
       street: cleanString(record.street),
     },
     consent: {
-      consent_given: Boolean(record.consent_given ?? record.consentGiven ?? true),
-      caretaker_consent: Boolean(record.caretaker_consent ?? record.caretakerConsent ?? false),
+      consent_given: queueBooleanValue(consentRecord, "consent_given", queueBooleanValue(record, "consent_given", true)),
+      caretaker_consent: queueBooleanValue(
+        consentRecord,
+        "caretaker_consent",
+        queueBooleanValue(record, "caretaker_consent", false),
+      ),
       created_at: cleanString(record.created_at) ?? now,
     },
     health: {
-      health_conditions: Array.isArray(record.healthConditions) ? record.healthConditions.map(String) : [],
-      mobility_needs: Array.isArray(record.mobilityNeeds) ? record.mobilityNeeds.map(String) : [],
+      health_conditions:
+        arrayFromQueueValue(record.healthConditions).length > 0
+          ? arrayFromQueueValue(record.healthConditions)
+          : arrayFromQueueValue(record.health_conditions ?? healthRecord.health_conditions),
+      mobility_needs:
+        arrayFromQueueValue(record.mobilityNeeds).length > 0
+          ? arrayFromQueueValue(record.mobilityNeeds)
+          : arrayFromQueueValue(record.mobility_needs ?? healthRecord.mobility_needs),
     },
     medications: [],
     medicationActivity: null,
