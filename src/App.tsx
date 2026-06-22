@@ -88,7 +88,9 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <DashboardLayout>
-                    <UserProfile />
+                    <RouteErrorBoundary title="Client profile could not load">
+                      <UserProfile />
+                    </RouteErrorBoundary>
                   </DashboardLayout>
                 </ProtectedRoute>
               }
