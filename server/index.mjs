@@ -893,6 +893,8 @@ function removeStaleExternalShadowUsers(localDashboard, upstreamData, context) {
 
 function normalizeExternalProfilePayload(data) {
   if (!data || typeof data !== "object") return data;
+  const flatUserId = firstValue(data.id, data.user_id, data.userId, data.vyva_user_id, data.vyvaUserId, data.client_id, data.clientId);
+  const sourceUser = data.user || (flatUserId ? data : null);
   const normalizeRecords = (records) =>
     Array.isArray(records)
       ? records.map((record) => ({
@@ -904,10 +906,10 @@ function normalizeExternalProfilePayload(data) {
 
   return {
     ...data,
-    user: data.user
+    user: sourceUser
       ? {
-          ...data.user,
-          id: data.user.id == null ? data.user.id : String(data.user.id),
+          ...sourceUser,
+          id: flatUserId == null ? sourceUser.id : String(flatUserId),
         }
       : data.user,
     consent: data.consent
@@ -925,6 +927,100 @@ function normalizeExternalProfilePayload(data) {
     alerts: normalizeRecords(data.alerts),
     readings: normalizeRecords(data.readings),
   };
+}
+
+function externalProfileHasUser(profile) {
+  return Boolean(profile && typeof profile === "object" && profile.user && typeof profile.user === "object" && profile.user.id != null);
+}
+
+function externalUserIdFromUserLike(user) {
+  return String(firstValue(user?.id, user?.user_id, user?.userId, user?.vyva_user_id, user?.vyvaUserId, user?.client_id, user?.clientId) || "").trim();
+}
+
+function displayNamePartsFromUserLike(user) {
+  const fullName = nullIfBlank(firstValue(
+    user?.full_name,
+    user?.fullName,
+    user?.display_name,
+    user?.displayName,
+    user?.name,
+    user?.user_name,
+    user?.userName,
+    user?.client_name,
+    user?.clientName,
+  ));
+  return fullName ? fullName.split(/\s+/).filter(Boolean) : [];
+}
+
+function normalizeExternalUserLikeForProfile(userLike, externalUserId) {
+  const user = objectValue(userLike);
+  const nameParts = displayNamePartsFromUserLike(user);
+  const firstName = nullIfBlank(firstValue(user.first_name, user.firstName)) || nameParts[0] || "External";
+  const lastName = nullIfBlank(firstValue(user.last_name, user.lastName)) || nameParts.slice(1).join(" ") || "Client";
+
+  return normalizeExternalProfilePayload({
+    user: {
+      ...user,
+      id: externalUserIdFromUserLike(user) || String(externalUserId),
+      first_name: firstName,
+      last_name: lastName,
+      phone: nullIfBlank(firstValue(user.phone, user.user_phone, user.userPhone, user.client_phone, user.clientPhone)),
+      city: nullIfBlank(firstValue(user.city, user.user_city, user.userCity, user.client_city, user.clientCity)),
+      country: nullIfBlank(firstValue(user.country, user.country_code, user.countryCode)),
+      language: nullIfBlank(firstValue(user.language, user.locale)),
+      created_at: firstValue(user.created_at, user.createdAt),
+    },
+  });
+}
+
+function findExternalUserLikeById(payload, externalUserId) {
+  const targetId = String(externalUserId || "").trim();
+  const candidates = extractUpstreamList(payload, ["gisUsers", "users", "clients", "data", "items"]);
+  const extraCandidates = [];
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    Object.values(payload).forEach((value) => {
+      if (Array.isArray(value)) extraCandidates.push(...value);
+    });
+  }
+  return [...candidates, ...extraCandidates].find((user) => externalUserIdFromUserLike(user) === targetId) || null;
+}
+
+function routineItemToExternalUserLike(item, externalUserId) {
+  const nestedUser = objectValue(item?.user ?? item?.vyva_users ?? item?.client);
+  const userLike = {
+    ...nestedUser,
+    id: externalUserIdFromUserLike(nestedUser) || userIdFromExternalRoutineItem(item) || String(externalUserId),
+    first_name: firstValue(nestedUser.first_name, nestedUser.firstName, item?.first_name, item?.firstName),
+    last_name: firstValue(nestedUser.last_name, nestedUser.lastName, item?.last_name, item?.lastName),
+    full_name: firstValue(nestedUser.full_name, nestedUser.fullName, nestedUser.name, item?.user_name, item?.userName, item?.name, item?.client_name, item?.clientName),
+    phone: firstValue(nestedUser.phone, item?.phone, item?.user_phone, item?.userPhone, item?.client_phone, item?.clientPhone),
+    city: firstValue(nestedUser.city, item?.city, item?.user_city, item?.userCity, item?.client_city, item?.clientCity),
+    country: firstValue(nestedUser.country, item?.country, item?.user_country, item?.userCountry, item?.client_country, item?.clientCountry),
+    language: firstValue(nestedUser.language, item?.language, item?.locale),
+    created_at: firstValue(nestedUser.created_at, nestedUser.createdAt, item?.created_at, item?.createdAt),
+  };
+  return normalizeExternalUserLikeForProfile(userLike, externalUserId);
+}
+
+async function fetchExternalUserProfileFromDashboardFeeds(externalUserId, context = null) {
+  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
+  if (dashboard?.ok) {
+    const match = findExternalUserLikeById(dashboard.data, externalUserId);
+    if (match) return normalizeExternalUserLikeForProfile(match, externalUserId);
+  }
+
+  const checkins = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+    query: scopedVyvaBackendQuery({}, context),
+  });
+  if (checkins?.ok) {
+    const items = extractUpstreamList(checkins.data, ["checkins", "data", "sessions", "items"]);
+    const match = items.find((item) => userIdFromExternalRoutineItem(item) === String(externalUserId));
+    if (match) return routineItemToExternalUserLike(match, externalUserId);
+  }
+
+  return null;
 }
 
 function isUuid(value) {
@@ -4988,7 +5084,7 @@ async function loadExternalUserCarePlanAccess(externalUserId, context) {
 }
 
 function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null, scheduledContact = null) {
-  const normalized = normalizeExternalProfilePayload(data);
+  const normalized = normalizeExternalProfilePayload(data) || {};
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
   const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
   const hasSensors = Array.isArray(localServices?.sensors) && localServices.sensors.length;
@@ -5040,15 +5136,13 @@ async function fetchExternalUserProfileForShadow(externalUserId, context = null)
       user_id: externalUserId,
     }, context),
   });
-  if (userInfo?.ok) return normalizeExternalProfilePayload(userInfo.data);
+  if (userInfo?.ok) {
+    const normalizedProfile = normalizeExternalProfilePayload(userInfo.data);
+    if (externalProfileHasUser(normalizedProfile)) return normalizedProfile;
+  }
 
-  const dashboard = await requestVyvaBackend("/api/v1/user-dashboard/users", {
-    query: scopedVyvaBackendQuery({}, context),
-  });
-  const match = Array.isArray(dashboard?.data?.gisUsers)
-    ? dashboard.data.gisUsers.find((user) => String(user?.id) === String(externalUserId))
-    : null;
-  return match ? normalizeExternalProfilePayload({ user: match }) : null;
+  const fallbackProfile = await fetchExternalUserProfileFromDashboardFeeds(externalUserId, context);
+  return externalProfileHasUser(fallbackProfile) ? fallbackProfile : null;
 }
 
 function normalizedExternalShadowUser(externalUserId, externalData, organization = null) {
@@ -11975,13 +12069,18 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
         localServices = await loadExternalUserLocalServices(userId, context);
         carePlanAccess = await loadExternalUserCarePlanAccess(userId, context);
       }
-      const normalizedProfile = normalizeExternalProfilePayload(upstream.data);
-      if (context?.organization && normalizedProfile?.user && !externalUserMatchesOrganization(normalizedProfile.user, context.organization)) {
-        res.status(404).json({ error: "User not found" });
+      let normalizedProfile = normalizeExternalProfilePayload(upstream.data);
+      if (!externalProfileHasUser(normalizedProfile)) {
+        normalizedProfile = await fetchExternalUserProfileForShadow(userId, context).catch(() => null);
+      }
+      if (externalProfileHasUser(normalizedProfile)) {
+        if (context?.organization && !externalUserMatchesOrganization(normalizedProfile.user, context.organization)) {
+          res.status(404).json({ error: "User not found" });
+          return;
+        }
+        res.json(mergeExternalProfileWithLocalAssignments(normalizedProfile, careProviders, userId, localServices, carePlanAccess, scheduledContact));
         return;
       }
-      res.json(mergeExternalProfileWithLocalAssignments(normalizedProfile, careProviders, userId, localServices, carePlanAccess, scheduledContact));
-      return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
       res.status(upstream.status).json(upstream.data);
