@@ -19,10 +19,8 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
-  Sparkles,
   Target,
   Trash2,
-  Trophy,
   UserRound,
   Users,
   Volume2,
@@ -7148,174 +7146,181 @@ function HealthPlanReadinessPanel({
     },
   ];
   const primaryActionTarget = healthPlanReadinessActionTarget(primaryAction);
+  const primaryActionText =
+    primaryAction?.action ||
+    primaryAction?.label ||
+    (status === "ready" ? t("profile.healthPlanGenerate") : t("profile.healthPlanReadinessActionFallback"));
+  const actionButtonLabel = primaryActionTarget ? t("profile.healthPlanArenaOpenAction") : t("profile.healthPlanArenaReviewAction");
 
   return (
-    <div className="overflow-hidden rounded-[22px] border border-emerald-950/10 bg-[#071b14] text-white shadow-[0_18px_50px_rgba(6,78,59,0.18)]">
-      <div className="relative grid gap-5 p-5 lg:grid-cols-[220px_minmax(0,1fr)]">
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.055)_1px,transparent_1px),linear-gradient(0deg,rgba(255,255,255,0.04)_1px,transparent_1px),radial-gradient(circle_at_18%_16%,rgba(34,211,238,0.22),transparent_30%),radial-gradient(circle_at_88%_8%,rgba(16,185,129,0.24),transparent_28%),linear-gradient(135deg,rgba(20,184,166,0.12),transparent_45%)] bg-[size:54px_54px,54px_54px,auto,auto,auto]" />
-        <div className="relative flex min-h-[220px] flex-col justify-between rounded-[18px] border border-emerald-200/15 bg-white/10 p-4 shadow-inner shadow-white/5">
-          <div>
-            <div className="flex items-center gap-2 text-cyan-200">
-              <Trophy className="h-4 w-4" />
-              <p className="text-[11px] font-black uppercase tracking-[0.18em]">{t("profile.healthPlanArenaTitle")}</p>
-            </div>
-            <div className="mt-5">
-              <p className="text-5xl font-black leading-none tracking-normal text-white">{readinessScore}</p>
-              <p className="mt-1 text-xs font-bold uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaScore")}</p>
-            </div>
-          </div>
-          <div>
-            <div className="h-2 overflow-hidden rounded-full bg-white/15">
-              <div
-                className={cn(
-                  "h-full rounded-full transition-all",
-                  status === "ready" ? "bg-emerald-400" : status === "guarded" ? "bg-amber-300" : "bg-rose-400",
-                )}
-                style={{ width: `${readinessScore}%` }}
-              />
-            </div>
-            <Badge variant="outline" className={cn("mt-4 rounded-full border-white/20 bg-white/10 px-3 py-1 text-xs font-bold", healthPlanReadinessTone(status))}>
-              {healthPlanReadinessLabel(t, status)}
-            </Badge>
-          </div>
-        </div>
-
-        <div className="relative min-w-0 space-y-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+    <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
+      <div className="grid gap-5 p-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="min-w-0 space-y-4">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-200">{t("profile.healthPlanReadinessTitle")}</p>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">{summary?.summary || t("profile.healthPlanReadinessDescription")}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <ShieldCheck className="h-4 w-4" />
+                </div>
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanArenaTitle")}</p>
+                <Badge variant="outline" className={cn("rounded-full px-3 py-1 text-xs font-bold", healthPlanReadinessTone(status))}>
+                  {healthPlanReadinessLabel(t, status)}
+                </Badge>
+              </div>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+                {summary?.summary || t("profile.healthPlanReadinessDescription")}
+              </p>
             </div>
-            <Button
-              type="button"
-              variant="secondary"
-              className="h-10 shrink-0 rounded-full border border-white/15 bg-white/12 px-4 text-xs font-black text-white hover:bg-white/20 hover:text-white"
-              onClick={playVoiceGuide}
-            >
-              <Volume2 className="mr-2 h-4 w-4" />
-              {speaking ? t("profile.healthPlanArenaStopVoice") : t("profile.healthPlanArenaPlayVoice")}
-            </Button>
+            <div className="flex shrink-0 items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+              <div>
+                <p className="text-3xl font-black leading-none tracking-normal text-foreground">{readinessScore}</p>
+                <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanArenaScore")}</p>
+              </div>
+              <div className="h-12 w-24">
+                <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all",
+                      status === "ready" ? "bg-emerald-500" : status === "guarded" ? "bg-amber-500" : "bg-rose-500",
+                    )}
+                    style={{ width: `${readinessScore}%` }}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-3 md:grid-cols-3">
             {lanes.map((lane) => {
               const Icon = lane.icon;
               return (
-                <div key={lane.label} className={cn("rounded-[16px] border px-3.5 py-3", lane.tone)}>
+                <div key={lane.label} className={cn("rounded-2xl border px-4 py-3", lane.tone)}>
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-[10px] font-black uppercase tracking-[0.15em] opacity-75">{lane.label}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] opacity-75">{lane.label}</p>
                     <Icon className="h-4 w-4" />
                   </div>
-                  <p className="mt-2 text-sm font-black leading-5">{lane.value}</p>
+                  <p className="mt-2 text-sm font-bold leading-5">{lane.value}</p>
                 </div>
               );
             })}
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="rounded-[18px] border border-white/12 bg-white/10 p-4">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-cyan-200" />
-                <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaVoiceGuide")}</p>
-              </div>
-              <p className="mt-3 text-sm leading-6 text-slate-100">{voiceScript}</p>
-            </div>
-            <div className="rounded-[18px] border border-white/12 bg-white/10 p-4">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-300">{t("profile.healthPlanArenaNextMove")}</p>
-              <p className="mt-3 text-sm font-bold leading-6 text-white">
-                {primaryAction?.action || primaryAction?.label || (status === "ready" ? t("profile.healthPlanGenerate") : t("profile.healthPlanReadinessActionFallback"))}
-              </p>
-              {primaryAction && primaryActionTarget && onActionSelect && (
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.85fr)]">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <Volume2 className="h-4 w-4 text-primary" />
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanArenaVoiceGuide")}</p>
+                </div>
                 <Button
                   type="button"
-                  variant="secondary"
-                  className="mt-3 h-9 rounded-full border border-cyan-200/20 bg-cyan-200/15 px-3 text-xs font-black text-white hover:bg-cyan-200/25 hover:text-white"
+                  variant="outline"
+                  className="h-8 rounded-full px-3 text-xs font-bold"
+                  onClick={playVoiceGuide}
+                >
+                  {speaking ? t("profile.healthPlanArenaStopVoice") : t("profile.healthPlanArenaPlayVoice")}
+                </Button>
+              </div>
+              <p className="mt-3 text-sm leading-6 text-foreground/80">{voiceScript}</p>
+            </div>
+
+            <div className="rounded-2xl border border-primary/15 bg-primary/5 px-4 py-4">
+              <p className="text-xs font-bold uppercase tracking-[0.14em] text-primary">{t("profile.healthPlanArenaNextMove")}</p>
+              <p className="mt-2 text-sm font-semibold leading-6 text-foreground">{primaryActionText}</p>
+              <p className="mt-2 text-xs leading-5 text-muted-foreground">{t("profile.healthPlanArenaActionHelp")}</p>
+              {primaryAction && onActionSelect && (
+                <Button
+                  type="button"
+                  className="mt-3 h-9 rounded-full px-3 text-xs font-bold shadow-sm"
                   onClick={() => onActionSelect(primaryAction)}
+                  variant={primaryActionTarget ? "default" : "outline"}
                 >
                   <Target className="mr-2 h-3.5 w-3.5" />
-                  {t("profile.healthPlanArenaOpenAction")}
+                  {actionButtonLabel}
                 </Button>
               )}
             </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="secondary" className="rounded-full bg-white/12 px-3 py-1 text-white hover:bg-white/12">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanArenaDataLineup")}</p>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Badge variant="outline" className="justify-center rounded-full bg-white px-3 py-1 text-xs font-semibold">
               {interpolate(t("profile.healthPlanReadinessBlockers"), { count: blockerCount })}
             </Badge>
-            <Badge variant="secondary" className="rounded-full bg-white/12 px-3 py-1 text-white hover:bg-white/12">
+            <Badge variant="outline" className="justify-center rounded-full bg-white px-3 py-1 text-xs font-semibold">
               {interpolate(t("profile.healthPlanReadinessCautions"), { count: cautionCount })}
             </Badge>
           </div>
+
+          {reasons.length > 0 ? (
+            <div className="mt-4 space-y-2.5">
+              {reasons.map((reason, index) => (
+                <div key={reason.id || index} className="rounded-xl border border-white bg-white px-3 py-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-bold text-foreground">{reason.label || t("profile.healthPlanReadinessReasonFallback")}</p>
+                    <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanGapSeverityClasses(reason.severity))}>
+                      {healthPlanGapSeverityLabel(t, reason.severity)}
+                    </Badge>
+                  </div>
+                  {reason.detail && <p className="mt-2 text-xs leading-5 text-muted-foreground">{reason.detail}</p>}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-4 text-sm leading-6 text-muted-foreground">{t("profile.healthPlanArenaNoReviewIssues")}</p>
+          )}
         </div>
       </div>
 
-      {(reasons.length > 0 || actions.length > 0) && (
-        <div className="grid gap-4 border-t border-white/10 bg-[#0b241b] p-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-          {reasons.length > 0 && (
-            <div className="space-y-3">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-400">{t("profile.healthPlanArenaDataLineup")}</p>
-              <div className="grid gap-3 md:grid-cols-2">
-                {reasons.map((reason, index) => (
-                  <div key={reason.id || index} className="rounded-2xl border border-white/10 bg-white/[0.07] px-3.5 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-bold text-white">{reason.label || t("profile.healthPlanReadinessReasonFallback")}</p>
-                      <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanGapSeverityClasses(reason.severity))}>
-                        {healthPlanGapSeverityLabel(t, reason.severity)}
-                      </Badge>
-                    </div>
-                    {reason.detail && <p className="mt-2 text-sm leading-6 text-slate-300">{reason.detail}</p>}
+      {actions.length > 0 && (
+        <div className="border-t border-slate-200 bg-slate-50/75 p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanReadinessCollectNext")}</p>
+            <p className="text-sm text-muted-foreground">{t("profile.healthPlanArenaActionListHelp")}</p>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {actions.slice(0, 4).map((action, index) => {
+              const actionTarget = healthPlanReadinessActionTarget(action);
+              const canOpenAction = Boolean(actionTarget && onActionSelect);
+              const actionContent = (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-bold text-foreground">{action.label || t("profile.healthPlanReadinessActionFallback")}</p>
+                    <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanImprovePriorityClasses(action.priority))}>
+                      {healthPlanImprovePriorityLabel(t, action.priority)}
+                    </Badge>
+                    {canOpenAction && (
+                      <span className="ml-auto rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-primary">
+                        {t("profile.healthPlanArenaOpenAction")}
+                      </span>
+                    )}
                   </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {actions.length > 0 && (
-            <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-              <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">{t("profile.healthPlanReadinessCollectNext")}</p>
-              <div className="mt-3 space-y-2.5">
-                {actions.slice(0, 4).map((action, index) => {
-                  const actionTarget = healthPlanReadinessActionTarget(action);
-                  const canOpenAction = Boolean(actionTarget && onActionSelect);
-                  const actionContent = (
-                    <>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-bold text-white">{action.label || t("profile.healthPlanReadinessActionFallback")}</p>
-                      <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanImprovePriorityClasses(action.priority))}>
-                        {healthPlanImprovePriorityLabel(t, action.priority)}
-                      </Badge>
-                      {canOpenAction && (
-                        <span className="ml-auto rounded-full bg-cyan-200/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-cyan-100">
-                          {t("profile.healthPlanArenaOpenAction")}
-                        </span>
-                      )}
-                    </div>
-                    {action.action && <p className="mt-1.5 text-sm leading-6 text-slate-300">{action.action}</p>}
-                    </>
-                  );
+                  {action.action && <p className="mt-2 text-sm leading-6 text-muted-foreground">{action.action}</p>}
+                </>
+              );
 
-                  if (canOpenAction) {
-                    return (
-                      <button
-                        key={action.id || index}
-                        type="button"
-                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5 text-left transition hover:border-cyan-200/35 hover:bg-cyan-200/10 focus:outline-none focus:ring-2 focus:ring-cyan-200/40"
-                        onClick={() => onActionSelect(action)}
-                      >
-                        {actionContent}
-                      </button>
-                    );
-                  }
+              if (canOpenAction) {
+                return (
+                  <button
+                    key={action.id || index}
+                    type="button"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-primary/30 hover:bg-primary/5 focus:outline-none focus:ring-2 focus:ring-primary/25"
+                    onClick={() => onActionSelect(action)}
+                  >
+                    {actionContent}
+                  </button>
+                );
+              }
 
-                  return (
-                    <div key={action.id || index} className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5">
-                      {actionContent}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+              return (
+                <div key={action.id || index} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+                  {actionContent}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

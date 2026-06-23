@@ -35,6 +35,7 @@ function sectionHasAnyRef(items, ids) {
 
 const MONITORING_ACTION_PATTERN = /\b(check|confirm|verify|review|recheck|log|document|track|monitor|compare|observe)\b/i;
 const ESCALATION_ACTION_PATTERN = /\b(call|contact|notify|escalat|review|check|confirm|verify|arrange|document|log|recheck|dispatch|reach|speak|book|schedule)\b/i;
+const CONDITIONAL_ESCALATION_PATTERN = /\b(if|when|whenever|should|in case)\b/i;
 
 export function repairOperationalHealthPlanLanguage(
   plan,
@@ -73,10 +74,14 @@ export function repairOperationalHealthPlanLanguage(
   };
   const repairEscalationItem = (item) => {
     const itemText = text(item?.text);
+    const needsConcreteEscalationAction = needsConcreteMonitoringAction(item)
+      || CONDITIONAL_ESCALATION_PATTERN.test(itemText)
+      || text(item?.timing).toLowerCase() === "today"
+      || text(item?.priority).toLowerCase() === "high";
     if (
       !itemText
-      || ESCALATION_ACTION_PATTERN.test(itemText)
-      || !needsConcreteMonitoringAction(item)
+      || (ESCALATION_ACTION_PATTERN.test(itemText) && !/^escalat(e|ion)\s+(if|when|whenever|should|in case)\b/i.test(itemText))
+      || !needsConcreteEscalationAction
     ) {
       return item;
     }

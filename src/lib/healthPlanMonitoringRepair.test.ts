@@ -72,6 +72,36 @@ describe("healthPlanMonitoringRepair", () => {
     expect(findHealthPlanSafetyIssues(repaired, { sourceSignals, signalTriage })).toEqual([]);
   });
 
+  it("repairs conditional escalation wording even when the source signal is not already hot", () => {
+    const sourceSignals = [
+      { id: "health-context", label: "Dizziness pattern", strength: "medium" },
+    ];
+    const plan = {
+      summary_text: "Dizziness should remain visible to staff.",
+      summary_signal_ids: ["health-context"],
+      goals_json: [],
+      daily_support_json: [],
+      monitoring_json: [],
+      escalation_json: [
+        { text: "If dizziness becomes more frequent or affects safe movement at home.", source_signal_ids: ["health-context"] },
+        { text: "Escalate if the client cannot be reached after the planned check-in.", source_signal_ids: ["health-context"] },
+      ],
+      caregiver_guidance_json: [],
+    };
+
+    const repaired = repairOperationalMonitoringLanguage(plan, { sourceSignals });
+
+    expect(repaired.escalation_json[0]).toMatchObject({
+      text: expect.stringContaining("Contact the responsible care lead"),
+      owner_role: "care_team",
+      fallback_owner_role: "on_call_coordinator",
+    });
+    expect(repaired.escalation_json[1]).toMatchObject({
+      text: expect.stringContaining("Contact the responsible care lead"),
+      timing: "today",
+    });
+  });
+
   it("fills predictable coverage gaps for generated drafts before quality gates run", () => {
     const sourceSignals = [
       { id: "alert-active", label: "Active alert", strength: "high" },
