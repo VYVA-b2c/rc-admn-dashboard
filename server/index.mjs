@@ -3854,7 +3854,10 @@ async function generateHealthPlan(
     options,
   );
   assertHealthPlanReadinessForGeneration(promptInput, "Health plan generation");
-  if (healthPlanAiProvider === "openai" && openAiApiKey) {
+  if (healthPlanAiProvider === "openai") {
+    if (!openAiApiKey) {
+      throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated", true);
+    }
     try {
       return await generateHealthPlanWithOpenAI(
         profile,
@@ -3868,20 +3871,20 @@ async function generateHealthPlan(
       );
     } catch (error) {
       if (Number(error?.statusCode || error?.status || 0) === 409) throw error;
-      console.warn("Health plan LLM generation failed, using deterministic fallback:", error?.message || error);
-      const fallbackPlan = buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
-      return {
-        plan: applyHealthPlanConfidenceCalibration(fallbackPlan, {
-          sourceSignals,
-          dataQualityGaps: promptInput?.data_quality_gaps || [],
-          evidenceConflicts: promptInput?.evidence_conflicts || [],
-          followThrough: promptInput?.existing_plan_feedback || null,
-          sectionDrift: promptInput?.existing_plan_section_drift || [],
-        }).plan,
-        recommendation_calibration: null,
-        candidate_selection: null,
-        cohort_guidance: promptInput?.cohort_guidance || null,
-      };
+      const message = String(error?.message || "");
+      if (message.includes(" failed:") || message.includes("OPENAI_API_KEY")) {
+        throw error;
+      }
+      console.warn("Health plan LLM generation could not produce an acceptable draft:", message || error);
+      throw healthPlanGenerationError(
+        409,
+        "Insufficient signal for this user",
+        {
+          code: "health_plan_signal_review_required",
+          readiness: promptInput?.readiness || null,
+          acceptance: error?.details?.acceptance || null,
+        },
+      );
     }
   }
   const fallbackPlan = buildFallbackHealthPlan(profile, predictiveContext, sourceSignals, language);
