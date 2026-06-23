@@ -292,6 +292,16 @@ function extractHealthPlanGenerationDiagnostics(error: unknown): HealthPlanGener
   };
 }
 
+function isHealthPlanSignalReviewError(error: unknown) {
+  if (!(error instanceof ApiError) || !error.data || typeof error.data !== "object") return false;
+  const payload = error.data as Record<string, unknown>;
+  const code = typeof payload.code === "string" ? payload.code : "";
+  return error.status === 409 && [
+    "health_plan_readiness_blocked",
+    "health_plan_signal_review_required",
+  ].includes(code);
+}
+
 type HealthPlanRecommendationReviewDecisionState = {
   item_key?: string | null;
   item_id?: string | null;
@@ -728,7 +738,7 @@ function speechLanguageCode(language?: string | null) {
 }
 
 function shouldPauseHealthPlanGenerationForSignalReview() {
-  return true;
+  return false;
 }
 
 function healthPlanReviewReadinessTone(status?: "ready" | "guarded" | "blocked" | null) {
@@ -1857,12 +1867,19 @@ export default function UserProfile() {
     try {
       await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan/generate`, {
         method: "POST",
+        timeoutMs: 90000,
       });
       toast({ title: regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
       await invalidateHealthPlanQueries();
     } catch (error) {
       const message = error instanceof Error ? error.message : t("profile.healthPlanGenerationFailed");
-      setHealthPlanGenerationDiagnostics(extractHealthPlanGenerationDiagnostics(error));
+      const diagnostics = extractHealthPlanGenerationDiagnostics(error);
+      setHealthPlanGenerationDiagnostics(diagnostics);
+      if (isHealthPlanSignalReviewError(error)) {
+        setHealthPlanError(null);
+        setInsufficientHealthPlanSignalsOpen(true);
+        return;
+      }
       setHealthPlanError(message);
       toast({
         title: t("profile.healthPlanGenerationFailed"),
@@ -1891,6 +1908,7 @@ export default function UserProfile() {
       await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan/regenerate-sections`, {
         method: "POST",
         body: JSON.stringify({ sections: uniqueSections }),
+        timeoutMs: 90000,
       });
       toast({
         title: uniqueSections.length > 1 ? t("profile.healthPlanSectionsRefreshed") : t("profile.healthPlanSectionRefreshed"),
