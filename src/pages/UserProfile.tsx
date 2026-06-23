@@ -727,6 +727,10 @@ function speechLanguageCode(language?: string | null) {
   return "en-US";
 }
 
+function shouldPauseHealthPlanGenerationForSignalReview() {
+  return true;
+}
+
 function healthPlanReviewReadinessTone(status?: "ready" | "guarded" | "blocked" | null) {
   if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "guarded") return "border-amber-200 bg-amber-50 text-amber-700";
@@ -1760,6 +1764,7 @@ export default function UserProfile() {
   const [savingHealthPlanReview, setSavingHealthPlanReview] = useState(false);
   const [healthPlanError, setHealthPlanError] = useState<string | null>(null);
   const [healthPlanGenerationDiagnostics, setHealthPlanGenerationDiagnostics] = useState<HealthPlanGenerationDiagnosticsState | null>(null);
+  const [insufficientHealthPlanSignalsOpen, setInsufficientHealthPlanSignalsOpen] = useState(false);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["vyva-user-profile", organizationId, id],
@@ -1833,6 +1838,13 @@ export default function UserProfile() {
 
   const handleGenerateHealthPlan = async (regenerate = false) => {
     if (!id || !data?.user) return;
+    if (shouldPauseHealthPlanGenerationForSignalReview()) {
+      setHealthPlanError(null);
+      setHealthPlanGenerationDiagnostics(null);
+      setInsufficientHealthPlanSignalsOpen(true);
+      return;
+    }
+
     if (data.isPreviewDemo || authBypassEnabled) {
       handleOperationalAction("profile.previewNoWrite");
       return;
@@ -4138,6 +4150,35 @@ export default function UserProfile() {
           plan={healthPlan}
         />
       )}
+      <Dialog open={insufficientHealthPlanSignalsOpen} onOpenChange={setInsufficientHealthPlanSignalsOpen}>
+        <DialogContent className="max-w-lg rounded-2xl border-border bg-white">
+          <DialogHeader>
+            <div className="mb-2 flex h-11 w-11 items-center justify-center rounded-full bg-amber-50 text-amber-600">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <DialogTitle>{t("profile.healthPlanInsufficientSignalsTitle")}</DialogTitle>
+            <DialogDescription className="leading-6">
+              {t("profile.healthPlanInsufficientSignalsDescription")}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
+            {t("profile.healthPlanInsufficientSignalsNext")}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInsufficientHealthPlanSignalsOpen(false)}>
+              {t("profile.healthPlanInsufficientSignalsClose")}
+            </Button>
+            <Button
+              onClick={() => {
+                setInsufficientHealthPlanSignalsOpen(false);
+                setProfileTab("overview");
+              }}
+            >
+              {t("profile.healthPlanInsufficientSignalsReviewProfile")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={healthPlanReviewOpen}
         onOpenChange={(open) => {
@@ -7205,7 +7246,7 @@ function HealthPlanReadinessPanel({
             })}
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.85fr)]">
+          <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.85fr)]">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
