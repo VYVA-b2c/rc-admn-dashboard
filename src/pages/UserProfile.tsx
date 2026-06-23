@@ -7246,9 +7246,9 @@ function HealthPlanReadinessPanel({
             })}
           </div>
 
-          <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,0.85fr)]">
+          <div className="grid grid-cols-1 gap-3">
             <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-2">
                   <Volume2 className="h-4 w-4 text-primary" />
                   <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanArenaVoiceGuide")}</p>
