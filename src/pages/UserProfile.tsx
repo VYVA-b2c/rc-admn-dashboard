@@ -699,6 +699,36 @@ function healthPlanReadinessLabel(t: (key: string) => string, status?: "ready" |
   return t("profile.healthPlanReadinessBlocked");
 }
 
+type HealthPlanReadinessAction = {
+  id?: string | null;
+  label?: string | null;
+  action?: string | null;
+  priority?: "high" | "medium" | "low" | null;
+};
+
+type HealthPlanReadinessActionTarget = "profile" | "health" | "medication" | "checkin" | "brain" | "care" | "sensor" | "timeline" | null;
+
+function healthPlanReadinessActionTarget(action?: HealthPlanReadinessAction | null): HealthPlanReadinessActionTarget {
+  const text = [action?.id, action?.label, action?.action].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return null;
+  if (/\b(medication|medicine|dose|dosage|pill|reminder|adherence)\b/.test(text)) return "medication";
+  if (/\bbrain\b|brain coach|coach session/.test(text)) return "brain";
+  if (/check-?in|call log|last contact|contact outcome|outreach/.test(text)) return "checkin";
+  if (/\b(sensor|device|alert|fall detector|blood pressure|heart rate)\b/.test(text)) return "sensor";
+  if (/care provider|caregiver|care coverage|family|support network|household/.test(text)) return "care";
+  if (/\b(health|condition|mobility|diagnosis|clinical)\b/.test(text)) return "health";
+  if (/\b(living|address|language|consent|profile|context|city)\b/.test(text)) return "profile";
+  if (/\b(activity|timeline|history|event)\b/.test(text)) return "timeline";
+  return null;
+}
+
+function speechLanguageCode(language?: string | null) {
+  const normalized = String(language || "").trim().toLowerCase();
+  if (normalized.startsWith("de") || normalized.includes("german")) return "de-DE";
+  if (normalized.startsWith("es") || normalized.includes("spanish")) return "es-ES";
+  return "en-US";
+}
+
 function healthPlanReviewReadinessTone(status?: "ready" | "guarded" | "blocked" | null) {
   if (status === "ready") return "border-emerald-200 bg-emerald-50 text-emerald-700";
   if (status === "guarded") return "border-amber-200 bg-amber-50 text-amber-700";
@@ -1697,6 +1727,7 @@ export default function UserProfile() {
   const organizationId = useActiveOrganizationId();
   const copy = (key: string, values: Record<string, string | number | undefined> = {}) => interpolate(t(key), values);
 
+  const [profileTab, setProfileTab] = useState("overview");
   const [editUserOpen, setEditUserOpen] = useState(false);
   const [editHealthOpen, setEditHealthOpen] = useState(false);
   const [editMedOpen, setEditMedOpen] = useState(false);
@@ -2401,6 +2432,64 @@ export default function UserProfile() {
   const canEditCheckins = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_checkins ?? isAdmin);
   const canEditBrainCoach = !authBypassEnabled && !isPreviewDemo && Boolean(data.can_edit_brain_coach ?? isAdmin);
   const canManageHealthPlan = canEditProfile;
+  const handleHealthPlanReadinessAction = (action: HealthPlanReadinessAction) => {
+    const target = healthPlanReadinessActionTarget(action);
+
+    if (target === "medication") {
+      setProfileTab("overview");
+      if (canEditMedications) {
+        setEditMedTarget(medications[0] ?? null);
+        setEditMedOpen(true);
+      }
+      return;
+    }
+
+    if (target === "checkin") {
+      setProfileTab("overview");
+      if (canEditCheckins) setEditCheckinOpen(true);
+      return;
+    }
+
+    if (target === "brain") {
+      setProfileTab("overview");
+      if (canEditBrainCoach) setEditBrainOpen(true);
+      return;
+    }
+
+    if (target === "care") {
+      setProfileTab("support");
+      if (canAssignProviders) setAssignProviderOpen(true);
+      return;
+    }
+
+    if (target === "sensor") {
+      setProfileTab("support");
+      if (showAdminControls) {
+        setEditSensorTarget(sensors[0] ?? null);
+        setEditSensorOpen(true);
+      }
+      return;
+    }
+
+    if (target === "health") {
+      setProfileTab("overview");
+      if (showAdminControls) setEditHealthOpen(true);
+      return;
+    }
+
+    if (target === "profile") {
+      setProfileTab("overview");
+      if (canEditProfile) setEditUserOpen(true);
+      return;
+    }
+
+    if (target === "timeline") {
+      setProfileTab("timeline");
+      return;
+    }
+
+    setProfileTab("overview");
+  };
   const healthPlanSectionCount = healthPlan
     ? [
         safeArray(healthPlan.goals_json).length,
@@ -2667,6 +2756,15 @@ export default function UserProfile() {
     longitudinalMemory: healthPlanLongitudinalMemory,
   });
   const displayedHealthPlanReadiness = healthPlanGenerationDiagnostics?.readiness || healthPlanReadiness;
+  const healthPlanReadinessVoiceContext = {
+    clientName: fullName,
+    language: user.language,
+    livingContext: context.livingContextKey ? t(context.livingContextKey) : null,
+    medicationCount: medications.length,
+    careProviderCount: careProviders.length,
+    sensorCount: sensors.length,
+    activeAlertCount: activeAlerts.length,
+  };
   const healthPlanGenerationAcceptance = healthPlanGenerationDiagnostics?.acceptance || null;
   const healthPlanRecommendationImpact = healthPlan?.quality_snapshot_json?.recommendation_impact || buildHealthPlanRecommendationImpact({
     plan: healthPlan,
@@ -2875,6 +2973,7 @@ export default function UserProfile() {
         ...safeArray(healthPlan.caregiver_guidance_json),
       ].filter((item) => safeArray(item.source_signal_ids).length > 0).length
     : 0;
+  const planWorkspaceActive = profileTab === "plan";
 
   return (
     <div className="flex flex-col gap-5">
@@ -2896,7 +2995,7 @@ export default function UserProfile() {
               {t("profile.previewData")}
             </Badge>
           )}
-          {canEditProfile && (
+          {canEditProfile && !planWorkspaceActive && (
             <Button variant="outline" className="h-10 rounded-full border-primary/20 text-primary hover:bg-primary/10" onClick={() => setEditUserOpen(true)}>
               <Pencil className="mr-2 h-4 w-4" />
               {t("profile.editProfile")}
@@ -2905,6 +3004,46 @@ export default function UserProfile() {
         </div>
       </div>
 
+      {planWorkspaceActive ? (
+        <Card className="rounded-2xl border-primary/10 bg-white shadow-sm">
+          <CardContent className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-bold text-white shadow-sm">
+                {getInitials(user.first_name, user.last_name)}
+              </div>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="truncate text-lg font-bold tracking-tight text-foreground">{fullName}</h2>
+                  <span className={cn("rounded-full px-2.5 py-0.5 text-xs font-bold ring-1", profileStatusClasses(context.riskStatus))}>
+                    {t(`profile.status.${context.riskStatus}`)}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm font-medium text-muted-foreground">
+                  {[age ? copy("profile.ageYears", { age }) : null, context.livingContextKey ? t(context.livingContextKey) : null, userCity].filter(Boolean).join(" · ")}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-semibold">
+                {t("profile.language")}: {(user.language || "-").toString().toUpperCase()}
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-semibold">
+                {t("profile.lastContact")}: {lastContactValue || t("profile.lastContactUnknown")}
+              </Badge>
+              <Badge variant="outline" className="rounded-full px-3 py-1 text-xs font-semibold">
+                {t("profile.healthPlanSourceSignals")}: {healthPlanSignalCount}
+              </Badge>
+              {canEditProfile && (
+                <Button variant="outline" className="h-9 rounded-full border-primary/20 px-3 text-xs font-bold text-primary hover:bg-primary/10" onClick={() => setEditUserOpen(true)}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                  {t("profile.editProfile")}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
       <Card className="rounded-2xl border-border bg-white shadow-sm">
         <CardContent className="p-5 lg:p-7">
           <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
@@ -2972,8 +3111,10 @@ export default function UserProfile() {
           )}
         </CardContent>
       </Card>
+        </>
+      )}
 
-      <Tabs defaultValue="overview" className="flex flex-col gap-5">
+      <Tabs value={profileTab} onValueChange={setProfileTab} className="flex flex-col gap-5">
         <div className="sticky top-3 z-10 rounded-2xl border border-border/80 bg-background/95 p-2 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80">
           <TabsList className="flex h-auto flex-wrap gap-2 bg-transparent p-0">
             <TabsTrigger
@@ -3347,11 +3488,17 @@ export default function UserProfile() {
                     {t("profile.healthPlanReviewRequired")}
                   </Badge>
                 </div>
-                <p className="max-w-4xl text-sm leading-7 text-muted-foreground">{t("profile.healthPlanEmpty")}</p>
-                <p className="max-w-3xl text-sm leading-6 text-foreground/80">{t("profile.healthPlanReadyToShare")}</p>
                 {displayedHealthPlanReadiness && (
-                  <HealthPlanReadinessPanel summary={displayedHealthPlanReadiness} />
+                  <HealthPlanReadinessPanel
+                    summary={displayedHealthPlanReadiness}
+                    voiceContext={healthPlanReadinessVoiceContext}
+                    onActionSelect={handleHealthPlanReadinessAction}
+                  />
                 )}
+                <div className="rounded-[18px] border border-white/80 bg-white/80 px-4 py-3">
+                  <p className="max-w-4xl text-sm leading-7 text-muted-foreground">{t("profile.healthPlanEmpty")}</p>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground/80">{t("profile.healthPlanReadyToShare")}</p>
+                </div>
               </div>
               <div className="rounded-[20px] border border-white/80 bg-white/85 p-5 shadow-sm">
                 <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReviewTitle")}</p>
@@ -3402,7 +3549,11 @@ export default function UserProfile() {
                       )}
                     </div>
                     {healthPlanReadiness && (
-                      <HealthPlanReadinessPanel summary={healthPlanReadiness} />
+                      <HealthPlanReadinessPanel
+                        summary={healthPlanReadiness}
+                        voiceContext={healthPlanReadinessVoiceContext}
+                        onActionSelect={handleHealthPlanReadinessAction}
+                      />
                     )}
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSummary")}</p>
@@ -6870,6 +7021,8 @@ function HealthPlanHistoryReplayPanel({
 
 function HealthPlanReadinessPanel({
   summary,
+  voiceContext,
+  onActionSelect,
 }: {
   summary?: {
     overall_status?: "ready" | "guarded" | "blocked" | null;
@@ -6891,13 +7044,18 @@ function HealthPlanReadinessPanel({
       detail?: string | null;
       severity?: "high" | "medium" | "low" | null;
     }> | null;
-    collection_actions?: Array<{
-      id?: string | null;
-      label?: string | null;
-      action?: string | null;
-      priority?: "high" | "medium" | "low" | null;
-    }> | null;
+    collection_actions?: HealthPlanReadinessAction[] | null;
   } | null;
+  voiceContext?: {
+    clientName?: string | null;
+    language?: string | null;
+    livingContext?: string | null;
+    medicationCount?: number | null;
+    careProviderCount?: number | null;
+    sensorCount?: number | null;
+    activeAlertCount?: number | null;
+  };
+  onActionSelect?: (action: HealthPlanReadinessAction) => void;
 }) {
   const { t } = useLanguage();
   const [speaking, setSpeaking] = useState(false);
@@ -6923,7 +7081,19 @@ function HealthPlanReadinessPanel({
   );
   const reasons = [...blockers, ...cautions].slice(0, 4);
   const primaryAction = actions[0];
-  const voiceScript = interpolate(
+  const profileCues = [
+    voiceContext?.clientName ? interpolate(t("profile.healthPlanArenaCueClient"), { name: voiceContext.clientName }) : null,
+    voiceContext?.livingContext ? interpolate(t("profile.healthPlanArenaCueLiving"), { value: voiceContext.livingContext }) : null,
+    typeof voiceContext?.medicationCount === "number" ? interpolate(t("profile.healthPlanArenaCueMedications"), { count: voiceContext.medicationCount }) : null,
+    typeof voiceContext?.careProviderCount === "number"
+      ? voiceContext.careProviderCount > 0
+        ? interpolate(t("profile.healthPlanArenaCueCareCoverage"), { count: voiceContext.careProviderCount })
+        : t("profile.healthPlanArenaCueNoCareCoverage")
+      : null,
+    typeof voiceContext?.sensorCount === "number" && voiceContext.sensorCount > 0 ? interpolate(t("profile.healthPlanArenaCueSensors"), { count: voiceContext.sensorCount }) : null,
+    typeof voiceContext?.activeAlertCount === "number" && voiceContext.activeAlertCount > 0 ? interpolate(t("profile.healthPlanArenaCueAlerts"), { count: voiceContext.activeAlertCount }) : null,
+  ].filter(Boolean);
+  const baseVoiceScript = interpolate(
     status === "ready"
       ? t("profile.healthPlanArenaVoiceReady")
       : status === "guarded"
@@ -6936,6 +7106,10 @@ function HealthPlanReadinessPanel({
       action: primaryAction?.action || primaryAction?.label || t("profile.healthPlanReadinessActionFallback"),
     },
   );
+  const voiceScript = [
+    profileCues.length > 0 ? interpolate(t("profile.healthPlanArenaVoiceProfileCue"), { cues: profileCues.slice(0, 4).join(", ") }) : null,
+    baseVoiceScript,
+  ].filter(Boolean).join(" ");
   const playVoiceGuide = () => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     if (speaking) {
@@ -6944,6 +7118,7 @@ function HealthPlanReadinessPanel({
       return;
     }
     const utterance = new SpeechSynthesisUtterance(voiceScript);
+    utterance.lang = speechLanguageCode(voiceContext?.language);
     utterance.rate = 0.95;
     utterance.pitch = 1;
     utterance.onend = () => setSpeaking(false);
@@ -6972,6 +7147,7 @@ function HealthPlanReadinessPanel({
       icon: Target,
     },
   ];
+  const primaryActionTarget = healthPlanReadinessActionTarget(primaryAction);
 
   return (
     <div className="overflow-hidden rounded-[22px] border border-emerald-950/10 bg-[#071b14] text-white shadow-[0_18px_50px_rgba(6,78,59,0.18)]">
@@ -7049,6 +7225,17 @@ function HealthPlanReadinessPanel({
               <p className="mt-3 text-sm font-bold leading-6 text-white">
                 {primaryAction?.action || primaryAction?.label || (status === "ready" ? t("profile.healthPlanGenerate") : t("profile.healthPlanReadinessActionFallback"))}
               </p>
+              {primaryAction && primaryActionTarget && onActionSelect && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="mt-3 h-9 rounded-full border border-cyan-200/20 bg-cyan-200/15 px-3 text-xs font-black text-white hover:bg-cyan-200/25 hover:text-white"
+                  onClick={() => onActionSelect(primaryAction)}
+                >
+                  <Target className="mr-2 h-3.5 w-3.5" />
+                  {t("profile.healthPlanArenaOpenAction")}
+                </Button>
+              )}
             </div>
           </div>
 
@@ -7087,17 +7274,45 @@ function HealthPlanReadinessPanel({
             <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 px-3.5 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
               <p className="text-[11px] font-black uppercase tracking-[0.18em] text-cyan-100">{t("profile.healthPlanReadinessCollectNext")}</p>
               <div className="mt-3 space-y-2.5">
-                {actions.slice(0, 4).map((action, index) => (
-                  <div key={action.id || index} className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5">
+                {actions.slice(0, 4).map((action, index) => {
+                  const actionTarget = healthPlanReadinessActionTarget(action);
+                  const canOpenAction = Boolean(actionTarget && onActionSelect);
+                  const actionContent = (
+                    <>
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-bold text-white">{action.label || t("profile.healthPlanReadinessActionFallback")}</p>
                       <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanImprovePriorityClasses(action.priority))}>
                         {healthPlanImprovePriorityLabel(t, action.priority)}
                       </Badge>
+                      {canOpenAction && (
+                        <span className="ml-auto rounded-full bg-cyan-200/15 px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] text-cyan-100">
+                          {t("profile.healthPlanArenaOpenAction")}
+                        </span>
+                      )}
                     </div>
                     {action.action && <p className="mt-1.5 text-sm leading-6 text-slate-300">{action.action}</p>}
-                  </div>
-                ))}
+                    </>
+                  );
+
+                  if (canOpenAction) {
+                    return (
+                      <button
+                        key={action.id || index}
+                        type="button"
+                        className="w-full rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5 text-left transition hover:border-cyan-200/35 hover:bg-cyan-200/10 focus:outline-none focus:ring-2 focus:ring-cyan-200/40"
+                        onClick={() => onActionSelect(action)}
+                      >
+                        {actionContent}
+                      </button>
+                    );
+                  }
+
+                  return (
+                    <div key={action.id || index} className="rounded-xl border border-white/10 bg-slate-950/45 px-3 py-2.5">
+                      {actionContent}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
