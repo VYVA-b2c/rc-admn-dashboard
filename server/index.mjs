@@ -1064,11 +1064,11 @@ async function loadExternalAssignmentSummaries(externalIds, context) {
       LEFT JOIN public.care_provider_contacts c ON c.id = a.care_provider_contact_id
       LEFT JOIN public.field_staff fs ON fs.id = a.field_staff_id
       WHERE u.organization_id = $1
-        AND u.external_source = $2
-        AND u.external_user_id = ANY($3::text[])
+        AND u.external_source <> 'local'
+        AND u.external_user_id = ANY($2::text[])
       GROUP BY u.external_user_id
     `,
-    [organizationId, externalUserSource, ids],
+    [organizationId, ids],
   );
 
   return new Map(rows.map((row) => [
@@ -1089,11 +1089,18 @@ async function loadLocalUserIdForExternalUser(externalUserId, context, client = 
       SELECT id::text
       FROM public.vyva_users
       WHERE organization_id = $1
-        AND external_source = $2
-        AND external_user_id = $3
+        AND external_source <> 'local'
+        AND external_user_id = $2
+      ORDER BY
+        CASE external_source
+          WHEN $3 THEN 0
+          WHEN $4 THEN 1
+          ELSE 2
+        END,
+        updated_at DESC
       LIMIT 1
     `,
-    [organizationId, externalUserSource, String(externalUserId)],
+    [organizationId, String(externalUserId), externalUserSource, phoneOnboardingUserSource],
   );
   return result.rows[0]?.id || null;
 }
@@ -5117,30 +5124,130 @@ async function loadExternalUserCarePlanAccess(externalUserId, context) {
   return (await loadCarePlanAccessMap([localUserId], context)).get(String(localUserId)) || null;
 }
 
-function mergeExternalProfileWithLocalAssignments(data, careProviders, externalUserId, localServices = {}, carePlanAccess = null, scheduledContact = null) {
+async function loadLocalProfileForExternalUser(externalUserId, context, client = { query }) {
+  const localUserId = await loadLocalUserIdForExternalUser(externalUserId, context, client);
+  return localUserId ? loadUserInfo(localUserId, context, { client }) : null;
+}
+
+function localServicesFromProfile(profile) {
+  return {
+    checkins: profile?.checkins || null,
+    brainCoach: profile?.brainCoach || null,
+    medicationActivity: profile?.medicationActivity || null,
+    sensors: Array.isArray(profile?.sensors) ? profile.sensors : [],
+    alerts: Array.isArray(profile?.alerts) ? profile.alerts : [],
+    healthPlan: profile?.healthPlan || null,
+  };
+}
+
+function carePlanAccessFromProfile(profile) {
+  if (!profile?.user?.id) return null;
+  return {
+    can_edit_care_plan: Boolean(profile.can_edit_care_plan),
+    can_edit_medications: Boolean(profile.can_edit_medications),
+    can_edit_checkins: Boolean(profile.can_edit_checkins),
+    can_edit_brain_coach: Boolean(profile.can_edit_brain_coach),
+    edit_block_reason: profile.edit_block_reason || null,
+  };
+}
+
+function preferredNonEmptyArray(primary, fallback) {
+  if (Array.isArray(primary) && primary.length) return primary;
+  return fallback;
+}
+
+function mergeExternalAndLocalProfileUser(externalUser, localUser, externalUserId) {
+  const external = objectValue(externalUser) || {};
+  const local = objectValue(localUser);
+  const retainedExternalId = nullIfBlank(firstValue(
+    local?.external_user_id,
+    local?.externalUserId,
+    external.external_user_id,
+    external.externalUserId,
+    external.id,
+    externalUserId,
+  ));
+  const retainedExternalSource = nullIfBlank(firstValue(
+    local?.external_source,
+    local?.externalSource,
+    external.external_source,
+    external.externalSource,
+  )) || externalUserSource;
+
+  if (!local?.id) {
+    return {
+      ...external,
+      external_user_id: retainedExternalId,
+      externalUserId: retainedExternalId,
+      external_source: retainedExternalSource,
+      externalSource: retainedExternalSource,
+    };
+  }
+
+  return {
+    ...external,
+    ...local,
+    id: String(local.id),
+    external_user_id: retainedExternalId,
+    externalUserId: retainedExternalId,
+    external_source: retainedExternalSource,
+    externalSource: retainedExternalSource,
+    upstream_id: nullIfBlank(firstValue(external.id, external.user_id, external.userId)) || retainedExternalId,
+  };
+}
+
+function mergeExternalProfileWithLocalAssignments(
+  data,
+  careProviders,
+  externalUserId,
+  localServices = {},
+  carePlanAccess = null,
+  scheduledContact = null,
+  localProfile = null,
+) {
   const normalized = normalizeExternalProfilePayload(data) || {};
+  const localUser = objectValue(localProfile?.user);
+  const hasLocalProfile = Boolean(localUser?.id);
+  const localProfileServices = localServicesFromProfile(localProfile);
+  const resolvedServices = {
+    checkins: localServices?.checkins || localProfileServices.checkins,
+    brainCoach: localServices?.brainCoach || localProfileServices.brainCoach,
+    medicationActivity: localServices?.medicationActivity || localProfileServices.medicationActivity,
+    sensors: preferredNonEmptyArray(localServices?.sensors, localProfileServices.sensors),
+    alerts: preferredNonEmptyArray(localServices?.alerts, localProfileServices.alerts),
+    healthPlan: localServices?.healthPlan || localProfileServices.healthPlan,
+  };
+  const resolvedAccess = carePlanAccess || carePlanAccessFromProfile(localProfile);
   const hasProviders = Array.isArray(careProviders) && careProviders.length;
-  const hasServices = Boolean(localServices?.checkins || localServices?.brainCoach || localServices?.medicationActivity);
-  const hasSensors = Array.isArray(localServices?.sensors) && localServices.sensors.length;
-  const hasAlerts = Array.isArray(localServices?.alerts) && localServices.alerts.length;
-  const hasHealthPlan = Boolean(localServices?.healthPlan);
-  const hasAccess = Boolean(carePlanAccess);
-  if (!hasProviders && !hasServices && !hasSensors && !hasAlerts && !hasHealthPlan && !hasAccess && !scheduledContact) return normalized;
+  const mergedCareProviders = hasProviders
+    ? careProviders
+    : preferredNonEmptyArray(localProfile?.careProviders, normalized.careProviders);
+  const mergedCaregivers = Array.isArray(mergedCareProviders) && mergedCareProviders.length
+    ? careProvidersToCompatibilityCaregivers(mergedCareProviders, hasLocalProfile ? localUser.id : String(externalUserId))
+    : preferredNonEmptyArray(localProfile?.caregivers, normalized.caregivers);
   const merged = {
     ...normalized,
-    careProviders: hasProviders ? careProviders : normalized.careProviders,
-    caregivers: hasProviders ? careProvidersToCompatibilityCaregivers(careProviders, String(externalUserId)) : normalized.caregivers,
-    checkins: localServices?.checkins || normalized.checkins,
-    brainCoach: localServices?.brainCoach || normalized.brainCoach,
-    medicationActivity: localServices?.medicationActivity || normalized.medicationActivity,
-    sensors: hasSensors ? localServices.sensors : normalized.sensors,
-    alerts: hasAlerts ? localServices.alerts : normalized.alerts,
-    healthPlan: localServices?.healthPlan || normalized.healthPlan || null,
-    can_edit_care_plan: carePlanAccess?.can_edit_care_plan ?? normalized.can_edit_care_plan,
-    can_edit_medications: carePlanAccess?.can_edit_medications ?? normalized.can_edit_medications,
-    can_edit_checkins: carePlanAccess?.can_edit_checkins ?? normalized.can_edit_checkins,
-    can_edit_brain_coach: carePlanAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach,
-    edit_block_reason: carePlanAccess?.edit_block_reason ?? normalized.edit_block_reason,
+    user: mergeExternalAndLocalProfileUser(normalized.user, localUser, externalUserId),
+    consent: localProfile?.consent || normalized.consent,
+    health: localProfile?.health || normalized.health,
+    medications: preferredNonEmptyArray(localProfile?.medications, normalized.medications),
+    careProviders: mergedCareProviders,
+    caregivers: mergedCaregivers,
+    checkins: resolvedServices.checkins || normalized.checkins,
+    brainCoach: resolvedServices.brainCoach || normalized.brainCoach,
+    medicationActivity: resolvedServices.medicationActivity || normalized.medicationActivity,
+    sensors: preferredNonEmptyArray(resolvedServices.sensors, normalized.sensors),
+    alerts: preferredNonEmptyArray(resolvedServices.alerts, normalized.alerts),
+    readings: preferredNonEmptyArray(localProfile?.readings, normalized.readings),
+    recentOperationalEvents: preferredNonEmptyArray(localProfile?.recentOperationalEvents, normalized.recentOperationalEvents),
+    healthPlan: resolvedServices.healthPlan || normalized.healthPlan || null,
+    can_edit_care_plan: hasLocalProfile ? Boolean(resolvedAccess?.can_edit_care_plan ?? normalized.can_edit_care_plan) : false,
+    can_edit_medications: hasLocalProfile ? Boolean(resolvedAccess?.can_edit_medications ?? normalized.can_edit_medications) : false,
+    can_edit_checkins: hasLocalProfile ? Boolean(resolvedAccess?.can_edit_checkins ?? normalized.can_edit_checkins) : false,
+    can_edit_brain_coach: hasLocalProfile ? Boolean(resolvedAccess?.can_edit_brain_coach ?? normalized.can_edit_brain_coach) : false,
+    edit_block_reason: hasLocalProfile
+      ? resolvedAccess?.edit_block_reason ?? normalized.edit_block_reason
+      : normalized.edit_block_reason || "external_profile_read_only",
   };
   const withScheduledContact = applyScheduledSessionContact(merged, latestScheduledContact(scheduledContact, latestScheduledContactFromServices({
     checkins: merged.checkins,
@@ -9548,6 +9655,7 @@ async function loadUserInfo(
     includeCarePlanAccess = true,
   } = {},
 ) {
+  if (!isUuid(userId)) return null;
   const organizationId = scopeOrganizationId(context);
   const userResult = await client.query(
     "SELECT *, id::text, organization_id::text FROM public.vyva_users WHERE id = $1 AND organization_id = $2 LIMIT 1",
@@ -12114,10 +12222,16 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       let localServices = { checkins: null, brainCoach: null };
       let carePlanAccess = null;
       const scheduledContact = await loadLatestScheduledSessionContact(userId, context).catch(() => null);
+      let localProfile = null;
       if (context) {
-        careProviders = await loadExternalUserCareProviders(userId, context);
-        localServices = await loadExternalUserLocalServices(userId, context);
-        carePlanAccess = await loadExternalUserCarePlanAccess(userId, context);
+        localProfile = await loadLocalProfileForExternalUser(userId, context).catch(() => null);
+        careProviders = Array.isArray(localProfile?.careProviders)
+          ? localProfile.careProviders
+          : await loadExternalUserCareProviders(userId, context);
+        localServices = localProfile
+          ? localServicesFromProfile(localProfile)
+          : await loadExternalUserLocalServices(userId, context);
+        carePlanAccess = carePlanAccessFromProfile(localProfile) || await loadExternalUserCarePlanAccess(userId, context);
       }
       let normalizedProfile = normalizeExternalProfilePayload(upstream.data);
       if (!externalProfileHasUser(normalizedProfile)) {
@@ -12128,7 +12242,15 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
           res.status(404).json({ error: "User not found" });
           return;
         }
-        res.json(mergeExternalProfileWithLocalAssignments(normalizedProfile, careProviders, userId, localServices, carePlanAccess, scheduledContact));
+        res.json(mergeExternalProfileWithLocalAssignments(
+          normalizedProfile,
+          careProviders,
+          userId,
+          localServices,
+          carePlanAccess,
+          scheduledContact,
+          localProfile,
+        ));
         return;
       }
     }
@@ -12140,7 +12262,9 @@ app.get("/api/v1/user-dashboard/user-info", async (req, res, next) => {
       res.status(upstream?.status || 404).json(upstream?.data || { error: "User not found" });
       return;
     }
-    const data = await loadUserInfo(userId, req.context);
+    const data = isUuid(userId)
+      ? await loadUserInfo(userId, req.context)
+      : await loadLocalProfileForExternalUser(userId, req.context).catch(() => null);
     if (!data) {
       res.status(404).json({ error: "User not found" });
       return;
