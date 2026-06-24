@@ -327,6 +327,111 @@ describe("UsersList Add User flow", () => {
     expect(screen.getByText(/Confirmed/)).toBeInTheDocument();
   });
 
+  it("overlays medication reminder calls from the routine contact feed", async () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/checkins-dashboard/checkins")) {
+          return new Response(
+            JSON.stringify({
+              medications: [
+                {
+                  external_user_id: "external-anna",
+                  status: "confirmed",
+                  occurred_at: "2026-06-24T09:00:00.000Z",
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    renderUsersList();
+
+    await waitFor(() => expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument());
+    expect(screen.getByText(/Confirmed/)).toBeInTheDocument();
+  });
+
+  it("overlays brain coach calls from the routine contact feed", async () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/checkins-dashboard/checkins")) {
+          return new Response(
+            JSON.stringify({
+              sessions: [
+                {
+                  user_id: "external-anna",
+                  type: "brain_coach",
+                  last_outcome: "completed",
+                  last_session_at: "2026-06-24T10:00:00.000Z",
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    renderUsersList();
+
+    await waitFor(() => expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument());
+    expect(screen.getByText(/Completed/)).toBeInTheDocument();
+  });
+
   it("shows completed contact status even when the timestamp is missing", () => {
     gisUsersMock.value = [
       {

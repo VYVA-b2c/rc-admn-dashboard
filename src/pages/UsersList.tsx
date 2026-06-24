@@ -127,6 +127,10 @@ function deriveReasonKey(user: OperationalQueueUser, status: OperationalStatus) 
 type QueueContactFields = OperationalQueueUser & {
   externalUserId?: string | null;
   external_user_id?: string | null;
+  externalId?: string | null;
+  external_id?: string | null;
+  sourceId?: string | null;
+  source_id?: string | null;
   checkin_last_reported_at?: string | null;
   checkin_last_status?: string | null;
   lastContactAt?: string | null;
@@ -140,6 +144,12 @@ type ScheduledContactApiItem = {
   vyva_user_id?: string | number | null;
   userId?: string | number | null;
   vyvaUserId?: string | number | null;
+  external_user_id?: string | number | null;
+  externalUserId?: string | number | null;
+  external_id?: string | number | null;
+  externalId?: string | number | null;
+  client_id?: string | number | null;
+  clientId?: string | number | null;
   user?: { id?: string | number | null } | null;
   vyva_users?: { id?: string | number | null } | null;
   client?: { id?: string | number | null } | null;
@@ -152,12 +162,16 @@ type ScheduledContactApiItem = {
   outcome?: string | null;
   status?: string | null;
   result?: string | null;
+  outcomeStatus?: string | null;
+  outcome_status?: string | null;
   lastOutcomeAt?: string | null;
   last_outcome_at?: string | null;
   lastStatusAt?: string | null;
   last_status_at?: string | null;
   lastCheckinAt?: string | null;
   last_checkin_at?: string | null;
+  lastSessionAt?: string | null;
+  last_session_at?: string | null;
   lastReportedAt?: string | null;
   last_reported_at?: string | null;
   lastCompletedAt?: string | null;
@@ -166,6 +180,12 @@ type ScheduledContactApiItem = {
   completed_at?: string | null;
   reportedAt?: string | null;
   reported_at?: string | null;
+  occurredAt?: string | null;
+  occurred_at?: string | null;
+  calledAt?: string | null;
+  called_at?: string | null;
+  callStartedAt?: string | null;
+  call_started_at?: string | null;
   endedAt?: string | null;
   ended_at?: string | null;
   timestamp?: string | null;
@@ -193,6 +213,11 @@ type ScheduledContactsResponse =
       data?: ScheduledContactApiItem[];
       sessions?: ScheduledContactApiItem[];
       items?: ScheduledContactApiItem[];
+      medications?: ScheduledContactApiItem[];
+      medicationActivity?: ScheduledContactApiItem[];
+      reminders?: ScheduledContactApiItem[];
+      calls?: ScheduledContactApiItem[];
+      results?: ScheduledContactApiItem[];
     };
 
 type ScheduledContact = {
@@ -218,7 +243,21 @@ function validContactDate(value?: string | null) {
 }
 
 function contactUserId(item: ScheduledContactApiItem) {
-  return firstId(item.user_id, item.vyva_user_id, item.userId, item.vyvaUserId, item.user?.id, item.vyva_users?.id, item.client?.id);
+  return firstId(
+    item.user_id,
+    item.vyva_user_id,
+    item.userId,
+    item.vyvaUserId,
+    item.external_user_id,
+    item.externalUserId,
+    item.external_id,
+    item.externalId,
+    item.client_id,
+    item.clientId,
+    item.user?.id,
+    item.vyva_users?.id,
+    item.client?.id,
+  );
 }
 
 function contactStatus(item: ScheduledContactApiItem) {
@@ -232,6 +271,8 @@ function contactStatus(item: ScheduledContactApiItem) {
     item.outcome,
     item.status,
     item.result,
+    item.outcomeStatus,
+    item.outcome_status,
   );
 }
 
@@ -244,6 +285,8 @@ function contactAt(item: ScheduledContactApiItem) {
       item.last_status_at,
       item.lastCheckinAt,
       item.last_checkin_at,
+      item.lastSessionAt,
+      item.last_session_at,
       item.lastReportedAt,
       item.last_reported_at,
       item.lastCompletedAt,
@@ -252,6 +295,12 @@ function contactAt(item: ScheduledContactApiItem) {
       item.completed_at,
       item.reportedAt,
       item.reported_at,
+      item.occurredAt,
+      item.occurred_at,
+      item.calledAt,
+      item.called_at,
+      item.callStartedAt,
+      item.call_started_at,
       item.endedAt,
       item.ended_at,
       item.timestamp,
@@ -297,7 +346,17 @@ function scheduledContactCandidates(item: ScheduledContactApiItem): ScheduledCon
 
 function scheduledContactsList(response: ScheduledContactsResponse) {
   if (Array.isArray(response)) return response;
-  return response.checkins ?? response.data ?? response.sessions ?? response.items ?? [];
+  return [
+    response.checkins,
+    response.data,
+    response.sessions,
+    response.items,
+    response.medications,
+    response.medicationActivity,
+    response.reminders,
+    response.calls,
+    response.results,
+  ].flatMap((items) => (Array.isArray(items) ? items : []));
 }
 
 function latestScheduledContactByUser(response: ScheduledContactsResponse) {
@@ -315,7 +374,15 @@ function latestScheduledContactByUser(response: ScheduledContactsResponse) {
 
 function userContactIds(user: OperationalQueueUser) {
   const contact = user as QueueContactFields;
-  return [firstText(user.id), firstText(contact.externalUserId), firstText(contact.external_user_id)].filter((id): id is string => Boolean(id));
+  return [
+    firstText(user.id),
+    firstText(contact.externalUserId),
+    firstText(contact.external_user_id),
+    firstText(contact.externalId),
+    firstText(contact.external_id),
+    firstText(contact.sourceId),
+    firstText(contact.source_id),
+  ].filter((id): id is string => Boolean(id));
 }
 
 function applyScheduledContact(row: QueueRow, contact?: ScheduledContact) {

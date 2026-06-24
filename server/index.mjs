@@ -7617,6 +7617,15 @@ async function loadDashboardUsers(context) {
        AND COALESCE(logs.scheduled_time, '') = COALESCE(slots.scheduled_time, '')
       GROUP BY slots.vyva_user_id
     ),
+    latest_medication_contacts AS (
+      SELECT DISTINCT ON (l.vyva_user_id)
+        l.vyva_user_id,
+        COALESCE(l.reported_at, l.created_at) AS occurred_at,
+        l.status
+      FROM public.vyva_medication_logs l
+      WHERE COALESCE(l.reported_at, l.created_at) IS NOT NULL
+      ORDER BY l.vyva_user_id, COALESCE(l.reported_at, l.created_at) DESC
+    ),
     care_provider_counts AS (
       SELECT
         a.vyva_user_id,
@@ -7651,8 +7660,15 @@ async function loadDashboardUsers(context) {
       c.preferred_time AS checkin_preferred_time,
       NULL::text AS checkin_last_status,
       NULL::text AS checkin_last_reported_at,
-      u.call_timestamp::text AS last_contact_at,
-      CASE WHEN u.call_timestamp IS NOT NULL THEN 'completed' ELSE NULL END AS last_contact_status,
+      CASE
+        WHEN lmc.occurred_at IS NOT NULL AND (u.call_timestamp IS NULL OR lmc.occurred_at >= u.call_timestamp) THEN lmc.occurred_at::text
+        ELSE u.call_timestamp::text
+      END AS last_contact_at,
+      CASE
+        WHEN lmc.occurred_at IS NOT NULL AND (u.call_timestamp IS NULL OR lmc.occurred_at >= u.call_timestamp) THEN lmc.status
+        WHEN u.call_timestamp IS NOT NULL THEN 'completed'
+        ELSE NULL
+      END AS last_contact_status,
       u.living_context,
       COALESCE(cp.care_provider_count, 0) AS care_provider_count,
       cp.primary_caregiver_name,
@@ -7663,6 +7679,7 @@ async function loadDashboardUsers(context) {
     LEFT JOIN alert_counts a ON a.vyva_user_id = u.id
     LEFT JOIN health_counts h ON h.vyva_user_id = u.id
     LEFT JOIN missed_med_counts m ON m.vyva_user_id = u.id
+    LEFT JOIN latest_medication_contacts lmc ON lmc.vyva_user_id = u.id
     LEFT JOIN public.vyva_user_checkins c ON c.vyva_user_id = u.id
     LEFT JOIN care_provider_counts cp ON cp.vyva_user_id = u.id
     WHERE u.organization_id = $1
@@ -14169,7 +14186,8 @@ app.post("/api/insights/suggestions/:id/dismiss", asyncRoute(async (req, res) =>
 
 app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
   try {
-    const mode = String(req.query.service_type || "").toLowerCase() === "brain_coach" ? "brain_coach" : "standard";
+    const requestedServiceType = normalizeServiceType(req.query.service_type);
+    const mode = requestedServiceType === "brain_coach" ? "brain_coach" : requestedServiceType === "all" ? "all" : "standard";
     let context = null;
     if (pool) {
       context = await resolveRequestContext(req);
@@ -14180,7 +14198,12 @@ app.get("/api/v1/checkins-dashboard/checkins", async (req, res, next) => {
     });
     if (upstream?.ok) {
       const scopedPayload = filterExternalRoutinePayloadForOrganization(upstream.data, context);
-      res.json(await overlayRoutineServicePayload(filterUpstreamCheckins(scopedPayload, mode), mode === "brain_coach" ? "brain_coach" : "checkin", context));
+      const filteredPayload = filterUpstreamCheckins(scopedPayload, mode);
+      res.json(
+        mode === "all"
+          ? filteredPayload
+          : await overlayRoutineServicePayload(filteredPayload, mode === "brain_coach" ? "brain_coach" : "checkin", context),
+      );
       return;
     }
     if (upstream && upstream.status >= 400 && upstream.status < 500 && upstream.status !== 404) {
