@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
@@ -32,6 +33,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAdminRole } from "@/hooks/useAdminRole";
 import { useGISData } from "@/hooks/useGISData";
+import { apiFetch } from "@/lib/apiClient";
 import { authBypassEnabled } from "@/lib/authMode";
 import {
   demoOperationalUsers,
@@ -123,6 +125,8 @@ function deriveReasonKey(user: OperationalQueueUser, status: OperationalStatus) 
 }
 
 type QueueContactFields = OperationalQueueUser & {
+  externalUserId?: string | null;
+  external_user_id?: string | null;
   checkin_last_reported_at?: string | null;
   checkin_last_status?: string | null;
   lastContactAt?: string | null;
@@ -131,8 +135,199 @@ type QueueContactFields = OperationalQueueUser & {
   last_contact_status?: string | null;
 };
 
+type ScheduledContactApiItem = {
+  user_id?: string | number | null;
+  vyva_user_id?: string | number | null;
+  userId?: string | number | null;
+  vyvaUserId?: string | number | null;
+  user?: { id?: string | number | null } | null;
+  vyva_users?: { id?: string | number | null } | null;
+  client?: { id?: string | number | null } | null;
+  lastOutcome?: string | null;
+  last_outcome?: string | null;
+  lastStatus?: string | null;
+  last_status?: string | null;
+  lastCheckinStatus?: string | null;
+  last_checkin_status?: string | null;
+  outcome?: string | null;
+  status?: string | null;
+  result?: string | null;
+  lastOutcomeAt?: string | null;
+  last_outcome_at?: string | null;
+  lastStatusAt?: string | null;
+  last_status_at?: string | null;
+  lastCheckinAt?: string | null;
+  last_checkin_at?: string | null;
+  lastReportedAt?: string | null;
+  last_reported_at?: string | null;
+  lastCompletedAt?: string | null;
+  last_completed_at?: string | null;
+  completedAt?: string | null;
+  completed_at?: string | null;
+  reportedAt?: string | null;
+  reported_at?: string | null;
+  endedAt?: string | null;
+  ended_at?: string | null;
+  timestamp?: string | null;
+  createdAt?: string | null;
+  created_at?: string | null;
+  last_call_log?: ScheduledContactApiItem | null;
+  lastCallLog?: ScheduledContactApiItem | null;
+  latest_call_log?: ScheduledContactApiItem | null;
+  latestCallLog?: ScheduledContactApiItem | null;
+  last_log?: ScheduledContactApiItem | null;
+  lastLog?: ScheduledContactApiItem | null;
+  call_logs?: ScheduledContactApiItem[];
+  callLogs?: ScheduledContactApiItem[];
+  logs?: ScheduledContactApiItem[];
+  call_history?: ScheduledContactApiItem[];
+  callHistory?: ScheduledContactApiItem[];
+  session_logs?: ScheduledContactApiItem[];
+  sessionLogs?: ScheduledContactApiItem[];
+};
+
+type ScheduledContactsResponse =
+  | ScheduledContactApiItem[]
+  | {
+      checkins?: ScheduledContactApiItem[];
+      data?: ScheduledContactApiItem[];
+      sessions?: ScheduledContactApiItem[];
+      items?: ScheduledContactApiItem[];
+    };
+
+type ScheduledContact = {
+  userId: string;
+  at: string;
+  status?: string | null;
+};
+
 function firstText(...values: Array<string | null | undefined>) {
   return values.find((value) => typeof value === "string" && value.trim())?.trim() ?? null;
+}
+
+function firstId(...values: Array<string | number | null | undefined>) {
+  const value = values.find((item) => item !== undefined && item !== null && String(item).trim());
+  return value === undefined || value === null ? null : String(value).trim();
+}
+
+function validContactDate(value?: string | null) {
+  const raw = firstText(value);
+  if (!raw) return null;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function contactUserId(item: ScheduledContactApiItem) {
+  return firstId(item.user_id, item.vyva_user_id, item.userId, item.vyvaUserId, item.user?.id, item.vyva_users?.id, item.client?.id);
+}
+
+function contactStatus(item: ScheduledContactApiItem) {
+  return firstText(
+    item.lastOutcome,
+    item.last_outcome,
+    item.lastStatus,
+    item.last_status,
+    item.lastCheckinStatus,
+    item.last_checkin_status,
+    item.outcome,
+    item.status,
+    item.result,
+  );
+}
+
+function contactAt(item: ScheduledContactApiItem) {
+  return validContactDate(
+    firstText(
+      item.lastOutcomeAt,
+      item.last_outcome_at,
+      item.lastStatusAt,
+      item.last_status_at,
+      item.lastCheckinAt,
+      item.last_checkin_at,
+      item.lastReportedAt,
+      item.last_reported_at,
+      item.lastCompletedAt,
+      item.last_completed_at,
+      item.completedAt,
+      item.completed_at,
+      item.reportedAt,
+      item.reported_at,
+      item.endedAt,
+      item.ended_at,
+      item.timestamp,
+      item.createdAt,
+      item.created_at,
+    ),
+  );
+}
+
+function nestedContactRecords(item: ScheduledContactApiItem) {
+  return [
+    item.last_call_log,
+    item.lastCallLog,
+    item.latest_call_log,
+    item.latestCallLog,
+    item.last_log,
+    item.lastLog,
+    ...(Array.isArray(item.call_logs) ? item.call_logs : []),
+    ...(Array.isArray(item.callLogs) ? item.callLogs : []),
+    ...(Array.isArray(item.logs) ? item.logs : []),
+    ...(Array.isArray(item.call_history) ? item.call_history : []),
+    ...(Array.isArray(item.callHistory) ? item.callHistory : []),
+    ...(Array.isArray(item.session_logs) ? item.session_logs : []),
+    ...(Array.isArray(item.sessionLogs) ? item.sessionLogs : []),
+  ].filter((record): record is ScheduledContactApiItem => Boolean(record && typeof record === "object"));
+}
+
+function scheduledContactCandidates(item: ScheduledContactApiItem): ScheduledContact[] {
+  const userId = contactUserId(item);
+  if (!userId) return [];
+
+  const candidates: ScheduledContact[] = [];
+  const parentAt = contactAt(item);
+  if (parentAt) candidates.push({ userId, at: parentAt, status: contactStatus(item) });
+
+  for (const record of nestedContactRecords(item)) {
+    const at = contactAt(record);
+    if (at) candidates.push({ userId, at, status: contactStatus(record) ?? contactStatus(item) });
+  }
+
+  return candidates;
+}
+
+function scheduledContactsList(response: ScheduledContactsResponse) {
+  if (Array.isArray(response)) return response;
+  return response.checkins ?? response.data ?? response.sessions ?? response.items ?? [];
+}
+
+function latestScheduledContactByUser(response: ScheduledContactsResponse) {
+  const byUser = new Map<string, ScheduledContact>();
+  for (const item of scheduledContactsList(response)) {
+    for (const candidate of scheduledContactCandidates(item)) {
+      const current = byUser.get(candidate.userId);
+      if (!current || new Date(candidate.at).getTime() > new Date(current.at).getTime()) {
+        byUser.set(candidate.userId, candidate);
+      }
+    }
+  }
+  return byUser;
+}
+
+function userContactIds(user: OperationalQueueUser) {
+  const contact = user as QueueContactFields;
+  return [firstText(user.id), firstText(contact.externalUserId), firstText(contact.external_user_id)].filter((id): id is string => Boolean(id));
+}
+
+function applyScheduledContact(row: QueueRow, contact?: ScheduledContact) {
+  if (!contact?.at) return row;
+  const existingTime = row.lastContactAt ? new Date(row.lastContactAt).getTime() : Number.NaN;
+  const contactTime = new Date(contact.at).getTime();
+  if (!Number.isNaN(existingTime) && existingTime >= contactTime) return row;
+  return {
+    ...row,
+    lastContactAt: contact.at,
+    lastContactStatus: contact.status ?? row.lastContactStatus ?? null,
+  };
 }
 
 function toQueueRow(user: OperationalQueueUser): QueueRow {
@@ -216,9 +411,17 @@ function todayScheduledContactLabel(row: QueueRow, t: (key: string) => string) {
   return `${t(statusKey)} - ${row.checkinPreferredTime.slice(0, 5)}`;
 }
 
+function normalizedOutcomeStatus(status?: string | null) {
+  const normalized = String(status || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["complete", "completed", "done", "success", "successful"].includes(normalized)) return "completed";
+  if (["answered", "reached"].includes(normalized)) return "answered";
+  return normalized;
+}
+
 function lastContactLabel(row: QueueRow, t: (key: string) => string) {
-  const status = row.lastContactStatus ? t(`checkin.outcome.${row.lastContactStatus}`) : "";
-  const hasStatus = status && status !== `checkin.outcome.${row.lastContactStatus}`;
+  const statusKey = normalizedOutcomeStatus(row.lastContactStatus);
+  const status = statusKey ? t(`checkin.outcome.${statusKey}`) : "";
+  const hasStatus = status && status !== `checkin.outcome.${statusKey}`;
   if (row.lastContactAt) {
     const date = new Date(row.lastContactAt);
     if (!Number.isNaN(date.getTime())) {
@@ -249,8 +452,32 @@ export default function UsersList() {
   const apiUsers = (gisData?.gisUsers ?? []) as OperationalQueueUser[];
   const usingPreviewData = authBypassEnabled && apiUsers.length === 0;
   const sourceUsers = usingPreviewData ? demoOperationalUsers : apiUsers;
+  const sourceUserIds = useMemo(() => Array.from(new Set(sourceUsers.flatMap(userContactIds))), [sourceUsers]);
+  const { data: scheduledContactByUser = new Map<string, ScheduledContact>() } = useQuery({
+    queryKey: ["users-list-scheduled-contacts", sourceUserIds.join("|")],
+    enabled: !usingPreviewData && sourceUserIds.length > 0,
+    retry: false,
+    queryFn: async () => {
+      try {
+        const response = await apiFetch<ScheduledContactsResponse>("/api/v1/checkins-dashboard/checkins?service_type=all", {
+          timeoutMs: 10_000,
+        });
+        return latestScheduledContactByUser(response);
+      } catch {
+        return new Map<string, ScheduledContact>();
+      }
+    },
+  });
 
-  const queueRows = useMemo(() => sourceUsers.map(toQueueRow), [sourceUsers]);
+  const queueRows = useMemo(
+    () =>
+      sourceUsers.map((user) => {
+        const row = toQueueRow(user);
+        const contact = userContactIds(user).map((id) => scheduledContactByUser.get(id)).find(Boolean);
+        return applyScheduledContact(row, contact);
+      }),
+    [scheduledContactByUser, sourceUsers],
+  );
 
   const cities = useMemo(() => {
     const uniqueCities = new Set(queueRows.map((user) => user.city).filter(Boolean));

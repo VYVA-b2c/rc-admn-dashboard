@@ -233,7 +233,7 @@ describe("UsersList Add User flow", () => {
         preferred_time: "15:45",
       },
     });
-  });
+  }, 10000);
 
   it("shows operational contact history when check-in fields are blank", () => {
     gisUsersMock.value = [
@@ -271,6 +271,90 @@ describe("UsersList Add User flow", () => {
     expect(screen.getByText("Anna Bittner")).toBeInTheDocument();
     expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument();
     expect(screen.getByText(/Confirmed/)).toBeInTheDocument();
+  });
+
+  it("overlays latest scheduled contact history from the check-in feed", async () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        checkinLastReportedAt: null,
+        checkinLastStatus: null,
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes("/api/v1/checkins-dashboard/checkins")) {
+          return new Response(
+            JSON.stringify({
+              checkins: [
+                {
+                  user_id: "external-anna",
+                  last_outcome: "confirmed",
+                  last_outcome_at: "2026-06-24T08:00:00.000Z",
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    renderUsersList();
+
+    await waitFor(() => expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument());
+    expect(screen.getByText(/Confirmed/)).toBeInTheDocument();
+  });
+
+  it("shows completed contact status even when the timestamp is missing", () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        checkinLastReportedAt: null,
+        checkinLastStatus: "completed",
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+
+    renderUsersList();
+
+    expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
   });
 
   it("requires first and last name before saving", () => {
