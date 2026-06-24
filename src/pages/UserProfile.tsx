@@ -2543,22 +2543,25 @@ export default function UserProfile() {
       .map((signal) => [signal.id || signal.label || "", signal] as const)
       .filter(([key]) => Boolean(key)),
   );
-  const healthPlanDataQualityGaps = healthPlan
-    ? (safeArray(healthPlan.data_quality_gaps_json).length
-      ? safeArray(healthPlan.data_quality_gaps_json)
-      : buildHealthPlanDataQualityGaps({
-        profile: {
-          user,
-          health,
-          medications,
-          medicationActivity,
-          sensors,
-          careProviders,
-          consent,
-        },
-        sourceSignals: healthPlanSignals,
-      }))
-    : [];
+  const computedHealthPlanDataQualityGaps = buildHealthPlanDataQualityGaps({
+    profile: {
+      user,
+      health,
+      medications,
+      medicationActivity,
+      sensors,
+      careProviders,
+      consent,
+      checkins,
+      brainCoach,
+      alerts,
+      recentOperationalEvents,
+    },
+    sourceSignals: healthPlanSignals,
+  });
+  const healthPlanDataQualityGaps = healthPlan && safeArray(healthPlan.data_quality_gaps_json).length
+    ? safeArray(healthPlan.data_quality_gaps_json)
+    : computedHealthPlanDataQualityGaps;
   const healthPlanFollowThrough = healthPlan
     ? (data.healthPlanFeedback || buildHealthPlanFollowThroughSummary({
       plan: healthPlan,
@@ -3531,6 +3534,12 @@ export default function UserProfile() {
           {healthPlanGenerationAcceptance && (
             <HealthPlanGenerationBlockersPanel acceptance={healthPlanGenerationAcceptance} />
           )}
+          {displayedHealthPlanReadiness && (
+            <HealthPlanPreGenerationChecklist
+              summary={displayedHealthPlanReadiness}
+              onActionSelect={handleHealthPlanReadinessAction}
+            />
+          )}
 
           {!healthPlan ? (
             <div className="grid gap-5 rounded-[24px] border border-dashed border-border/80 bg-[linear-gradient(180deg,rgba(245,243,255,0.7),rgba(255,255,255,0.96))] p-6 lg:grid-cols-[minmax(0,1.7fr)_280px]">
@@ -3543,13 +3552,6 @@ export default function UserProfile() {
                     {t("profile.healthPlanReviewRequired")}
                   </Badge>
                 </div>
-                {displayedHealthPlanReadiness && (
-                  <HealthPlanReadinessPanel
-                    summary={displayedHealthPlanReadiness}
-                    voiceContext={healthPlanReadinessVoiceContext}
-                    onActionSelect={handleHealthPlanReadinessAction}
-                  />
-                )}
                 <div className="rounded-[18px] border border-white/80 bg-white/80 px-4 py-3">
                   <p className="max-w-4xl text-sm leading-7 text-muted-foreground">{t("profile.healthPlanEmpty")}</p>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-foreground/80">{t("profile.healthPlanReadyToShare")}</p>
@@ -3603,13 +3605,6 @@ export default function UserProfile() {
                         </Badge>
                       )}
                     </div>
-                    {healthPlanReadiness && (
-                      <HealthPlanReadinessPanel
-                        summary={healthPlanReadiness}
-                        voiceContext={healthPlanReadinessVoiceContext}
-                        onActionSelect={handleHealthPlanReadinessAction}
-                      />
-                    )}
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanSummary")}</p>
                       <p className="mt-3 max-w-5xl text-[15px] font-medium leading-8 text-foreground">{healthPlan.summary_text || "-"}</p>
@@ -7140,6 +7135,139 @@ function HealthPlanHistoryReplayPanel({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function HealthPlanPreGenerationChecklist({
+  summary,
+  onActionSelect,
+}: {
+  summary?: {
+    overall_status?: "ready" | "guarded" | "blocked" | null;
+    summary?: string | null;
+    blocker_count?: number | null;
+    caution_count?: number | null;
+    blocking_reasons?: Array<{
+      id?: string | null;
+      label?: string | null;
+      detail?: string | null;
+      severity?: "high" | "medium" | "low" | null;
+    }> | null;
+    caution_reasons?: Array<{
+      id?: string | null;
+      label?: string | null;
+      detail?: string | null;
+      severity?: "high" | "medium" | "low" | null;
+    }> | null;
+    collection_actions?: HealthPlanReadinessAction[] | null;
+  } | null;
+  onActionSelect?: (action: HealthPlanReadinessAction) => void;
+}) {
+  const { t } = useLanguage();
+  const status = summary?.overall_status || "blocked";
+  const blockers = safeArray(summary?.blocking_reasons);
+  const cautions = safeArray(summary?.caution_reasons);
+  const actions = safeArray(summary?.collection_actions);
+  const checklistItems = [
+    ...blockers.map((item) => ({
+      id: item?.id || item?.label || item?.detail,
+      title: item?.label,
+      detail: item?.detail,
+      tone: item?.severity || "high",
+      action: actions.find((action) => action?.id === item?.id || action?.label === item?.label) || null,
+    })),
+    ...actions.map((item) => ({
+      id: item?.id || item?.label || item?.action,
+      title: item?.label,
+      detail: item?.action,
+      tone: item?.priority || "medium",
+      action: item,
+    })),
+    ...cautions.map((item) => ({
+      id: item?.id || item?.label || item?.detail,
+      title: item?.label,
+      detail: item?.detail,
+      tone: item?.severity || "medium",
+      action: null,
+    })),
+  ]
+    .filter((item) => item.title || item.detail)
+    .filter((item, index, list) => list.findIndex((candidate) => (candidate.id || candidate.title) === (item.id || item.title)) === index)
+    .slice(0, 3);
+  const statusCopy =
+    status === "ready"
+      ? t("profile.healthPlanPreflightReady")
+      : status === "guarded"
+        ? t("profile.healthPlanPreflightGuarded")
+        : t("profile.healthPlanPreflightBlocked");
+  const statusDescription =
+    status === "ready"
+      ? t("profile.healthPlanPreflightReadyDescription")
+      : status === "guarded"
+        ? t("profile.healthPlanPreflightGuardedDescription")
+        : t("profile.healthPlanPreflightBlockedDescription");
+
+  return (
+    <div className="rounded-[22px] border border-border/80 bg-white px-5 py-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={cn(
+              "flex h-9 w-9 items-center justify-center rounded-full",
+              status === "ready" ? "bg-emerald-50 text-emerald-600" : status === "guarded" ? "bg-amber-50 text-amber-600" : "bg-rose-50 text-rose-600",
+            )}>
+              {status === "ready" ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+            </div>
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanPreflightTitle")}</p>
+            <Badge variant="outline" className={cn("rounded-full px-3 py-1 text-xs font-bold", healthPlanReadinessTone(status))}>
+              {statusCopy}
+            </Badge>
+          </div>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+            {summary?.summary || statusDescription}
+          </p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-foreground">
+          {status === "ready"
+            ? t("profile.healthPlanPreflightCanGenerate")
+            : interpolate(t("profile.healthPlanPreflightMissingCount"), { count: checklistItems.length || Number(summary?.blocker_count || summary?.caution_count || 0) })}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 lg:grid-cols-3">
+        {checklistItems.length > 0 ? (
+          checklistItems.map((item, index) => {
+            const target = healthPlanReadinessActionTarget(item.action);
+            return (
+              <div key={`${item.id || item.title || index}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanGapSeverityClasses(item.tone))}>
+                    {healthPlanGapSeverityLabel(t, item.tone)}
+                  </Badge>
+                  <p className="text-sm font-bold text-foreground">{item.title || t("profile.healthPlanReadinessReasonFallback")}</p>
+                </div>
+                {item.detail && <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.detail}</p>}
+                {target && item.action && onActionSelect && (
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="mt-2 h-auto p-0 text-xs font-bold text-primary"
+                    onClick={() => onActionSelect(item.action!)}
+                  >
+                    {t("profile.healthPlanPreflightOpenSection")}
+                  </Button>
+                )}
+              </div>
+            );
+          })
+        ) : (
+          <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 lg:col-span-3">
+            <p className="text-sm font-bold text-emerald-900">{t("profile.healthPlanPreflightNoMissingTitle")}</p>
+            <p className="mt-1 text-sm leading-6 text-emerald-800">{t("profile.healthPlanPreflightNoMissingDescription")}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
