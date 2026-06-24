@@ -9135,19 +9135,18 @@ function applyDashboardUserLastContact(user, contact) {
 }
 
 async function enrichDashboardPayloadWithScheduledContacts(payload, context = null) {
-  if (!context || !Array.isArray(payload?.gisUsers) || payload.gisUsers.length === 0) return payload;
+  if (!Array.isArray(payload?.gisUsers) || payload.gisUsers.length === 0) return payload;
 
   const userIds = Array.from(new Set(payload.gisUsers.map(dashboardUserContactId).filter(Boolean)));
   if (userIds.length === 0) return payload;
 
-  const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
-    query: scopedVyvaBackendQuery({ service_type: "all" }, context),
-  });
-  if (!upstream?.ok) return payload;
-
   const contactByUserId = new Map(
-    userIds
-      .map((userId) => [userId, latestScheduledSessionContactFromPayload(upstream.data, userId)])
+    (await Promise.all(
+      userIds.map(async (userId) => [
+        userId,
+        await loadLatestScheduledSessionContact(userId, context).catch(() => null),
+      ]),
+    ))
       .filter(([, contact]) => Boolean(contact?.at)),
   );
   if (contactByUserId.size === 0) return payload;
