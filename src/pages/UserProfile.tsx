@@ -3538,6 +3538,11 @@ export default function UserProfile() {
             <HealthPlanPreGenerationChecklist
               summary={displayedHealthPlanReadiness}
               onActionSelect={handleHealthPlanReadinessAction}
+              canGenerate={canManageHealthPlan}
+              generating={generatingHealthPlan || refreshingHealthPlanSections.length > 0}
+              hasPlan={Boolean(healthPlan)}
+              onGenerate={() => void handleGenerateHealthPlan(Boolean(healthPlan))}
+              onGenerateCautious={() => void handleGenerateHealthPlan(false, "cautious")}
             />
           )}
 
@@ -7142,6 +7147,11 @@ function HealthPlanHistoryReplayPanel({
 function HealthPlanPreGenerationChecklist({
   summary,
   onActionSelect,
+  canGenerate = false,
+  generating = false,
+  hasPlan = false,
+  onGenerate,
+  onGenerateCautious,
 }: {
   summary?: {
     overall_status?: "ready" | "guarded" | "blocked" | null;
@@ -7163,6 +7173,11 @@ function HealthPlanPreGenerationChecklist({
     collection_actions?: HealthPlanReadinessAction[] | null;
   } | null;
   onActionSelect?: (action: HealthPlanReadinessAction) => void;
+  canGenerate?: boolean;
+  generating?: boolean;
+  hasPlan?: boolean;
+  onGenerate?: () => void;
+  onGenerateCautious?: () => void;
 }) {
   const { t } = useLanguage();
   const status = summary?.overall_status || "blocked";
@@ -7228,10 +7243,36 @@ function HealthPlanPreGenerationChecklist({
             {summary?.summary || statusDescription}
           </p>
         </div>
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-foreground">
-          {status === "ready"
-            ? t("profile.healthPlanPreflightCanGenerate")
-            : interpolate(t("profile.healthPlanPreflightMissingCount"), { count: checklistItems.length || Number(summary?.blocker_count || summary?.caution_count || 0) })}
+        <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 lg:w-auto lg:min-w-64">
+          <p className="text-sm font-semibold text-foreground">
+            {status === "ready"
+              ? t("profile.healthPlanPreflightCanGenerate")
+              : interpolate(t("profile.healthPlanPreflightMissingCount"), { count: checklistItems.length || Number(summary?.blocker_count || summary?.caution_count || 0) })}
+          </p>
+          <div className="mt-3 flex flex-col gap-2">
+            <Button
+              type="button"
+              className="rounded-full px-4 font-bold"
+              disabled={!canGenerate || generating}
+              onClick={onGenerate}
+            >
+              <Brain className={cn("mr-2 h-4 w-4", generating && "animate-spin")} />
+              {canGenerate
+                ? hasPlan ? t("profile.healthPlanRegenerate") : t("profile.healthPlanGenerate")
+                : t("profile.healthPlanAdminRequired")}
+            </Button>
+            {status !== "ready" && canGenerate && onGenerateCautious && (
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-full px-4 font-bold"
+                disabled={generating}
+                onClick={onGenerateCautious}
+              >
+                {generating ? t("profile.healthPlanGeneratingCautiousDraft") : t("profile.healthPlanGenerateCautiousDraft")}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
