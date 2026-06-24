@@ -1846,7 +1846,7 @@ export default function UserProfile() {
     }
   };
 
-  const handleGenerateHealthPlan = async (regenerate = false) => {
+  const handleGenerateHealthPlan = async (regenerate = false, mode: "standard" | "cautious" = "standard") => {
     if (!id || !data?.user) return;
     if (shouldPauseHealthPlanGenerationForSignalReview()) {
       setHealthPlanError(null);
@@ -1867,9 +1867,10 @@ export default function UserProfile() {
     try {
       await apiFetch(`/api/v1/user-dashboard/users/${encodeURIComponent(data.user.id)}/health-plan/generate`, {
         method: "POST",
+        body: JSON.stringify({ mode }),
         timeoutMs: 90000,
       });
-      toast({ title: regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
+      toast({ title: mode === "cautious" ? t("profile.healthPlanCautiousDraftGenerated") : regenerate ? t("profile.healthPlanRegenerated") : t("profile.healthPlanGenerated") });
       await invalidateHealthPlanQueries();
     } catch (error) {
       const message = error instanceof Error ? error.message : t("profile.healthPlanGenerationFailed");
@@ -2784,6 +2785,26 @@ export default function UserProfile() {
     longitudinalMemory: healthPlanLongitudinalMemory,
   });
   const displayedHealthPlanReadiness = healthPlanGenerationDiagnostics?.readiness || healthPlanReadiness;
+  const healthPlanSignalReviewItems = [
+    ...safeArray(displayedHealthPlanReadiness?.blocking_reasons).map((item) => ({
+      id: item?.id || item?.label || item?.detail,
+      title: item?.label,
+      detail: item?.detail,
+      tone: item?.severity || "high",
+    })),
+    ...safeArray(displayedHealthPlanReadiness?.collection_actions).map((item) => ({
+      id: item?.id || item?.label || item?.action,
+      title: item?.label,
+      detail: item?.action,
+      tone: item?.priority || "medium",
+    })),
+    ...safeArray(displayedHealthPlanReadiness?.caution_reasons).map((item) => ({
+      id: item?.id || item?.label || item?.detail,
+      title: item?.label,
+      detail: item?.detail,
+      tone: item?.severity || "medium",
+    })),
+  ].filter((item) => item.title || item.detail).slice(0, 5);
   const healthPlanReadinessVoiceContext = {
     clientName: fullName,
     language: user.language,
@@ -4182,9 +4203,50 @@ export default function UserProfile() {
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950">
             {t("profile.healthPlanInsufficientSignalsNext")}
           </div>
+          {healthPlanSignalReviewItems.length > 0 && (
+            <div className="space-y-3">
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">
+                {t("profile.healthPlanInsufficientSignalsChecklist")}
+              </p>
+              <div className="space-y-2">
+                {healthPlanSignalReviewItems.map((item, index) => (
+                  <div
+                    key={`${item.id || item.title || index}-${index}`}
+                    className="rounded-xl border border-border/80 bg-slate-50/80 px-3.5 py-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-semibold leading-5 text-foreground">{item.title || t("profile.healthPlanGenerationBlockedFallback")}</p>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                          item.tone === "high" ? "border-rose-200 text-rose-700" : item.tone === "low" ? "border-emerald-200 text-emerald-700" : "border-amber-200 text-amber-700",
+                        )}
+                      >
+                        {item.tone === "high" ? t("profile.healthPlanSignalHigh") : item.tone === "low" ? t("profile.healthPlanSignalLow") : t("profile.healthPlanSignalMedium")}
+                      </Badge>
+                    </div>
+                    {item.detail && (
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">{item.detail}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setInsufficientHealthPlanSignalsOpen(false)}>
               {t("profile.healthPlanInsufficientSignalsClose")}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={generatingHealthPlan}
+              onClick={() => {
+                setInsufficientHealthPlanSignalsOpen(false);
+                void handleGenerateHealthPlan(false, "cautious");
+              }}
+            >
+              {generatingHealthPlan ? t("profile.healthPlanGeneratingCautiousDraft") : t("profile.healthPlanGenerateCautiousDraft")}
             </Button>
             <Button
               onClick={() => {
