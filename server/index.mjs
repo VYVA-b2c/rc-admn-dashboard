@@ -3497,6 +3497,7 @@ function finalizeGeneratedHealthPlanDraft({
   existingPlan = null,
   label = "Health plan generation",
   generationPath = "direct",
+  allowCautiousDraft = false,
 } = {}) {
   const normalizedPlan = normalizeGeneratedHealthPlan(parsed);
   const enrichedSections = enrichHealthPlanSections({
@@ -3529,7 +3530,9 @@ function finalizeGeneratedHealthPlanDraft({
     ...repairedPlan,
     generator_provider: "openai",
     generator_model: healthPlanOpenAiModel,
-    generator_version: generationPath === "repair" ? `${healthPlanGeneratorVersion}-repair` : healthPlanGeneratorVersion,
+    generator_version: generationPath === "repair"
+      ? `${healthPlanGeneratorVersion}-repair${allowCautiousDraft ? "-cautious" : ""}`
+      : `${healthPlanGeneratorVersion}${allowCautiousDraft ? "-cautious" : ""}`,
   }, sourceSignals, promptInput);
   assertNoRecommendationCarryForward({
     existingPlan,
@@ -3537,13 +3540,20 @@ function finalizeGeneratedHealthPlanDraft({
     promptInput,
     label,
   });
-  const draftAcceptance = assertAcceptedHealthPlanDraft({
-    plan: validated.plan,
-    sourceSignals,
-    promptInput,
-    recommendationCalibration: validated.recommendation_calibration || null,
-    label,
-  });
+  let draftAcceptance = null;
+  try {
+    draftAcceptance = assertAcceptedHealthPlanDraft({
+      plan: validated.plan,
+      sourceSignals,
+      promptInput,
+      recommendationCalibration: validated.recommendation_calibration || null,
+      label,
+    });
+  } catch (error) {
+    const code = error?.details?.code || null;
+    if (!allowCautiousDraft || code !== "health_plan_draft_rejected") throw error;
+    draftAcceptance = error?.details?.acceptance || null;
+  }
   return {
     ...validated,
     draft_acceptance: draftAcceptance,
@@ -3641,6 +3651,7 @@ async function generateHealthPlanWithOpenAI(
     existingPlanHistory,
     options,
   );
+  const allowCautiousDraft = Boolean(options?.allowCautiousDraft);
   const systemPrompt = [
     "You create personalized client support plans for a Red Cross operations console.",
     "Produce care coordination guidance only. Do not diagnose, prescribe, or change treatment.",
@@ -3711,10 +3722,15 @@ async function generateHealthPlanWithOpenAI(
     "When existing_plan_section_drift is present, refresh the sections marked needs_refresh first. Preserve sections marked fresh unless the new evidence clearly contradicts them.",
     "Use confidence_guardrails as a ceiling, not decoration. If a section is capped at medium or low confidence, write it with explicit verification language and avoid overstating certainty.",
     "Do not let calmer background context outweigh the action or verification signals when they conflict.",
+    allowCautiousDraft
+      ? "This request is for an internal cautious draft because the evidence picture is incomplete. Make every section conservative, verification-led, explicitly staff-reviewed, and do not present it as client-ready."
+      : "This request is for the current working plan and must be ready for staff review after generation.",
     "Return only valid JSON that matches the provided schema.",
   ].join(" ");
   const userPrompt = [
-    "Generate a structured personalized health plan from this profile context.",
+    allowCautiousDraft
+      ? "Generate a cautious internal draft from this profile context. If evidence is thin, focus on what staff should verify before sharing."
+      : "Generate a structured personalized health plan from this profile context.",
     "If predictive data is missing, rely on the live care profile, services, medication, sensors, and alerts.",
     JSON.stringify(promptInput, null, 2),
   ].join("\n\n");
@@ -3743,6 +3759,7 @@ async function generateHealthPlanWithOpenAI(
         promptInput,
         existingPlan,
         label: candidateLabel,
+        allowCautiousDraft,
       });
       directCandidates.push({
         ...finalized,
@@ -3793,6 +3810,7 @@ async function generateHealthPlanWithOpenAI(
           existingPlan,
           label: "Health plan generation calibration repair",
           generationPath: "repair",
+          allowCautiousDraft,
         }),
         candidate_selection: buildHealthPlanCandidateSelectionSnapshot(selection),
         cohort_guidance: promptInput?.cohort_guidance || null,
@@ -3832,6 +3850,7 @@ async function generateHealthPlanWithOpenAI(
       existingPlan,
       label: "Health plan generation repair",
       generationPath: "repair",
+      allowCautiousDraft,
     }),
     candidate_selection: buildHealthPlanCandidateSelectionSnapshot({
       attempted_count: candidateCount,
@@ -3865,7 +3884,10 @@ async function generateHealthPlan(
     existingPlanHistory,
     options,
   );
-  assertHealthPlanReadinessForGeneration(promptInput, "Health plan generation");
+  const allowCautiousDraft = Boolean(options?.allowCautiousDraft);
+  if (!allowCautiousDraft) {
+    assertHealthPlanReadinessForGeneration(promptInput, "Health plan generation");
+  }
   if (healthPlanAiProvider === "openai") {
     if (!openAiApiKey) {
       throw httpError(503, "OPENAI_API_KEY is required before health plans can be generated", true);
@@ -3879,7 +3901,7 @@ async function generateHealthPlan(
         existingPlan,
         existingPlanFeedback,
         existingPlanHistory,
-        { ...options, promptInput },
+        { ...options, promptInput, allowCautiousDraft },
       );
     } catch (error) {
       if (Number(error?.statusCode || error?.status || 0) === 409) throw error;
@@ -12533,6 +12555,7 @@ app.get("/api/v1/user-dashboard/users/:id/health-plan/history-replay", asyncRout
 
 app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(async (req, res) => {
   if (!pool) throw httpError(503, "Database is not configured");
+  const allowCautiousDraft = req.body?.mode === "cautious" || req.body?.allow_cautious_draft === true;
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -12618,16 +12641,19 @@ app.post("/api/v1/user-dashboard/users/:id/health-plan/generate", asyncRoute(asy
       existingPlan,
       existingPlanFeedback,
       existingPlanHistory,
-      { peerCohort },
+      { peerCohort, allowCautiousDraft },
     );
+    const reviewSummary = allowCautiousDraft
+      ? "Cautious internal draft generated from incomplete evidence. Staff must confirm the missing signals and review the plan before sharing."
+      : governance.reviewGovernance.review_summary;
     const saved = await saveHealthPlan(client, profileResult.value.userId, req.context, {
       action_type: "generated",
       language,
       review_status: "draft",
       escalation_grade: governance.reviewGovernance.escalation_grade,
-      review_required: governance.reviewGovernance.review_required,
-      review_window: governance.reviewGovernance.review_window,
-      review_summary: governance.reviewGovernance.review_summary,
+      review_required: allowCautiousDraft ? true : governance.reviewGovernance.review_required,
+      review_window: allowCautiousDraft && governance.reviewGovernance.review_window === "ongoing" ? "this_week" : governance.reviewGovernance.review_window,
+      review_summary: reviewSummary,
       review_reasons_json: governance.reviewGovernance.review_reasons_json,
       summary_text: generated.plan.summary_text,
       summary_signal_ids: generated.plan.summary_signal_ids,
