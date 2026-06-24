@@ -432,7 +432,9 @@ describe("UsersList Add User flow", () => {
     expect(screen.getByText(/Completed/)).toBeInTheDocument();
   });
 
-  it("uses profile timeline scheduled calls when the users row has no completed contact", async () => {
+  it("uses past profile timeline contact when the users row has no completed contact", async () => {
+    const pastContactAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const futureContactAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
     gisUsersMock.value = [
       {
         id: "external-anna",
@@ -469,6 +471,18 @@ describe("UsersList Add User flow", () => {
               user: { id: "external-anna" },
               checkins: { enabled: true, preferred_time: "09:30" },
               brainCoach: { enabled: true, preferred_time: "23:59" },
+              recentOperationalEvents: [
+                {
+                  source: "brain_coach",
+                  status: "pending",
+                  occurred_at: futureContactAt,
+                },
+                {
+                  source: "checkins",
+                  status: "missed",
+                  occurred_at: pastContactAt,
+                },
+              ],
               medications: [
                 {
                   medication_name: "Blutdruckmedikament",
@@ -491,7 +505,8 @@ describe("UsersList Add User flow", () => {
     renderUsersList();
 
     await waitFor(() => expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument());
-    expect(screen.getByText(/Pending|Missed|Unconfirmed/)).toBeInTheDocument();
+    expect(screen.getByText(/Missed/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pending/)).not.toBeInTheDocument();
   });
 
   it("shows completed contact status even when the timestamp is missing", () => {

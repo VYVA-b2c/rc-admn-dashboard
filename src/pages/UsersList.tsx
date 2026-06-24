@@ -387,9 +387,14 @@ function latestScheduledContactByUser(response: ScheduledContactsResponse) {
 }
 
 function latestContact(...contacts: Array<ScheduledContact | null | undefined | ScheduledContact[]>) {
+  const now = Date.now();
   return contacts
     .flat()
-    .filter((contact): contact is ScheduledContact => Boolean(contact?.at))
+    .filter((contact): contact is ScheduledContact => {
+      if (!contact?.at) return false;
+      const time = new Date(contact.at).getTime();
+      return !Number.isNaN(time) && time <= now;
+    })
     .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] || null;
 }
 
@@ -423,10 +428,11 @@ function scheduledTodayAt(value?: string | null) {
 function scheduledTimelineContact(userId: string, at: string, dueStatus: string) {
   const scheduledAt = new Date(at);
   if (Number.isNaN(scheduledAt.getTime())) return null;
+  if (scheduledAt.getTime() > Date.now()) return null;
   return {
     userId,
     at,
-    status: scheduledAt.getTime() <= Date.now() ? dueStatus : "pending",
+    status: dueStatus,
   };
 }
 
@@ -482,13 +488,8 @@ function medicationTimelineContact(userId: string, profile: ProfileTimelineRespo
 
   const sorted = candidates
     .map((at) => ({ at, time: new Date(at).getTime() }))
-    .filter((candidate) => !Number.isNaN(candidate.time))
-    .sort((a, b) => {
-      const aDue = a.time <= Date.now();
-      const bDue = b.time <= Date.now();
-      if (aDue !== bDue) return aDue ? -1 : 1;
-      return aDue ? b.time - a.time : a.time - b.time;
-    });
+    .filter((candidate) => !Number.isNaN(candidate.time) && candidate.time <= Date.now())
+    .sort((a, b) => b.time - a.time);
 
   return sorted[0] ? scheduledTimelineContact(userId, sorted[0].at, "unconfirmed") : null;
 }
@@ -559,6 +560,7 @@ function applyScheduledContact(row: QueueRow, contact?: ScheduledContact) {
   if (!contact?.at) return row;
   const existingTime = row.lastContactAt ? new Date(row.lastContactAt).getTime() : Number.NaN;
   const contactTime = new Date(contact.at).getTime();
+  if (Number.isNaN(contactTime) || contactTime > Date.now()) return row;
   if (!Number.isNaN(existingTime) && existingTime >= contactTime) return row;
   return {
     ...row,
@@ -644,6 +646,7 @@ function todayScheduledContactLabel(row: QueueRow, t: (key: string) => string) {
 
   const now = new Date();
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  if (currentMinutes < scheduledMinutes) return null;
   const statusKey = currentMinutes >= scheduledMinutes ? "checkin.outcomeMissedToday" : "checkin.outcomeScheduledToday";
   return `${t(statusKey)} - ${row.checkinPreferredTime.slice(0, 5)}`;
 }
@@ -661,12 +664,12 @@ function lastContactLabel(row: QueueRow, t: (key: string) => string) {
   const hasStatus = status && status !== `checkin.outcome.${statusKey}`;
   if (row.lastContactAt) {
     const date = new Date(row.lastContactAt);
-    if (!Number.isNaN(date.getTime())) {
+    if (!Number.isNaN(date.getTime()) && date.getTime() <= Date.now()) {
       const relative = formatDistanceToNow(date, { addSuffix: true });
       return hasStatus ? `${status} ${relative}` : relative;
     }
   }
-  if (hasStatus) return status;
+  if (hasStatus && statusKey !== "pending") return status;
   const scheduledContact = todayScheduledContactLabel(row, t);
   if (scheduledContact) return scheduledContact;
   return t(row.lastContactKey);

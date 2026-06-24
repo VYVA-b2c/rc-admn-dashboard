@@ -7646,41 +7646,35 @@ async function loadDashboardUsers(context) {
       SELECT
         c.vyva_user_id,
         ((r.local_date + c.preferred_time::time) AT TIME ZONE $2) AS occurred_at,
-        CASE
-          WHEN ((r.local_date + c.preferred_time::time) AT TIME ZONE $2) <= now() THEN 'missed'
-          ELSE 'pending'
-        END AS status
+        'missed'::text AS status
       FROM public.vyva_user_checkins c
       CROSS JOIN runtime r
       WHERE c.enabled = true
         AND c.preferred_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        AND ((r.local_date + c.preferred_time::time) AT TIME ZONE $2) <= now()
     ),
     today_brain_coach_contacts AS (
       SELECT
         bc.vyva_user_id,
         ((r.local_date + bc.preferred_time::time) AT TIME ZONE $2) AS occurred_at,
-        CASE
-          WHEN ((r.local_date + bc.preferred_time::time) AT TIME ZONE $2) <= now() THEN 'missed'
-          ELSE 'pending'
-        END AS status
+        'missed'::text AS status
       FROM public.vyva_user_brain_coach bc
       CROSS JOIN runtime r
       WHERE bc.enabled = true
         AND bc.preferred_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        AND ((r.local_date + bc.preferred_time::time) AT TIME ZONE $2) <= now()
     ),
     today_medication_slots AS (
       SELECT
         m.vyva_user_id,
         ((r.local_date + scheduled_time.value::time) AT TIME ZONE $2) AS occurred_at,
-        CASE
-          WHEN ((r.local_date + scheduled_time.value::time) AT TIME ZONE $2) <= now() THEN 'unconfirmed'
-          ELSE 'pending'
-        END AS status
+        'unconfirmed'::text AS status
       FROM public.vyva_user_medications m
       CROSS JOIN runtime r
       CROSS JOIN LATERAL unnest(COALESCE(m.schedule_times, ARRAY[]::text[])) AS scheduled_time(value)
       WHERE COALESCE(m.reminders_enabled, true) = true
         AND scheduled_time.value ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+        AND ((r.local_date + scheduled_time.value::time) AT TIME ZONE $2) <= now()
     ),
     today_medication_contacts AS (
       SELECT DISTINCT ON (vyva_user_id)
@@ -7688,11 +7682,7 @@ async function loadDashboardUsers(context) {
         occurred_at,
         status
       FROM today_medication_slots
-      ORDER BY
-        vyva_user_id,
-        CASE WHEN occurred_at <= now() THEN 0 ELSE 1 END,
-        CASE WHEN occurred_at <= now() THEN occurred_at END DESC,
-        CASE WHEN occurred_at > now() THEN occurred_at END ASC
+      ORDER BY vyva_user_id, occurred_at DESC
     ),
     dashboard_contact_candidates AS (
       SELECT
@@ -7717,6 +7707,7 @@ async function loadDashboardUsers(context) {
         status
       FROM dashboard_contact_candidates
       WHERE occurred_at IS NOT NULL
+        AND occurred_at <= now()
       ORDER BY vyva_user_id, occurred_at DESC
     ),
     care_provider_counts AS (
