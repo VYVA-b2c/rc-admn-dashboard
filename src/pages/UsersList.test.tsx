@@ -357,6 +357,36 @@ describe("UsersList Add User flow", () => {
     expect(screen.getByText("Completed")).toBeInTheDocument();
   });
 
+  it("shows onboarding call contact from local dashboard rows", () => {
+    gisUsersMock.value = [
+      {
+        id: "local-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        criticalAlerts: 0,
+        healthConditions: 0,
+        lastContactAt: "2026-06-24T08:00:00.000Z",
+        lastContactStatus: "completed",
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+
+    renderUsersList();
+
+    expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument();
+    expect(screen.getByText(/Completed/)).toBeInTheDocument();
+  });
+
   it("requires first and last name before saving", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
