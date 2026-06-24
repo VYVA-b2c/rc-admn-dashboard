@@ -9078,6 +9078,86 @@ function applyScheduledSessionContactToItem(item, contact) {
   };
 }
 
+function dashboardUserContactId(user) {
+  return nullIfBlank(firstValue(
+    user?.id,
+    user?.externalUserId,
+    user?.external_user_id,
+    user?.user_id,
+    user?.vyva_user_id,
+  ));
+}
+
+function existingDashboardUserContact(user) {
+  return latestScheduledContact(
+    buildScheduledContactCandidate(
+      user,
+      ["lastContactAt", "last_contact_at", "checkinLastReportedAt", "checkin_last_reported_at", ...scheduledSessionLastContactDateKeys],
+      null,
+      ["lastContactStatus", "last_contact_status", "checkinLastStatus", "checkin_last_status", ...scheduledSessionStatusKeys],
+    ),
+    buildScheduledContactCandidate(
+      user?.operationalContext,
+      ["lastContactAt", "last_contact_at"],
+      null,
+      ["lastContactStatus", "last_contact_status"],
+    ),
+  );
+}
+
+function applyDashboardUserLastContact(user, contact) {
+  if (!user || typeof user !== "object") return user;
+  const latestContact = latestScheduledContact(contact, existingDashboardUserContact(user));
+  if (!latestContact?.at) return user;
+
+  const status = latestContact.status || null;
+  const serviceType = normalizeScheduledContactServiceType(latestContact.serviceType);
+  return {
+    ...user,
+    lastContactAt: latestContact.at,
+    last_contact_at: latestContact.at,
+    lastContactStatus: status,
+    last_contact_status: status,
+    ...(serviceType === "checkins"
+      ? {
+          checkinLastReportedAt: latestContact.at,
+          checkin_last_reported_at: latestContact.at,
+          checkinLastStatus: status,
+          checkin_last_status: status,
+        }
+      : {}),
+    operationalContext: {
+      ...(user.operationalContext || {}),
+      lastContactAt: latestContact.at,
+      lastContactStatus: status,
+    },
+  };
+}
+
+async function enrichDashboardPayloadWithScheduledContacts(payload, context = null) {
+  if (!context || !Array.isArray(payload?.gisUsers) || payload.gisUsers.length === 0) return payload;
+
+  const userIds = Array.from(new Set(payload.gisUsers.map(dashboardUserContactId).filter(Boolean)));
+  if (userIds.length === 0) return payload;
+
+  const upstream = await requestVyvaBackend("/api/v1/checkins-dashboard/checkins", {
+    query: scopedVyvaBackendQuery({ service_type: "all" }, context),
+  });
+  if (!upstream?.ok) return payload;
+
+  const contactByUserId = new Map(
+    userIds
+      .map((userId) => [userId, latestScheduledSessionContactFromPayload(upstream.data, userId)])
+      .filter(([, contact]) => Boolean(contact?.at)),
+  );
+  if (contactByUserId.size === 0) return payload;
+
+  return {
+    ...payload,
+    gisUsers: payload.gisUsers.map((user) => applyDashboardUserLastContact(user, contactByUserId.get(dashboardUserContactId(user)))),
+  };
+}
+
 const checkinAdherenceDateKeys = [
   "scheduled_date",
   "scheduledDate",
@@ -12155,7 +12235,10 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
           ? upstream.data.gisUsers.map((user) => user?.id).filter((id) => id !== undefined && id !== null)
           : [];
         const assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
-        const upstreamDashboard = normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context);
+        const upstreamDashboard = await enrichDashboardPayloadWithScheduledContacts(
+          normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context),
+          context,
+        );
         const cleanedLocalDashboard = removeStaleExternalShadowUsers(localDashboard, upstream.data, context);
         res.json(mergeDashboardPayloads(upstreamDashboard, cleanedLocalDashboard));
         return;
@@ -12174,7 +12257,10 @@ app.get("/api/v1/user-dashboard/users", async (req, res, next) => {
           : [];
         assignmentSummaries = await loadExternalAssignmentSummaries(externalIds, context);
       }
-      const upstreamDashboard = normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context);
+      const upstreamDashboard = await enrichDashboardPayloadWithScheduledContacts(
+        normalizeExternalDashboardPayload(upstream.data, assignmentSummaries, context),
+        context,
+      );
       const localDashboard = context ? await loadDashboardUsers(context) : null;
       res.json(localDashboard ? mergeDashboardPayloads(upstreamDashboard, localDashboard) : upstreamDashboard);
       return;

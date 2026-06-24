@@ -122,10 +122,24 @@ function deriveReasonKey(user: OperationalQueueUser, status: OperationalStatus) 
   return "usersList.reason.stable";
 }
 
+type QueueContactFields = OperationalQueueUser & {
+  checkin_last_reported_at?: string | null;
+  checkin_last_status?: string | null;
+  lastContactAt?: string | null;
+  last_contact_at?: string | null;
+  lastContactStatus?: string | null;
+  last_contact_status?: string | null;
+};
+
+function firstText(...values: Array<string | null | undefined>) {
+  return values.find((value) => typeof value === "string" && value.trim())?.trim() ?? null;
+}
+
 function toQueueRow(user: OperationalQueueUser): QueueRow {
   const score = getRiskScore(user);
   const status = deriveStatus(score, user);
   const meta = user.operationalContext;
+  const contact = user as QueueContactFields;
   const careProviderNames = Array.isArray(user.careProviderNames) ? user.careProviderNames : [];
   const assignedTo = meta?.assignedTo ?? user.primaryProfessionalName ?? user.primaryCaregiverName ?? careProviderNames[0] ?? null;
   const careProviderCount = user.careProviderCount ?? careProviderNames.length;
@@ -141,8 +155,8 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     reasonKey: deriveReasonKey(user, status),
     channel: meta?.preferredChannel ?? "phone",
     lastContactKey: meta?.lastContactKey ?? "usersList.lastContactAwaiting",
-    lastContactAt: user.checkinLastReportedAt ?? meta?.lastContactAt ?? null,
-    lastContactStatus: user.checkinLastStatus ?? meta?.lastContactStatus ?? null,
+    lastContactAt: firstText(meta?.lastContactAt, contact.lastContactAt, contact.last_contact_at, user.checkinLastReportedAt, contact.checkin_last_reported_at),
+    lastContactStatus: firstText(meta?.lastContactStatus, contact.lastContactStatus, contact.last_contact_status, user.checkinLastStatus, contact.checkin_last_status),
     checkinPreferredTime: user.checkinPreferredTime ?? null,
     assignedTo,
     careProviderCount,

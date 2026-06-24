@@ -8,6 +8,7 @@ import UsersList from "@/pages/UsersList";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
+const gisUsersMock = vi.hoisted(() => ({ value: [] as Array<Record<string, unknown>> }));
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -42,7 +43,7 @@ vi.mock("@/hooks/useCurrentUserContext", () => ({
 vi.mock("@/hooks/useGISData", () => ({
   useGISData: () => ({
     data: {
-      gisUsers: [],
+      gisUsers: gisUsersMock.value,
     },
     isLoading: false,
   }),
@@ -107,6 +108,7 @@ describe("UsersList Add User flow", () => {
   beforeEach(() => {
     navigateMock.mockReset();
     toastMock.mockReset();
+    gisUsersMock.value = [];
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -231,6 +233,44 @@ describe("UsersList Add User flow", () => {
         preferred_time: "15:45",
       },
     });
+  });
+
+  it("shows operational contact history when check-in fields are blank", () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        checkinLastReportedAt: " ",
+        checkinLastStatus: " ",
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+        operationalContext: {
+          lastContactAt: "2026-06-24T08:00:00.000Z",
+          lastContactStatus: "confirmed",
+          preferredChannel: "phone",
+          reasonKey: "usersList.reason.stable",
+          riskStatus: "stable",
+        },
+      },
+    ];
+
+    renderUsersList();
+
+    expect(screen.getByText("Anna Bittner")).toBeInTheDocument();
+    expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument();
+    expect(screen.getByText(/Confirmed/)).toBeInTheDocument();
   });
 
   it("requires first and last name before saving", () => {
