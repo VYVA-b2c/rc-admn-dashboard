@@ -432,6 +432,68 @@ describe("UsersList Add User flow", () => {
     expect(screen.getByText(/Completed/)).toBeInTheDocument();
   });
 
+  it("uses profile timeline scheduled calls when the users row has no completed contact", async () => {
+    gisUsersMock.value = [
+      {
+        id: "external-anna",
+        first_name: "Anna",
+        last_name: "Bittner",
+        city: "Dresden",
+        date_of_birth: "1940-01-01",
+        coords: [51.05, 13.74],
+        activeAlerts: 0,
+        careProviderCount: 1,
+        careProviderNames: ["Anna Mueller"],
+        checkinEnabled: true,
+        criticalAlerts: 0,
+        healthConditions: 0,
+        missedMeds7d: 0,
+        offlineSensors: 0,
+        primaryCaregiverName: "Anna Mueller",
+        sensorCount: 0,
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.includes("/api/v1/checkins-dashboard/checkins")) {
+          return new Response(JSON.stringify({ checkins: [], sessions: [], medications: [] }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        if (path.includes("/api/v1/user-dashboard/user-info")) {
+          return new Response(
+            JSON.stringify({
+              user: { id: "external-anna" },
+              checkins: { enabled: true, preferred_time: "09:30" },
+              brainCoach: { enabled: true, preferred_time: "23:59" },
+              medications: [
+                {
+                  medication_name: "Blutdruckmedikament",
+                  reminders_enabled: true,
+                  schedule_times: ["08:30"],
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        }
+
+        return new Response(JSON.stringify({ error: "Not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    renderUsersList();
+
+    await waitFor(() => expect(screen.queryByText("No completed contact yet")).not.toBeInTheDocument());
+    expect(screen.getByText(/Pending|Missed|Unconfirmed/)).toBeInTheDocument();
+  });
+
   it("shows completed contact status even when the timestamp is missing", () => {
     gisUsersMock.value = [
       {

@@ -226,6 +226,20 @@ type ScheduledContact = {
   status?: string | null;
 };
 
+type ProfileTimelineRecord = Record<string, unknown>;
+
+type ProfileTimelineResponse = {
+  operationalContext?: {
+    lastContactAt?: string | null;
+    lastContactStatus?: string | null;
+  } | null;
+  checkins?: ProfileTimelineRecord | null;
+  brainCoach?: ProfileTimelineRecord | null;
+  medicationActivity?: ProfileTimelineRecord | null;
+  medications?: ProfileTimelineRecord[] | null;
+  recentOperationalEvents?: ProfileTimelineRecord[] | null;
+};
+
 function firstText(...values: Array<string | null | undefined>) {
   return values.find((value) => typeof value === "string" && value.trim())?.trim() ?? null;
 }
@@ -370,6 +384,162 @@ function latestScheduledContactByUser(response: ScheduledContactsResponse) {
     }
   }
   return byUser;
+}
+
+function latestContact(...contacts: Array<ScheduledContact | null | undefined | ScheduledContact[]>) {
+  return contacts
+    .flat()
+    .filter((contact): contact is ScheduledContact => Boolean(contact?.at))
+    .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())[0] || null;
+}
+
+function profileRecordText(record: ProfileTimelineRecord | undefined | null, keys: string[]) {
+  if (!record) return null;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function profileRecordDate(record: ProfileTimelineRecord | undefined | null, keys: string[]) {
+  return validContactDate(profileRecordText(record, keys));
+}
+
+function profileRecordEnabled(record: ProfileTimelineRecord | undefined | null) {
+  if (!record) return false;
+  const value = record.enabled ?? record.is_active;
+  return value === true || value === "true" || value === 1 || value === "1";
+}
+
+function scheduledTodayAt(value?: string | null) {
+  const match = firstText(value)?.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!match) return null;
+  const date = new Date();
+  date.setHours(Number(match[1]), Number(match[2]), 0, 0);
+  return date.toISOString();
+}
+
+function scheduledTimelineContact(userId: string, at: string, dueStatus: string) {
+  const scheduledAt = new Date(at);
+  if (Number.isNaN(scheduledAt.getTime())) return null;
+  return {
+    userId,
+    at,
+    status: scheduledAt.getTime() <= Date.now() ? dueStatus : "pending",
+  };
+}
+
+function serviceTimelineContact(
+  userId: string,
+  service: ProfileTimelineRecord | null | undefined,
+  dateKeys: string[],
+  statusKeys: string[],
+  dueStatus: string,
+) {
+  const lastDate = profileRecordDate(service, dateKeys);
+  if (lastDate) {
+    return {
+      userId,
+      at: lastDate,
+      status: profileRecordText(service, statusKeys),
+    };
+  }
+
+  if (!profileRecordEnabled(service)) return null;
+  const scheduledAt = scheduledTodayAt(profileRecordText(service, ["preferred_time", "preferredTime"]));
+  return scheduledAt ? scheduledTimelineContact(userId, scheduledAt, dueStatus) : null;
+}
+
+function medicationTimelineContact(userId: string, profile: ProfileTimelineResponse) {
+  const activityAt = profileRecordDate(profile.medicationActivity, [
+    "occurred_at",
+    "occurredAt",
+    "reported_at",
+    "reportedAt",
+    "created_at",
+    "createdAt",
+    "scheduled_date",
+    "scheduledDate",
+  ]);
+  if (activityAt) {
+    return {
+      userId,
+      at: activityAt,
+      status: profileRecordText(profile.medicationActivity, ["status", "last_status", "lastStatus"]),
+    };
+  }
+
+  const candidates = (Array.isArray(profile.medications) ? profile.medications : [])
+    .filter((medication) => medication.reminders_enabled !== false && medication.remindersEnabled !== false)
+    .flatMap((medication) => {
+      const rawTimes = medication.schedule_times ?? medication.scheduleTimes;
+      return (Array.isArray(rawTimes) ? rawTimes : [])
+        .filter((time): time is string => typeof time === "string")
+        .map((time) => scheduledTodayAt(time))
+        .filter((at): at is string => Boolean(at));
+    });
+
+  const sorted = candidates
+    .map((at) => ({ at, time: new Date(at).getTime() }))
+    .filter((candidate) => !Number.isNaN(candidate.time))
+    .sort((a, b) => {
+      const aDue = a.time <= Date.now();
+      const bDue = b.time <= Date.now();
+      if (aDue !== bDue) return aDue ? -1 : 1;
+      return aDue ? b.time - a.time : a.time - b.time;
+    });
+
+  return sorted[0] ? scheduledTimelineContact(userId, sorted[0].at, "unconfirmed") : null;
+}
+
+function operationalEventTimelineContact(userId: string, profile: ProfileTimelineResponse) {
+  const contactSources = new Set(["checkins", "checkin", "scheduled_call", "brain_coach", "braincoach", "medication", "medication_reminder", "campaign_call"]);
+  const candidates = (Array.isArray(profile.recentOperationalEvents) ? profile.recentOperationalEvents : [])
+    .map((event) => {
+      const source = String(event.source ?? event.type ?? "").trim().toLowerCase();
+      if (!contactSources.has(source)) return null;
+      const at = profileRecordDate(event, ["occurred_at", "occurredAt", "scheduled_at", "scheduledAt", "date", "timestamp", "created_at", "createdAt"]);
+      if (!at) return null;
+      return {
+        userId,
+        at,
+        status: profileRecordText(event, ["status", "outcome", "result", "last_outcome", "lastOutcome"]),
+      };
+    })
+    .filter((contact): contact is ScheduledContact => Boolean(contact));
+  return latestContact(candidates);
+}
+
+function latestProfileTimelineContact(profile: ProfileTimelineResponse, userIds: string[]) {
+  const userId = userIds[0];
+  if (!userId) return null;
+
+  return latestContact(
+    operationalEventTimelineContact(userId, profile),
+    profile.operationalContext?.lastContactAt
+      ? {
+          userId,
+          at: profile.operationalContext.lastContactAt,
+          status: profile.operationalContext.lastContactStatus ?? null,
+        }
+      : null,
+    serviceTimelineContact(
+      userId,
+      profile.checkins,
+      ["last_checkin_at", "lastCheckinAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"],
+      ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"],
+      "missed",
+    ),
+    serviceTimelineContact(
+      userId,
+      profile.brainCoach,
+      ["last_session_at", "lastSessionAt", "last_completed_at", "lastCompletedAt", "last_call_at", "lastCallAt", "last_reported_at", "lastReportedAt", "last_status_at", "lastStatusAt"],
+      ["last_outcome", "lastOutcome", "last_status", "lastStatus", "outcome", "status"],
+      "missed",
+    ),
+    medicationTimelineContact(userId, profile),
+  );
 }
 
 function userContactIds(user: OperationalQueueUser) {
@@ -535,15 +705,43 @@ export default function UsersList() {
       }
     },
   });
+  const { data: profileContactByUser = new Map<string, ScheduledContact>() } = useQuery({
+    queryKey: ["users-list-profile-timeline-contacts", sourceUserIds.join("|")],
+    enabled: !usingPreviewData && sourceUsers.length > 0,
+    retry: false,
+    queryFn: async () => {
+      const entries = await Promise.all(
+        sourceUsers.map(async (user) => {
+          const ids = userContactIds(user);
+          const profileId = ids[0];
+          if (!profileId) return [];
+
+          try {
+            const profile = await apiFetch<ProfileTimelineResponse>(`/api/v1/user-dashboard/user-info?user_id=${encodeURIComponent(profileId)}`, {
+              timeoutMs: 10_000,
+            });
+            const contact = latestProfileTimelineContact(profile, ids);
+            return contact ? ids.map((id) => [id, { ...contact, userId: id }] as const) : [];
+          } catch {
+            return [];
+          }
+        }),
+      );
+
+      return new Map(entries.flat());
+    },
+  });
 
   const queueRows = useMemo(
     () =>
       sourceUsers.map((user) => {
         const row = toQueueRow(user);
-        const contact = userContactIds(user).map((id) => scheduledContactByUser.get(id)).find(Boolean);
-        return applyScheduledContact(row, contact);
+        const ids = userContactIds(user);
+        const feedContact = ids.map((id) => scheduledContactByUser.get(id)).find(Boolean);
+        const profileContact = ids.map((id) => profileContactByUser.get(id)).find(Boolean);
+        return applyScheduledContact(applyScheduledContact(row, feedContact), profileContact);
       }),
-    [scheduledContactByUser, sourceUsers],
+    [profileContactByUser, scheduledContactByUser, sourceUsers],
   );
 
   const cities = useMemo(() => {
