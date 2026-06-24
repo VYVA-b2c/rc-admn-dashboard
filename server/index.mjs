@@ -784,28 +784,40 @@ function normalizeExternalDashboardPayload(data, assignmentSummaries = new Map()
   };
 }
 
+function dashboardUserMergeKeys(user) {
+  const id = nullIfBlank(user?.id);
+  const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
+  const keys = [];
+  if (id) {
+    keys.push(`id:${id}`);
+    keys.push(`external:${id}`);
+  }
+  if (externalUserId) keys.push(`external:${externalUserId}`);
+  return keys;
+}
+
 function mergeDashboardPayloads(primary, local) {
   const primaryUsers = Array.isArray(primary?.gisUsers) ? primary.gisUsers : [];
   const localUsers = Array.isArray(local?.gisUsers) ? local.gisUsers : [];
-  const seenUserKeys = new Set();
-  const addUserKeys = (user) => {
-    const id = nullIfBlank(user?.id);
-    const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
-    if (id) {
-      seenUserKeys.add(`id:${id}`);
-      seenUserKeys.add(`external:${id}`);
-    }
-    if (externalUserId) seenUserKeys.add(`external:${externalUserId}`);
+  const seenUserKeys = new Map();
+  const addUserKeys = (user, index) => {
+    dashboardUserMergeKeys(user).forEach((key) => {
+      if (!seenUserKeys.has(key)) seenUserKeys.set(key, index);
+    });
   };
   primaryUsers.forEach(addUserKeys);
 
   const mergedUsers = [...primaryUsers];
   for (const user of localUsers) {
-    const id = nullIfBlank(user?.id);
-    const externalUserId = nullIfBlank(firstValue(user?.externalUserId, user?.external_user_id));
-    if ((id && seenUserKeys.has(`id:${id}`)) || (externalUserId && seenUserKeys.has(`external:${externalUserId}`))) continue;
+    const matchIndex = dashboardUserMergeKeys(user)
+      .map((key) => seenUserKeys.get(key))
+      .find((index) => index !== undefined);
+    if (matchIndex !== undefined) {
+      mergedUsers[matchIndex] = applyDashboardUserLastContact(mergedUsers[matchIndex], existingDashboardUserContact(user));
+      continue;
+    }
     mergedUsers.push(user);
-    addUserKeys(user);
+    addUserKeys(user, mergedUsers.length - 1);
   }
 
   const activeAlerts = [
@@ -7556,8 +7568,12 @@ function dashboardUser(row) {
 
 async function loadDashboardUsers(context) {
   const organizationId = scopeOrganizationId(context);
+  const timezone = context?.organization?.timezone || "Europe/Berlin";
   const users = await query(`
-    WITH sensor_counts AS (
+    WITH runtime AS (
+      SELECT timezone($2, now()) AS local_now, timezone($2, now())::date AS local_date
+    ),
+    sensor_counts AS (
       SELECT
         vyva_user_id,
         COUNT(*)::int AS sensor_count,
@@ -7626,6 +7642,83 @@ async function loadDashboardUsers(context) {
       WHERE COALESCE(l.reported_at, l.created_at) IS NOT NULL
       ORDER BY l.vyva_user_id, COALESCE(l.reported_at, l.created_at) DESC
     ),
+    today_checkin_contacts AS (
+      SELECT
+        c.vyva_user_id,
+        ((r.local_date + c.preferred_time::time) AT TIME ZONE $2) AS occurred_at,
+        CASE
+          WHEN ((r.local_date + c.preferred_time::time) AT TIME ZONE $2) <= now() THEN 'missed'
+          ELSE 'pending'
+        END AS status
+      FROM public.vyva_user_checkins c
+      CROSS JOIN runtime r
+      WHERE c.enabled = true
+        AND c.preferred_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    ),
+    today_brain_coach_contacts AS (
+      SELECT
+        bc.vyva_user_id,
+        ((r.local_date + bc.preferred_time::time) AT TIME ZONE $2) AS occurred_at,
+        CASE
+          WHEN ((r.local_date + bc.preferred_time::time) AT TIME ZONE $2) <= now() THEN 'missed'
+          ELSE 'pending'
+        END AS status
+      FROM public.vyva_user_brain_coach bc
+      CROSS JOIN runtime r
+      WHERE bc.enabled = true
+        AND bc.preferred_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    ),
+    today_medication_slots AS (
+      SELECT
+        m.vyva_user_id,
+        ((r.local_date + scheduled_time.value::time) AT TIME ZONE $2) AS occurred_at,
+        CASE
+          WHEN ((r.local_date + scheduled_time.value::time) AT TIME ZONE $2) <= now() THEN 'unconfirmed'
+          ELSE 'pending'
+        END AS status
+      FROM public.vyva_user_medications m
+      CROSS JOIN runtime r
+      CROSS JOIN LATERAL unnest(COALESCE(m.schedule_times, ARRAY[]::text[])) AS scheduled_time(value)
+      WHERE COALESCE(m.reminders_enabled, true) = true
+        AND scheduled_time.value ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    ),
+    today_medication_contacts AS (
+      SELECT DISTINCT ON (vyva_user_id)
+        vyva_user_id,
+        occurred_at,
+        status
+      FROM today_medication_slots
+      ORDER BY
+        vyva_user_id,
+        CASE WHEN occurred_at <= now() THEN 0 ELSE 1 END,
+        CASE WHEN occurred_at <= now() THEN occurred_at END DESC,
+        CASE WHEN occurred_at > now() THEN occurred_at END ASC
+    ),
+    dashboard_contact_candidates AS (
+      SELECT
+        u.id AS vyva_user_id,
+        u.call_timestamp AS occurred_at,
+        'completed'::text AS status
+      FROM public.vyva_users u
+      WHERE u.call_timestamp IS NOT NULL
+      UNION ALL
+      SELECT vyva_user_id, occurred_at, status FROM latest_medication_contacts
+      UNION ALL
+      SELECT vyva_user_id, occurred_at, status FROM today_checkin_contacts
+      UNION ALL
+      SELECT vyva_user_id, occurred_at, status FROM today_brain_coach_contacts
+      UNION ALL
+      SELECT vyva_user_id, occurred_at, status FROM today_medication_contacts
+    ),
+    latest_dashboard_contacts AS (
+      SELECT DISTINCT ON (vyva_user_id)
+        vyva_user_id,
+        occurred_at,
+        status
+      FROM dashboard_contact_candidates
+      WHERE occurred_at IS NOT NULL
+      ORDER BY vyva_user_id, occurred_at DESC
+    ),
     care_provider_counts AS (
       SELECT
         a.vyva_user_id,
@@ -7660,15 +7753,8 @@ async function loadDashboardUsers(context) {
       c.preferred_time AS checkin_preferred_time,
       NULL::text AS checkin_last_status,
       NULL::text AS checkin_last_reported_at,
-      CASE
-        WHEN lmc.occurred_at IS NOT NULL AND (u.call_timestamp IS NULL OR lmc.occurred_at >= u.call_timestamp) THEN lmc.occurred_at::text
-        ELSE u.call_timestamp::text
-      END AS last_contact_at,
-      CASE
-        WHEN lmc.occurred_at IS NOT NULL AND (u.call_timestamp IS NULL OR lmc.occurred_at >= u.call_timestamp) THEN lmc.status
-        WHEN u.call_timestamp IS NOT NULL THEN 'completed'
-        ELSE NULL
-      END AS last_contact_status,
+      ldc.occurred_at::text AS last_contact_at,
+      ldc.status AS last_contact_status,
       u.living_context,
       COALESCE(cp.care_provider_count, 0) AS care_provider_count,
       cp.primary_caregiver_name,
@@ -7679,12 +7765,12 @@ async function loadDashboardUsers(context) {
     LEFT JOIN alert_counts a ON a.vyva_user_id = u.id
     LEFT JOIN health_counts h ON h.vyva_user_id = u.id
     LEFT JOIN missed_med_counts m ON m.vyva_user_id = u.id
-    LEFT JOIN latest_medication_contacts lmc ON lmc.vyva_user_id = u.id
+    LEFT JOIN latest_dashboard_contacts ldc ON ldc.vyva_user_id = u.id
     LEFT JOIN public.vyva_user_checkins c ON c.vyva_user_id = u.id
     LEFT JOIN care_provider_counts cp ON cp.vyva_user_id = u.id
     WHERE u.organization_id = $1
     ORDER BY COALESCE(a.critical_alerts, 0) DESC, COALESCE(a.active_alerts, 0) DESC, u.created_at DESC
-  `, [organizationId]);
+  `, [organizationId, timezone]);
 
   const alerts = await optionalRows(`
     SELECT
