@@ -3539,6 +3539,19 @@ export default function UserProfile() {
               onGenerateCautious={() => void handleGenerateHealthPlan(false, "cautious")}
             />
           )}
+          <HealthPlanConditionSensorConfidencePanel
+            healthConditions={healthConditions}
+            mobilityNeeds={mobilityNeeds}
+            medications={medications}
+            medicationActivity={medicationActivity}
+            checkins={checkins}
+            brainCoach={brainCoach}
+            sensors={sensors}
+            careProviders={careProviders}
+            livingContextKnown={context.livingContextKey !== "profile.livingContextUnknown"}
+            sourceSignalCount={healthPlanSignalCount}
+            activeAlertCount={activeAlerts.length}
+          />
 
           {!healthPlan ? (
             <div className="grid gap-5 rounded-[24px] border border-dashed border-border/80 bg-[linear-gradient(180deg,rgba(245,243,255,0.7),rgba(255,255,255,0.96))] p-6 lg:grid-cols-[minmax(0,1.7fr)_280px]">
@@ -7302,6 +7315,177 @@ function HealthPlanPreGenerationChecklist({
             <p className="mt-1 text-sm leading-6 text-emerald-800">{t("profile.healthPlanPreflightNoMissingDescription")}</p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function healthPlanConfidenceBand(score: number): "high" | "medium" | "low" {
+  if (score >= 80) return "high";
+  if (score >= 50) return "medium";
+  return "low";
+}
+
+function healthPlanConfidenceBandLabel(t: (key: string) => string, band: "high" | "medium" | "low") {
+  if (band === "high") return t("profile.healthPlanConfidenceHigh");
+  if (band === "medium") return t("profile.healthPlanConfidenceMedium");
+  return t("profile.healthPlanConfidenceLow");
+}
+
+function healthPlanConfidenceBandClasses(band: "high" | "medium" | "low") {
+  if (band === "high") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (band === "medium") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-rose-200 bg-rose-50 text-rose-700";
+}
+
+function isRecentSensorReading(value?: string | null) {
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  return Date.now() - date.getTime() <= 24 * 60 * 60 * 1000;
+}
+
+function HealthPlanConditionSensorConfidencePanel({
+  healthConditions,
+  mobilityNeeds,
+  medications,
+  medicationActivity,
+  checkins,
+  brainCoach,
+  sensors,
+  careProviders,
+  livingContextKnown,
+  sourceSignalCount,
+  activeAlertCount,
+}: {
+  healthConditions: string[];
+  mobilityNeeds: string[];
+  medications: OperationalMedication[];
+  medicationActivity?: OperationalMedicationActivity | null;
+  checkins?: OperationalService | null;
+  brainCoach?: OperationalService | null;
+  sensors: OperationalSensor[];
+  careProviders: OperationalCareProviderAssignment[];
+  livingContextKnown: boolean;
+  sourceSignalCount: number;
+  activeAlertCount: number;
+}) {
+  const { t } = useLanguage();
+  const conditionNames = [...healthConditions, ...mobilityNeeds.map((item) => `${item}`)].filter(Boolean);
+  const medicationTimesComplete = medications.length > 0 && medications.every((medication) => safeArray(medication.schedule_times).length > 0);
+  const recentSensorCount = sensors.filter((sensor) => sensor.status === "online" && isRecentSensorReading(sensor.last_reading_at)).length;
+  const activeSensorCount = sensors.filter((sensor) => sensor.status === "online").length;
+  const signalContributions = [
+    { key: "profile", active: livingContextKnown, points: 10, label: t("profile.healthPlanConfidenceSignalProfile") },
+    { key: "conditions", active: conditionNames.length > 0, points: 15, label: t("profile.healthPlanConfidenceSignalConditions") },
+    { key: "medications", active: medicationTimesComplete, points: 15, label: t("profile.healthPlanConfidenceSignalMedications") },
+    { key: "medicationActivity", active: Boolean(medicationActivity?.status), points: 10, label: t("profile.healthPlanConfidenceSignalAdherence") },
+    { key: "checkins", active: Boolean(checkins?.enabled && (checkins.last_outcome || checkins.last_reported_at || checkins.preferred_time)), points: 10, label: t("profile.healthPlanConfidenceSignalCheckins") },
+    { key: "brain", active: Boolean(brainCoach?.enabled && (brainCoach.last_outcome || brainCoach.last_reported_at || brainCoach.preferred_time)), points: 5, label: t("profile.healthPlanConfidenceSignalBrain") },
+    { key: "care", active: careProviders.length > 0, points: 10, label: t("profile.healthPlanConfidenceSignalCare") },
+    { key: "sensors", active: recentSensorCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSensors") },
+    { key: "alerts", active: activeAlertCount > 0, points: 5, label: t("profile.healthPlanConfidenceSignalAlerts") },
+    { key: "sources", active: sourceSignalCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSources") },
+  ];
+  const overallScore = Math.min(100, 10 + signalContributions.reduce((total, item) => total + (item.active ? item.points : 0), 0));
+  const overallBand = healthPlanConfidenceBand(overallScore);
+  const conditionBase = 30
+    + (livingContextKnown ? 10 : 0)
+    + (medicationTimesComplete ? 15 : medications.length > 0 ? 8 : 0)
+    + (Boolean(medicationActivity?.status) ? 10 : 0)
+    + (careProviders.length > 0 ? 10 : 0)
+    + (recentSensorCount > 0 ? 10 : activeSensorCount > 0 ? 5 : 0)
+    + (sourceSignalCount > 0 ? 10 : 0);
+  const conditionItems = conditionNames.slice(0, 4).map((condition) => {
+    const score = Math.max(15, Math.min(95, conditionBase + (/fall|mobility|walking|balance|sturz|caida/i.test(condition) && recentSensorCount > 0 ? 5 : 0)));
+    const band = healthPlanConfidenceBand(score);
+    return { condition, score, band };
+  });
+  const sensorItems = sensors.slice(0, 4).map((sensor) => {
+    const recent = isRecentSensorReading(sensor.last_reading_at);
+    const online = sensor.status === "online";
+    const contribution = online && recent ? 12 : online ? 6 : 0;
+    const band = online && recent ? "high" : online ? "medium" : "low";
+    return { sensor, recent, online, contribution, band: band as "high" | "medium" | "low" };
+  });
+
+  return (
+    <div className="rounded-[22px] border border-border/80 bg-white px-5 py-5 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <HeartPulse className="h-5 w-5 text-vyva-pink" />
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanConditionConfidenceTitle")}</p>
+            <Badge variant="outline" className={cn("rounded-full px-3 py-1 text-xs font-bold", healthPlanConfidenceBandClasses(overallBand))}>
+              {healthPlanConfidenceBandLabel(t, overallBand)}
+            </Badge>
+          </div>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">{t("profile.healthPlanConditionConfidenceDescription")}</p>
+        </div>
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-3xl font-black leading-none tracking-normal text-foreground">{overallScore}</p>
+          <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanConditionConfidenceScore")}</p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-4">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanConditionConfidenceConditions")}</p>
+          {conditionItems.length > 0 ? (
+            <div className="mt-3 space-y-3">
+              {conditionItems.map((item) => (
+                <div key={item.condition} className="rounded-2xl border border-white/80 bg-white px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-bold text-foreground">{item.condition}</p>
+                    <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanConfidenceBandClasses(item.band))}>
+                      {healthPlanConfidenceBandLabel(t, item.band)}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    {interpolate(t("profile.healthPlanConditionConfidenceConditionScore"), { score: item.score })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">{t("profile.healthPlanConditionConfidenceNoConditions")}</p>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-4">
+          <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{t("profile.healthPlanConditionConfidenceSensors")}</p>
+          {sensorItems.length > 0 ? (
+            <div className="mt-3 space-y-3">
+              {sensorItems.map((item) => (
+                <div key={item.sensor.id || item.sensor.device_id || item.sensor.device_name} className="rounded-2xl border border-white/80 bg-white px-3.5 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-bold text-foreground">{item.sensor.device_name || item.sensor.device_id || t(sensorTypeKey(item.sensor.sensor_type))}</p>
+                    <Badge variant="outline" className={cn("rounded-full px-2.5 py-0.5 text-[11px] font-semibold", healthPlanConfidenceBandClasses(item.band))}>
+                      {item.online ? item.recent ? t("profile.healthPlanConditionConfidenceSensorRecent") : t("profile.healthPlanConditionConfidenceSensorStale") : t("profile.healthPlanConditionConfidenceSensorOffline")}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                    {interpolate(t("profile.healthPlanConditionConfidenceSensorContribution"), { points: item.contribution })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm leading-6 text-muted-foreground">{t("profile.healthPlanConditionConfidenceNoSensors")}</p>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {signalContributions.map((item) => (
+          <Badge
+            key={item.key}
+            variant="outline"
+            className={cn("rounded-full px-3 py-1 text-xs font-semibold", item.active ? "border-emerald-200 text-emerald-700" : "border-slate-200 text-muted-foreground")}
+          >
+            {item.label}: {item.active ? `+${item.points}` : "+0"}
+          </Badge>
+        ))}
       </div>
     </div>
   );
