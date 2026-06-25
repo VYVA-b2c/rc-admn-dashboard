@@ -9,6 +9,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Copy,
   FileText,
   HeartPulse,
   MessageCircle,
@@ -3829,6 +3830,22 @@ export default function UserProfile() {
               )}
 
               <div className="space-y-5 border-t border-primary/10 bg-white/80 p-6">
+                <HealthPlanShareableActionPlanPanel
+                  userName={fullName}
+                  plan={healthPlan}
+                  healthConditions={healthConditions}
+                  mobilityNeeds={mobilityNeeds}
+                  medications={medications}
+                  medicationActivity={medicationActivity}
+                  checkins={checkins}
+                  brainCoach={brainCoach}
+                  sensors={sensors}
+                  careProviders={careProviders}
+                  livingContextKnown={context.livingContextKey !== "profile.livingContextUnknown"}
+                  sourceSignalCount={healthPlanSignalCount}
+                  activeAlertCount={activeAlerts.length}
+                  dataQualityGapCount={healthPlanDataQualityGaps.length}
+                />
                 <div className="grid gap-3 md:grid-cols-3">
                   <div className="rounded-[18px] border border-border/80 bg-white/92 px-4 py-4 shadow-sm">
                     <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanReviewTitle")}</p>
@@ -7151,6 +7168,288 @@ function HealthPlanHistoryReplayPanel({
   );
 }
 
+type HealthPlanEvidenceSignalInput = {
+  healthConditions: string[];
+  mobilityNeeds: string[];
+  medications: OperationalMedication[];
+  medicationActivity?: OperationalMedicationActivity | null;
+  checkins?: OperationalService | null;
+  brainCoach?: OperationalService | null;
+  sensors: OperationalSensor[];
+  careProviders: OperationalCareProviderAssignment[];
+  livingContextKnown: boolean;
+  sourceSignalCount: number;
+  activeAlertCount: number;
+};
+
+type HealthPlanShareableActionSection = {
+  id: string;
+  title: string;
+  icon: LucideIcon;
+  items: string[];
+  tone: string;
+};
+
+function compactShareableLines(lines: Array<string | null | undefined>, limit = 3) {
+  return Array.from(
+    new Set(
+      lines
+        .map((line) => line?.replace(/\s+/g, " ").trim())
+        .filter((line): line is string => Boolean(line)),
+    ),
+  ).slice(0, limit);
+}
+
+function healthPlanSectionTexts(items: unknown, limit = 3) {
+  return compactShareableLines(
+    safeArray<{ text?: string | null }>(items).map((item) => stringValue(item.text)),
+    limit,
+  );
+}
+
+function medicationReminderLines(t: (key: string) => string, medications: OperationalMedication[]) {
+  return compactShareableLines(
+    medications
+      .filter((medication) => medication.reminders_enabled !== false)
+      .map((medication) => {
+        const times = safeArray<string>(medication.schedule_times).filter((time) => /^\d{2}:\d{2}$/.test(time));
+        if (times.length === 0) return null;
+        return interpolate(t("profile.healthPlanShareableMedicationLine"), {
+          medication: medication.medication_name || t("profile.service.medications"),
+          times: times.join(", "),
+        });
+      }),
+    2,
+  );
+}
+
+function serviceActionLine(t: (key: string) => string, label: string, service?: OperationalService | null) {
+  if (!service?.enabled) return null;
+  const details = [service.frequency, service.preferred_time].map((item) => stringValue(item)).filter(Boolean).join(" / ");
+  return interpolate(t("profile.healthPlanShareableServiceLine"), {
+    service: label,
+    detail: details || t("profile.healthPlanShareableServiceEnabled"),
+  });
+}
+
+function sensorActionLines(t: (key: string) => string, sensors: OperationalSensor[]) {
+  return compactShareableLines(
+    sensors.map((sensor) => {
+      const sensorName = sensor.device_name || sensor.device_id || t(sensorTypeKey(sensor.sensor_type));
+      const status = sensor.status === "online" ? t("profile.healthPlanShareableSensorOnline") : t("profile.healthPlanShareableSensorOffline");
+      return interpolate(t("profile.healthPlanShareableSensorLine"), { sensor: sensorName, status });
+    }),
+    2,
+  );
+}
+
+function buildHealthPlanEvidenceSignalProfile(input: HealthPlanEvidenceSignalInput, t: (key: string) => string) {
+  const conditionNames = [...input.healthConditions, ...input.mobilityNeeds.map((item) => `${item}`)].filter(Boolean);
+  const medicationTimesComplete = input.medications.length > 0 && input.medications.every((medication) => safeArray(medication.schedule_times).length > 0);
+  const recentSensorCount = input.sensors.filter((sensor) => sensor.status === "online" && isRecentSensorReading(sensor.last_reading_at)).length;
+  const activeSensorCount = input.sensors.filter((sensor) => sensor.status === "online").length;
+  const signalContributions = [
+    { key: "profile", active: input.livingContextKnown, points: 10, label: t("profile.healthPlanConfidenceSignalProfile") },
+    { key: "conditions", active: conditionNames.length > 0, points: 15, label: t("profile.healthPlanConfidenceSignalConditions") },
+    { key: "medications", active: medicationTimesComplete, points: 15, label: t("profile.healthPlanConfidenceSignalMedications") },
+    { key: "medicationActivity", active: Boolean(input.medicationActivity?.status), points: 10, label: t("profile.healthPlanConfidenceSignalAdherence") },
+    { key: "checkins", active: Boolean(input.checkins?.enabled && (input.checkins.last_outcome || input.checkins.last_reported_at || input.checkins.preferred_time)), points: 10, label: t("profile.healthPlanConfidenceSignalCheckins") },
+    { key: "brain", active: Boolean(input.brainCoach?.enabled && (input.brainCoach.last_outcome || input.brainCoach.last_reported_at || input.brainCoach.preferred_time)), points: 5, label: t("profile.healthPlanConfidenceSignalBrain") },
+    { key: "care", active: input.careProviders.length > 0, points: 10, label: t("profile.healthPlanConfidenceSignalCare") },
+    { key: "sensors", active: recentSensorCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSensors") },
+    { key: "alerts", active: input.activeAlertCount > 0, points: 5, label: t("profile.healthPlanConfidenceSignalAlerts") },
+    { key: "sources", active: input.sourceSignalCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSources") },
+  ];
+  const overallScore = Math.min(100, 10 + signalContributions.reduce((total, item) => total + (item.active ? item.points : 0), 0));
+
+  return {
+    activeSensorCount,
+    conditionNames,
+    medicationTimesComplete,
+    overallBand: healthPlanConfidenceBand(overallScore),
+    overallScore,
+    recentSensorCount,
+    signalContributions,
+  };
+}
+
+function HealthPlanShareableActionPlanPanel({
+  userName,
+  plan,
+  healthConditions,
+  mobilityNeeds,
+  medications,
+  medicationActivity,
+  checkins,
+  brainCoach,
+  sensors,
+  careProviders,
+  livingContextKnown,
+  sourceSignalCount,
+  activeAlertCount,
+  dataQualityGapCount,
+}: HealthPlanEvidenceSignalInput & {
+  userName: string;
+  plan: OperationalHealthPlan;
+  dataQualityGapCount: number;
+}) {
+  const { t } = useLanguage();
+  const evidence = buildHealthPlanEvidenceSignalProfile({
+    healthConditions,
+    mobilityNeeds,
+    medications,
+    medicationActivity,
+    checkins,
+    brainCoach,
+    sensors,
+    careProviders,
+    livingContextKnown,
+    sourceSignalCount,
+    activeAlertCount,
+  }, t);
+  const caregiverNames = compactShareableLines(
+    careProviders
+      .filter((provider) => provider.active !== false && provider.provider_type === "caregiver")
+      .map((provider) => provider.display_name),
+    2,
+  );
+  const confidenceLine = evidence.overallBand === "high"
+    ? interpolate(t("profile.healthPlanShareableConfidenceSupported"), { score: evidence.overallScore })
+    : interpolate(t("profile.healthPlanShareableConfidenceLimited"), { score: evidence.overallScore });
+  const confidenceItems = compactShareableLines([
+    confidenceLine,
+    dataQualityGapCount > 0 ? interpolate(t("profile.healthPlanShareableDataGaps"), { count: dataQualityGapCount }) : null,
+  ], 2);
+  const sections: HealthPlanShareableActionSection[] = [
+    {
+      id: "today",
+      title: t("profile.healthPlanShareableToday"),
+      icon: CheckCircle2,
+      tone: "border-emerald-200 bg-emerald-50/80 text-emerald-950",
+      items: compactShareableLines([
+        ...healthPlanSectionTexts(plan.daily_support_json, 2),
+        ...medicationReminderLines(t, medications),
+        t("profile.healthPlanShareableTodayFallback"),
+      ], 3),
+    },
+    {
+      id: "week",
+      title: t("profile.healthPlanShareableThisWeek"),
+      icon: Calendar,
+      tone: "border-sky-200 bg-sky-50/80 text-sky-950",
+      items: compactShareableLines([
+        ...healthPlanSectionTexts(plan.goals_json, 2),
+        serviceActionLine(t, t("profile.service.checkins"), checkins),
+        serviceActionLine(t, t("profile.service.brainCoach"), brainCoach),
+        t("profile.healthPlanShareableWeekFallback"),
+      ], 3),
+    },
+    {
+      id: "watch",
+      title: t("profile.healthPlanShareableWatchFor"),
+      icon: Activity,
+      tone: "border-amber-200 bg-amber-50/80 text-amber-950",
+      items: compactShareableLines([
+        ...healthPlanSectionTexts(plan.monitoring_json, 2),
+        ...sensorActionLines(t, sensors),
+        t("profile.healthPlanShareableWatchFallback"),
+      ], 3),
+    },
+    {
+      id: "contact",
+      title: t("profile.healthPlanShareableContactRedCross"),
+      icon: PhoneCall,
+      tone: "border-rose-200 bg-rose-50/80 text-rose-950",
+      items: compactShareableLines([
+        ...healthPlanSectionTexts(plan.escalation_json, 3),
+        t("profile.healthPlanShareableContactFallback"),
+      ], 3),
+    },
+    {
+      id: "caregiver",
+      title: t("profile.healthPlanShareableCaregiverRole"),
+      icon: Users,
+      tone: "border-violet-200 bg-violet-50/80 text-violet-950",
+      items: compactShareableLines([
+        caregiverNames.length > 0 ? interpolate(t("profile.healthPlanShareableCaregiverNames"), { names: caregiverNames.join(", ") }) : t("profile.healthPlanShareableNoCaregiver"),
+        ...healthPlanSectionTexts(plan.caregiver_guidance_json, 2),
+      ], 3),
+    },
+    {
+      id: "confidence",
+      title: t("profile.healthPlanShareableConfidenceNote"),
+      icon: Target,
+      tone: "border-cyan-200 bg-cyan-50/80 text-cyan-950",
+      items: confidenceItems.length > 0 ? confidenceItems : [t("profile.healthPlanShareableConfidenceFallback")],
+    },
+  ];
+  const copyText = [
+    `${t("profile.healthPlanShareableTitle")}: ${userName}`,
+    plan.generated_at ? `${t("profile.healthPlanLastGenerated")}: ${formatDateTime(plan.generated_at)}` : null,
+    "",
+    ...sections.flatMap((section) => [
+      section.title,
+      ...section.items.map((item) => `- ${item}`),
+      "",
+    ]),
+  ].filter((line): line is string => line !== null).join("\n");
+
+  const handleCopyActionPlan = async () => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(copyText);
+      toast({ title: t("profile.healthPlanShareableCopied") });
+    } catch {
+      toast({ title: t("profile.healthPlanShareableCopyFailed"), variant: "destructive" });
+    }
+  };
+
+  return (
+    <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <FileText className="h-5 w-5 text-primary" />
+            <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">{t("profile.healthPlanShareableTitle")}</p>
+            <Badge variant="outline" className={cn("rounded-full px-3 py-1 text-xs font-bold", healthPlanConfidenceBandClasses(evidence.overallBand))}>
+              {interpolate(t("profile.healthPlanShareableConfidenceBadge"), { score: evidence.overallScore })}
+            </Badge>
+          </div>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">{t("profile.healthPlanShareableDescription")}</p>
+        </div>
+        <Button type="button" variant="outline" className="h-9 rounded-full px-3 text-xs font-bold" onClick={() => void handleCopyActionPlan()}>
+          <Copy className="mr-1.5 h-3.5 w-3.5" />
+          {t("profile.healthPlanShareableCopy")}
+        </Button>
+      </div>
+      <div className="grid gap-px bg-slate-200 lg:grid-cols-2 xl:grid-cols-3">
+        {sections.map((section) => {
+          const Icon = section.icon;
+          return (
+            <section key={section.id} className={cn("min-h-[188px] bg-white px-5 py-4", section.id === "confidence" && "xl:col-span-1")}>
+              <div className="flex items-start gap-3">
+                <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border", section.tone)}>
+                  <Icon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold uppercase tracking-[0.14em] text-muted-foreground">{section.title}</p>
+                  <div className="mt-3 space-y-2.5">
+                    {section.items.map((item, index) => (
+                      <p key={`${section.id}-${index}`} className="text-sm font-medium leading-6 text-foreground/85">
+                        {item}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function HealthPlanPreGenerationChecklist({
   summary,
   onActionSelect,
@@ -7371,24 +7670,27 @@ function HealthPlanConditionSensorConfidencePanel({
   activeAlertCount: number;
 }) {
   const { t } = useLanguage();
-  const conditionNames = [...healthConditions, ...mobilityNeeds.map((item) => `${item}`)].filter(Boolean);
-  const medicationTimesComplete = medications.length > 0 && medications.every((medication) => safeArray(medication.schedule_times).length > 0);
-  const recentSensorCount = sensors.filter((sensor) => sensor.status === "online" && isRecentSensorReading(sensor.last_reading_at)).length;
-  const activeSensorCount = sensors.filter((sensor) => sensor.status === "online").length;
-  const signalContributions = [
-    { key: "profile", active: livingContextKnown, points: 10, label: t("profile.healthPlanConfidenceSignalProfile") },
-    { key: "conditions", active: conditionNames.length > 0, points: 15, label: t("profile.healthPlanConfidenceSignalConditions") },
-    { key: "medications", active: medicationTimesComplete, points: 15, label: t("profile.healthPlanConfidenceSignalMedications") },
-    { key: "medicationActivity", active: Boolean(medicationActivity?.status), points: 10, label: t("profile.healthPlanConfidenceSignalAdherence") },
-    { key: "checkins", active: Boolean(checkins?.enabled && (checkins.last_outcome || checkins.last_reported_at || checkins.preferred_time)), points: 10, label: t("profile.healthPlanConfidenceSignalCheckins") },
-    { key: "brain", active: Boolean(brainCoach?.enabled && (brainCoach.last_outcome || brainCoach.last_reported_at || brainCoach.preferred_time)), points: 5, label: t("profile.healthPlanConfidenceSignalBrain") },
-    { key: "care", active: careProviders.length > 0, points: 10, label: t("profile.healthPlanConfidenceSignalCare") },
-    { key: "sensors", active: recentSensorCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSensors") },
-    { key: "alerts", active: activeAlertCount > 0, points: 5, label: t("profile.healthPlanConfidenceSignalAlerts") },
-    { key: "sources", active: sourceSignalCount > 0, points: 10, label: t("profile.healthPlanConfidenceSignalSources") },
-  ];
-  const overallScore = Math.min(100, 10 + signalContributions.reduce((total, item) => total + (item.active ? item.points : 0), 0));
-  const overallBand = healthPlanConfidenceBand(overallScore);
+  const {
+    activeSensorCount,
+    conditionNames,
+    medicationTimesComplete,
+    overallBand,
+    overallScore,
+    recentSensorCount,
+    signalContributions,
+  } = buildHealthPlanEvidenceSignalProfile({
+    healthConditions,
+    mobilityNeeds,
+    medications,
+    medicationActivity,
+    checkins,
+    brainCoach,
+    sensors,
+    careProviders,
+    livingContextKnown,
+    sourceSignalCount,
+    activeAlertCount,
+  }, t);
   const conditionBase = 30
     + (livingContextKnown ? 10 : 0)
     + (medicationTimesComplete ? 15 : medications.length > 0 ? 8 : 0)
