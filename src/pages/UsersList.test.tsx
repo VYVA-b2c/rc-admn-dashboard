@@ -8,6 +8,12 @@ import UsersList from "@/pages/UsersList";
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const toastMock = vi.hoisted(() => vi.fn());
+const gisDataMock = vi.hoisted(() => ({
+  data: {
+    gisUsers: [] as any[],
+  },
+  isLoading: false,
+}));
 
 vi.mock("react-router-dom", async () => {
   const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
@@ -40,12 +46,7 @@ vi.mock("@/hooks/useCurrentUserContext", () => ({
 }));
 
 vi.mock("@/hooks/useGISData", () => ({
-  useGISData: () => ({
-    data: {
-      gisUsers: [],
-    },
-    isLoading: false,
-  }),
+  useGISData: () => gisDataMock,
 }));
 
 vi.mock("@/hooks/use-toast", () => ({
@@ -107,6 +108,8 @@ describe("UsersList Add User flow", () => {
   beforeEach(() => {
     navigateMock.mockReset();
     toastMock.mockReset();
+    gisDataMock.data = { gisUsers: [] };
+    gisDataMock.isLoading = false;
 
     vi.stubGlobal(
       "ResizeObserver",
@@ -119,7 +122,44 @@ describe("UsersList Add User flow", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("uses a scheduled check-in time from upstream snake_case fields for the last contact fallback", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-25T08:00:00+02:00"));
+    gisDataMock.data = {
+      gisUsers: [
+        {
+          id: "client-1",
+          first_name: "Anna",
+          last_name: "Bittner",
+          city: "Dresden",
+          country: "Germany",
+          phone: "+49 151 23456789",
+          date_of_birth: null,
+          coords: null,
+          activeAlerts: 0,
+          criticalAlerts: 0,
+          sensorCount: 0,
+          offlineSensors: 0,
+          healthConditions: 0,
+          missedMeds7d: 0,
+          riskScore: 2,
+          checkin_enabled: true,
+          checkin_preferred_time: "09:30",
+          checkin_last_status: null,
+          checkin_last_reported_at: null,
+        },
+      ],
+    };
+
+    renderUsersList();
+
+    expect(screen.getByText("Anna Bittner")).toBeInTheDocument();
+    expect(screen.getByText(/09:30/)).toBeInTheDocument();
+    expect(screen.queryByText(/No completed contact yet|Noch kein abgeschlossener Kontakt|Sin contacto completado/i)).not.toBeInTheDocument();
   });
 
   it("lets admins create a client from onboarding-aligned fields", async () => {

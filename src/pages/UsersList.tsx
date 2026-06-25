@@ -73,7 +73,82 @@ type QueueRow = {
   livingContextKey?: string;
 };
 
+type RawOperationalQueueUser = OperationalQueueUser & {
+  checkin_enabled?: boolean | number | string | null;
+  checkin_preferred_time?: string | null;
+  checkin_last_status?: string | null;
+  checkin_last_reported_at?: string | null;
+  checkins?: {
+    enabled?: boolean | number | string | null;
+    is_active?: boolean | number | string | null;
+    preferredTime?: string | null;
+    preferred_time?: string | null;
+    lastStatus?: string | null;
+    last_status?: string | null;
+    lastOutcome?: string | null;
+    last_outcome?: string | null;
+    lastReportedAt?: string | null;
+    last_reported_at?: string | null;
+    lastCheckinAt?: string | null;
+    last_checkin_at?: string | null;
+  } | null;
+};
+
 const filterKeys: FilterKey[] = ["all", "urgent", "review", "no-response", "medication", "checkins", "unassigned"];
+
+function firstPresent<T>(...values: Array<T | null | undefined>) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    return value;
+  }
+  return null;
+}
+
+function normalizeBoolean(value: unknown) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value > 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "y", "1", "active", "enabled"].includes(normalized)) return true;
+    if (["false", "no", "n", "0", "inactive", "disabled"].includes(normalized)) return false;
+  }
+  return Boolean(value);
+}
+
+function checkinEnabledFor(user: OperationalQueueUser) {
+  const raw = user as RawOperationalQueueUser;
+  return normalizeBoolean(firstPresent(raw.checkinEnabled, raw.checkin_enabled, raw.checkins?.enabled, raw.checkins?.is_active));
+}
+
+function checkinPreferredTimeFor(user: OperationalQueueUser) {
+  const raw = user as RawOperationalQueueUser;
+  return firstPresent(raw.checkinPreferredTime, raw.checkin_preferred_time, raw.checkins?.preferredTime, raw.checkins?.preferred_time);
+}
+
+function checkinLastStatusFor(user: OperationalQueueUser) {
+  const raw = user as RawOperationalQueueUser;
+  return firstPresent(
+    raw.checkinLastStatus,
+    raw.checkin_last_status,
+    raw.checkins?.lastStatus,
+    raw.checkins?.last_status,
+    raw.checkins?.lastOutcome,
+    raw.checkins?.last_outcome,
+  );
+}
+
+function checkinLastReportedAtFor(user: OperationalQueueUser) {
+  const raw = user as RawOperationalQueueUser;
+  return firstPresent(
+    raw.checkinLastReportedAt,
+    raw.checkin_last_reported_at,
+    raw.checkins?.lastReportedAt,
+    raw.checkins?.last_reported_at,
+    raw.checkins?.lastCheckinAt,
+    raw.checkins?.last_checkin_at,
+  );
+}
 
 function getAge(dateOfBirth?: string | null) {
   if (!dateOfBirth) return undefined;
@@ -99,7 +174,7 @@ function getRiskScore(user: OperationalQueueUser) {
 
   return computeRiskScore({
     activeAlerts: user.activeAlerts ?? 0,
-    checkinEnabled: user.checkinEnabled ?? false,
+    checkinEnabled: checkinEnabledFor(user),
     criticalAlerts: user.criticalAlerts ?? 0,
     healthConditions: user.healthConditions ?? 0,
     missedMeds7d: user.missedMeds7d ?? 0,
@@ -110,19 +185,20 @@ function getRiskScore(user: OperationalQueueUser) {
 function deriveStatus(score: number, user: OperationalQueueUser): OperationalStatus {
   if (user.operationalContext?.riskStatus) return user.operationalContext.riskStatus;
   if ((user.criticalAlerts ?? 0) > 0 || score >= 80) return "urgent";
-  if ((user.activeAlerts ?? 0) > 0 || (user.missedMeds7d ?? 0) > 0 || !(user.checkinEnabled ?? false)) return "review";
+  if ((user.activeAlerts ?? 0) > 0 || (user.missedMeds7d ?? 0) > 0 || !checkinEnabledFor(user)) return "review";
   return "stable";
 }
 
 function deriveReasonKey(user: OperationalQueueUser, status: OperationalStatus) {
   if (user.operationalContext?.reasonKey) return user.operationalContext.reasonKey;
   if ((user.missedMeds7d ?? 0) > 0) return "usersList.reason.medication";
-  if (!(user.checkinEnabled ?? false)) return "usersList.reason.checkins";
+  if (!checkinEnabledFor(user)) return "usersList.reason.checkins";
   if ((user.activeAlerts ?? 0) > 0) return status === "urgent" ? "queue.reason.default" : "usersList.reason.review";
   return "usersList.reason.stable";
 }
 
 function toQueueRow(user: OperationalQueueUser): QueueRow {
+  const checkinEnabled = checkinEnabledFor(user);
   const score = getRiskScore(user);
   const status = deriveStatus(score, user);
   const meta = user.operationalContext;
@@ -141,9 +217,9 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     reasonKey: deriveReasonKey(user, status),
     channel: meta?.preferredChannel ?? "phone",
     lastContactKey: meta?.lastContactKey ?? "usersList.lastContactAwaiting",
-    lastContactAt: user.checkinLastReportedAt ?? meta?.lastContactAt ?? null,
-    lastContactStatus: user.checkinLastStatus ?? meta?.lastContactStatus ?? null,
-    checkinPreferredTime: user.checkinPreferredTime ?? null,
+    lastContactAt: checkinLastReportedAtFor(user) ?? meta?.lastContactAt ?? null,
+    lastContactStatus: checkinLastStatusFor(user) ?? meta?.lastContactStatus ?? null,
+    checkinPreferredTime: checkinPreferredTimeFor(user),
     assignedTo,
     careProviderCount,
     primaryCaregiverName: user.primaryCaregiverName ?? null,
@@ -152,9 +228,9 @@ function toQueueRow(user: OperationalQueueUser): QueueRow {
     nextActionKey:
       meta?.nextActionKey ??
       (status === "urgent" ? "usersList.nextAction.callNow" : status === "review" ? "usersList.nextAction.review" : "usersList.nextAction.monitor"),
-    checkinEnabled: user.checkinEnabled ?? false,
+    checkinEnabled,
     hasMedicationIssue: (user.missedMeds7d ?? 0) > 0 || meta?.reasonKey === "usersList.reason.medication",
-    hasCheckinIssue: !(user.checkinEnabled ?? false),
+    hasCheckinIssue: !checkinEnabled,
     hasNoResponse: Boolean(meta?.noResponse),
     isUnassigned: !assignedTo && careProviderCount === 0,
     livingContextKey: meta?.livingContextKey ?? livingContextKey(user.living_context),
